@@ -64,12 +64,20 @@ def load_text_overlay_inputs(text_config, video_basename, project_root=PROJECT_R
     Returns:
         包含 input_json / track_result / formation_config / actions_config 的 dict
     """
+    # track_result 由流水线写入 self.output_dir（可能为用户自定义目录），
+    # 优先使用 text_config 中注入的 output_dir，避免硬编码默认路径（修复 track_result 路径不一致）
+    output_dir = text_config.get("output_dir")
+    if output_dir and os.path.isabs(output_dir):
+        track_result_dir = output_dir
+    else:
+        track_result_dir = os.path.join(project_root, "output", video_basename)
+
     return {
         "input_json": os.path.join(
             project_root, text_config.get("input_json", "input.json")
         ),
         "track_result": os.path.join(
-            project_root, "output", video_basename,
+            track_result_dir,
             f"track_result_{video_basename}.json",
         ),
         "formation_config": os.path.join(

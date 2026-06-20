@@ -283,9 +283,13 @@ def video_to_copilot(video_path, config, timeout=None):
         maa_path = os.path.join(PROJECT_ROOT, maa_path)
     validate_maa_path(maa_path)
 
-    # 3. 创建输出目录（基于项目根目录）
+    # 3. 创建输出目录（基于项目根目录；流水线注入的 output_dir 可能是绝对路径）
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
-    output_dir = os.path.join(PROJECT_ROOT, config.get("output_dir", "output"), video_basename)
+    output_dir_value = config.get("output_dir", "output")
+    if os.path.isabs(output_dir_value):
+        output_dir = output_dir_value
+    else:
+        output_dir = os.path.join(PROJECT_ROOT, output_dir_value, video_basename)
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"输出目录: {output_dir}")
 

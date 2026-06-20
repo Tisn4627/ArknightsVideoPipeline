@@ -592,7 +592,11 @@ class Pipeline:
                 return False
 
         self._generate_report(run_start_time)
-        return True
+        # 若有步骤被取消/跳过（非用户显式 --skip-step），视为非完全成功
+        return not any(
+            s.status == StepStatus.SKIPPED and s.description != "已跳过"
+            for s in self.report.steps
+        )
 
     # ── 报告生成 ──────────────────────────────────────────
 
@@ -621,6 +625,8 @@ class Pipeline:
                 StepStatus.SUCCESS: "OK",
                 StepStatus.FAILED: "FAIL",
                 StepStatus.SKIPPED: "SKIP",
+                StepStatus.PENDING: "--",
+                StepStatus.RUNNING: "..",
             }.get(step.status, str(step.status))
             self.logger.info(
                 f"  [{status_icon}] {step.name}: "
