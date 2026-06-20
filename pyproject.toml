@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arknights-video-pipeline"
+version = "1.0.0"
+description = "明日方舟视频处理流水线 - 一键完成视频识别、文本提取与视频合成"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "仅供学习交流使用" }
+authors = [
+    { name = "ArknightsVideoPipeline" }
+]
+dependencies = [
+    "opencv-python>=4.8.0,<5",
+    "numpy>=1.24.0,<3",
+    "movielite>=0.1.0,<1",
+    "pictex>=0.1.0,<1",
+    "Pillow>=10.0.0,<12",
+    "tqdm>=4.65.0,<5",
+    "PyQt6>=6.6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0,<9",
+    "ruff>=0.4.0,<1",
+    "mypy>=1.10.0,<2",
+]
+
+[project.scripts]
+arkpipeline-cli = "arknights_video_pipeline.core.pipeline:main"
+arkpipeline-gui = "arknights_video_pipeline.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+arknights_video_pipeline = ["**/*"]
