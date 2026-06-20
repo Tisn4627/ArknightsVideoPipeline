@@ -214,7 +214,7 @@ python main.py video.mp4 --style style2
 ```
 output/video/
 ├── pipeline.log              # 流水线日志
-├── copilot_video.json        # MAA 识别结果 JSON
+├── maa_copilot_video.json    # MAA 识别结果 JSON
 ├── formation_video.txt       # 编队文本
 ├── actions_video.txt         # 操作文本
 ├── track_result_video.json   # 开始按钮识别结果
@@ -303,7 +303,7 @@ python main.py video.mp4 --style style2
 
 ### Q: 开始按钮识别未检测到
 
-检查 `resource/StartButton/` 目录下是否有对应的模板图片，并确认 `config/track_config.json` 中的 `match_threshold` 设置是否过高（默认 0.75）。
+检查 `resource/StartButton/` 目录下是否有对应的模板图片，并确认 `config/track.json` 中的 `match_threshold` 设置是否过高（默认 0.75）。
 
 ## 其他信息
 

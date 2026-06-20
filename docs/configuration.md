@@ -43,7 +43,7 @@ python main.py --init-config compose
 | `log_to_file` | boolean | `true` | 是否将日志输出到文件 |
 | `log_max_bytes` | integer | `10485760` | 单个日志文件最大字节数（10MB），超过后触发轮转 |
 | `log_backup_count` | integer | `3` | 保留的历史日志文件数量 |
-| `maa_timeout_seconds` | integer | `600` | MAA 识别超时时间（秒），0 表示不限制 |
+| `maa_timeout_seconds` | integer | `600` | MAA 识别超时时间（秒） |
 | `maa_max_retries` | integer | `2` | MAA 识别最大重试次数 |
 | `formation` | string | `"config/formation.json"` | 编队转文本配置文件路径 |
 | `actions` | string | `"config/actions.json"` | 操作转文本配置文件路径 |
@@ -137,7 +137,7 @@ python main.py --init-config compose
 | `match_threshold` | float | `0.75` | 模板匹配阈值，越高越严格（0.0~1.0） |
 | `scale_range` | array | `[0.5, 1.5]` | 模板缩放范围 [最小, 最大] |
 | `scale_steps` | integer | `9` | 缩放步数，越多越精确但越慢 |
-| `detection_fps` | integer | `10` | 检测采样帧率（从视频中每秒取多少帧检测） |
+| `detection_fps` | integer | `2` | 检测采样帧率（从视频中每秒取多少帧检测） |
 | `detection_time_limit` | integer | `30` | 检测时间限制（秒），仅检测视频前 N 秒；视频不足 N 秒时自动调整；设为 0 或 null 则检测完整视频 |
 | `auto_downscale` | boolean | `true` | 视频高度超过阈值时自动缩小 |
 | `downscale_target_height` | integer | `720` | 自动缩放目标高度（像素） |
@@ -189,7 +189,7 @@ python main.py --init-config compose
 | `video_scale` | float | `0.8` | 视频缩放比例（相对于输出尺寸） |
 | `video_x` | integer | `320` | 视频在底板上的 X 坐标偏移 |
 | `video_y` | integer | `72` | 视频在底板上的 Y 坐标偏移 |
-| `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high` |
+| `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high`、`very_high` |
 
 ### style2 配置
 
@@ -199,7 +199,7 @@ python main.py --init-config compose
 |--------|------|--------|------|
 | `output_width` | integer | `1920` | 输出视频宽度（像素） |
 | `output_height` | integer | `1080` | 输出视频高度（像素） |
-| `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high` |
+| `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high`、`very_high` |
 
 > **注意**：style2 不需要 `video_scale`、`video_x`、`video_y`，因为视频会自动铺满整个输出画面。style2 也不需要 `background_image`（底板图片），因为视频直接铺满画面。
 

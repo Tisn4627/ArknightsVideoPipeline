@@ -35,30 +35,46 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 ```
 ArknightsVideoPipeline/
 ├── main.py                    # CLI 主入口
-├── core/                      # 核心模块
-│   ├── pipeline.py            # 流水线编排与 CLI 参数解析
-│   ├── config.py              # 统一配置管理器
-│   ├── logger.py              # 双通道日志系统（控制台 + 文件轮转）
-│   ├── exceptions.py          # 自定义异常层次
-│   ├── types.py               # 数据结构定义（dataclass）
-│   ├── utils.py               # 共享工具函数
-│   ├── video_to_copilot.py    # 步骤1: 视频转 MAA JSON
-│   ├── formation_to_text.py   # 步骤2: 编队转文本
-│   ├── actions_to_text.py     # 步骤3: 操作转文本
-│   ├── track_startbutton.py   # 步骤4: 开始按钮识别
-│   └── video_compose.py       # 步骤5: 视频合成
+├── gui.py                     # GUI 主入口
+├── src/arknights_video_pipeline/
+│   ├── core/                  # 核心模块
+│   │   ├── pipeline.py        # 流水线编排与 CLI 参数解析
+│   │   ├── config.py          # 统一配置管理器
+│   │   ├── logger.py          # 双通道日志系统（控制台 + 文件轮转）
+│   │   ├── exceptions.py      # 自定义异常层次
+│   │   ├── types.py           # 数据结构定义（dataclass）
+│   │   ├── step_defs.py       # 流水线步骤统一定义
+│   │   ├── utils.py           # 共享工具函数
+│   │   ├── video_to_copilot.py    # 步骤1: 视频转 MAA JSON
+│   │   ├── formation_to_text.py   # 步骤2: 编队转文本
+│   │   ├── actions_to_text.py     # 步骤3: 操作转文本
+│   │   ├── track_startbutton.py   # 步骤4: 开始按钮识别
+│   │   ├── video_compose.py       # 步骤5: 视频合成 (style1)
+│   │   ├── video_compose_style2.py # 步骤5: 视频合成 (style2)
+│   │   └── video_compose_common.py # 视频合成公共工具
+│   ├── gui/                   # 图形用户界面
+│   │   ├── app.py             # QApplication 初始化
+│   │   ├── main_window.py     # 主窗口
+│   │   ├── components/        # GUI 组件
+│   │   ├── theme/             # Material Design 3 主题
+│   │   └── workers/           # 后台工作线程
+│   └── service/               # 服务层
+│       ├── pipeline_service.py # 流水线服务
+│       ├── config_proxy.py     # GUI 配置代理
+│       ├── pipeline_worker.py  # 流水线工作线程
+│       └── report_model.py     # 报告数据适配
 ├── config/                    # 配置文件
 │   ├── pipeline.json          # 全局流水线配置
-│   ├── formation_config.json  # 编队转文本配置
-│   ├── actions_config.json    # 操作转文本配置
-│   ├── track_config.json      # 开始按钮识别配置
+│   ├── formation.json         # 编队转文本配置
+│   ├── actions.json           # 操作转文本配置
+│   ├── track.json             # 开始按钮识别配置
 │   └── video_compose/         # 视频合成风格配置
 │       ├── style1.json        # style1 风格（默认，底板+视频叠加）
 │       └── style2.json        # style2 风格（全屏视频+底部字幕）
 ├── resource/                  # 资源文件
 │   ├── StartButton/           # 开始按钮模板图片
 │   └── font/                  # 字体文件
-├── MaaAssistantArknights/      # MAA 作业识别功能
+├── docs/                      # 文档
 └── output/                    # 输出目录
 ```
 
@@ -129,9 +145,10 @@ python main.py --init-config track
 
 | 文档                              | 说明            |
 | ------------------------------- | ------------- |
-| [快速入门](docs/quick_start.md)     | 10 分钟完成基本功能验证 |
+| [快速入门](docs/quick_start_cli.md)     | 10 分钟完成基本功能验证 |
 | [配置说明](docs/configuration.md)   | 所有配置项的详细说明    |
 | [CLI 参考](docs/cli_reference.md) | 命令行参数完整手册     |
+| [GUI 使用说明](docs/gui_guide.md) | 图形界面使用说明     |
 
 ## 贡献指南
 

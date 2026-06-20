@@ -10,11 +10,11 @@ pipeline.py - 明日方舟视频处理流水线 CLI 工具
   6. 输出最终视频并验证完整性
 
 使用示例：
-  python main.py video.mp4
-  python main.py video.mp4 --output-dir results --log-level DEBUG
-  python main.py video.mp4 --skip-step track --skip-step compose
+  python main.py video.mp4 --background-image bg.png
+  python main.py video.mp4 -b bg.png --output-dir results --log-level DEBUG
+  python main.py video.mp4 --style style2 --skip-step track --skip-step compose
   python main.py --init-config
-  python main.py video.mp4 --dry-run
+  python main.py video.mp4 -b bg.png --dry-run
 """
 
 from __future__ import annotations

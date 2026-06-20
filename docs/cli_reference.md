@@ -224,8 +224,8 @@ python main.py --init-config compose_style2
 python main.py video.mp4 -b bg.png
 
 # 使用 style2 全屏字幕模式
-python main.py video.mp4 -b bg.png --style style2
-python main.py video.mp4 -b bg.png -s style2
+python main.py video.mp4 --style style2
+python main.py video.mp4 -s style2
 ```
 
 ### `--dry-run`

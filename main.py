@@ -4,9 +4,9 @@ ArknightsVideoPipeline - 明日方舟视频处理流水线
 CLI 入口点，委托给 arknights_video_pipeline.core.pipeline.main() 执行。
 
 使用示例：
-  python main.py video.mp4
-  python main.py video.mp4 --output-dir results --log-level DEBUG
-  python main.py video.mp4 --style style1
+  python main.py video.mp4 --background-image bg.png
+  python main.py video.mp4 -b bg.png --output-dir results --log-level DEBUG
+  python main.py video.mp4 --style style2
   python main.py --init-config
 """
 
