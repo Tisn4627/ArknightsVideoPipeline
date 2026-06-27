@@ -354,11 +354,9 @@ class MainWindow(QMainWindow):
         self._run_btn = MaterialButton("Start", variant=MaterialButton.VARIANT_FILLED)
         self._cancel_btn = MaterialButton("Cancel", variant=MaterialButton.VARIANT_OUTLINED)
         self._cancel_btn.setEnabled(False)
-        self._validate_btn = MaterialButton("Validate", variant=MaterialButton.VARIANT_TONAL)
 
         btn_layout.addWidget(self._run_btn)
         btn_layout.addWidget(self._cancel_btn)
-        btn_layout.addWidget(self._validate_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -402,7 +400,6 @@ class MainWindow(QMainWindow):
         # 按钮
         self._run_btn.clicked.connect(self._on_run)
         self._cancel_btn.clicked.connect(self._on_cancel)
-        self._validate_btn.clicked.connect(self._on_validate)
 
         # 服务信号
         self._service.step_started.connect(self._step_panel.set_step_running)
@@ -538,14 +535,6 @@ class MainWindow(QMainWindow):
 
     # ── 操作处理 ──────────────────────────────────────────
 
-    def _on_validate(self) -> None:
-        errors = self._service.validate_inputs()
-        if errors:
-            self._show_warning("Input validation failed", "\n".join(errors))
-        else:
-            self._show_info("Input valid",
-                            "All inputs are valid. You can start processing.")
-
     def _on_run(self) -> None:
         errors = self._service.validate_inputs()
         if errors:
@@ -579,7 +568,6 @@ class MainWindow(QMainWindow):
     def _set_running_ui(self, running: bool) -> None:
         self._run_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
-        self._validate_btn.setEnabled(not running)
         self._video_selector.setEnabled(not running)
         self._bg_selector.setEnabled(not running and self._style_combo.currentText() == "style1")
         # MAA / Output / Log level 控件由 SettingsPage 持有
