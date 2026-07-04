@@ -37,7 +37,9 @@ def filled_button_qss(
         "QPushButton {"
         f"  background-color: {colors.primary};"
         f"  color: {colors.on_primary};"
-        f"  border: none;"
+        # 预留 2px 透明边框，避免 :focus 切换 2px solid 时挤压内容区
+        # 导致 pressed/focus 态文字被裁切（与全局 styles.py 保持一致）
+        "  border: 2px solid transparent;"
         f"  border-radius: {border_radius}px;"
         f"  padding: {padding};"
         f"  font-weight: {font_weight};"
@@ -55,6 +57,10 @@ def filled_button_qss(
         "QPushButton:disabled {"
         f"  background-color: {colors.surface_variant};"
         f"  color: {colors.on_surface_variant};"
+        "  border-color: transparent;"
+        "}"
+        "QPushButton:focus {"
+        f"  border: 2px solid {colors.secondary};"
         "}"
     )
 
@@ -85,7 +91,8 @@ def outlined_button_qss(
         "QPushButton {"
         f"  background-color: transparent;"
         f"  color: {colors.primary};"
-        f"  border: 1px solid {colors.outline};"
+        # 2px 边框与 :focus 状态宽度一致，避免聚焦时边框变粗引发 1px 抖动
+        f"  border: 2px solid {colors.outline};"
         f"  border-radius: {border_radius}px;"
         f"  padding: {padding};"
         f"  font-weight: {font_weight};"
@@ -101,7 +108,11 @@ def outlined_button_qss(
         f"  color: {colors.primary_container};"
         "}"
         "QPushButton:disabled {"
-        f"  background-color: {colors.surface_variant};"
+        f"  background-color: transparent;"
         f"  color: {colors.on_surface_variant};"
+        f"  border-color: {colors.outline_variant};"
+        "}"
+        "QPushButton:focus {"
+        f"  border: 2px solid {colors.secondary};"
         "}"
     )

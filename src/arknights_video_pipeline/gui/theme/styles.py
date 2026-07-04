@@ -73,7 +73,9 @@ class MaterialStyle:
         QPushButton {{
             background-color: {c.primary};
             color: {c.on_primary};
-            border: none;
+            /* 预留 2px 透明边框，避免 :focus 状态切换 2px solid 边框时
+               挤压内容区导致文字被裁切（Start 按钮在点击态文字遮挡的根因） */
+            border: 2px solid transparent;
             border-radius: 20px;
             padding: 10px 24px;
             font-weight: 500;
@@ -93,6 +95,7 @@ class MaterialStyle:
         QPushButton:disabled {{
             background-color: {c.surface_variant};
             color: {c.on_surface_variant};
+            border-color: transparent;
         }}
 
         QPushButton:focus {{
@@ -102,20 +105,46 @@ class MaterialStyle:
         QPushButton[mdOutlined="true"] {{
             background-color: transparent;
             color: {c.primary};
-            border: 1px solid {c.outline};
+            /* 2px 边框与 :focus 状态宽度一致，避免聚焦时边框变粗引发 1px 抖动 */
+            border: 2px solid {c.outline};
         }}
 
         QPushButton[mdOutlined="true"]:hover {{
             background-color: {c.primary_container};
+            color: {c.on_primary_container};
+        }}
+
+        QPushButton[mdOutlined="true"]:pressed {{
+            background-color: {c.on_primary_container};
+            color: {c.primary_container};
+        }}
+
+        QPushButton[mdOutlined="true"]:disabled {{
+            background-color: transparent;
+            color: {c.on_surface_variant};
+            border-color: {c.outline_variant};
         }}
 
         QPushButton[mdText="true"] {{
             background-color: transparent;
             color: {c.primary};
+            border-color: transparent;
         }}
 
         QPushButton[mdText="true"]:hover {{
             background-color: {c.primary_container};
+            color: {c.on_primary_container};
+        }}
+
+        QPushButton[mdText="true"]:pressed {{
+            background-color: {c.on_primary_container};
+            color: {c.primary_container};
+        }}
+
+        QPushButton[mdText="true"]:disabled {{
+            background-color: transparent;
+            color: {c.on_surface_variant};
+            border-color: transparent;
         }}
 
         QLineEdit {{
