@@ -149,7 +149,7 @@ class SettingsPage(QWidget):
         text_box = QVBoxLayout()
         text_box.setSpacing(4)
         text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._theme_label = QLabel("深色主题")
+        self._theme_label = QLabel("深色主题（测试功能）")
         self._theme_label.setFont(self._typo.title_medium)
         self._theme_label.setStyleSheet("border: none; background: transparent;")
         text_box.addWidget(self._theme_label)

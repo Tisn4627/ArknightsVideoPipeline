@@ -357,3 +357,29 @@ python main.py --init-config compose
 | style2.json | `config/video_compose/style2.json` | `core/video_compose_style2.py` | `compose_style2` |
 
 > **注意**：视频合成风格配置文件位于 `config/video_compose/` 目录下，每个风格对应一个 JSON 文件。默认风格为 `style1`，可通过 `--style` 参数指定其他风格。
+
+---
+
+## 6. gui.json — GUI 独立配置
+
+文件路径：`config/gui.json`
+
+> **与 pipeline 配置完全解耦**：`gui.json` 独立管理 GUI 运行时偏好，与流水线业务配置无任何依赖关系。GUI 中对主题的修改持久化到此文件，**不影响** `pipeline.json`；CLI 运行完全不受此文件影响。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|--------|------|--------|------|
+| `theme` | string | `"light"` | GUI 主题，可选值：`light`（浅色）、`dark`（深色）。由 `ConfigProxy`（`service/config_proxy.py`）管理，切换后即时生效，关闭窗口时持久化到此文件；下次启动自动恢复 |
+
+### 配置示例
+
+```json
+{
+    "theme": "light"
+}
+```
+
+### 管理方式说明
+
+- 该文件**不**由 `--init-config` 生成，也**不在** `PIPELINE_DEFAULTS` 中定义；
+- 首次 GUI 启动时，`ConfigProxy` 自动创建此文件并写入默认值；
+- 旧版本项目（无此文件）启动时，`ConfigProxy` 自动回退 `"light"`，无需手动迁移。

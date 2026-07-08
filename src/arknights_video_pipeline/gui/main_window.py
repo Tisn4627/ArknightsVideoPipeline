@@ -23,7 +23,10 @@ from arknights_video_pipeline.gui.components import (
     FileSelector, LogViewer, MaterialButton, MaterialCard, MaterialCheckBox,
     NavigationRail, ProgressCard, SettingsPage, StepPanel,
 )
-from arknights_video_pipeline.gui.theme import MaterialColors, MaterialStyle, MaterialTypography
+from arknights_video_pipeline.gui.theme import (
+    MaterialColors, MaterialStyle, MaterialTypography, apply_titlebar_theme,
+    GuiConfig,
+)
 from arknights_video_pipeline.service import ConfigProxy, PipelineService
 
 
@@ -34,8 +37,12 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self._config = config_proxy
         self._service = PipelineService(config_proxy, parent=self)
-        self._is_dark = False
+        # GUI 偏好独立管理（config/gui.json），与 pipeline 配置完全解耦
+        self._gui_config = GuiConfig(parent=self)
+        self._is_dark = self._gui_config.is_dark_theme()
         self._current_page = 0  # 0=Home, 1=Settings
+        # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
+        self._titlebar_applied = False
 
         self.setWindowTitle("ArknightsVideoPipeline")
         self.setMinimumSize(720, 480)
@@ -44,6 +51,8 @@ class MainWindow(QMainWindow):
         self._progress_card = ProgressCard()
 
         self._build_central_widget()
+        # 启动时按配置主题应用 QSS（create_application 默认应用浅色，需覆盖）
+        self._apply_initial_theme()
         self._connect_signals()
         self._load_config_to_ui()
 
@@ -584,10 +593,29 @@ class MainWindow(QMainWindow):
         self._toggle_theme(dark)
         colors = MaterialColors.dark() if dark else MaterialColors.light()
         self._settings_page.set_colors(colors)
+        # 持久化到独立 GUI 配置（config/gui.json），与 pipeline 配置完全解耦
+        self._gui_config.set_theme("dark" if dark else "light")
+
+    def _apply_initial_theme(self) -> None:
+        """启动时按独立 GUI 配置（config/gui.json）中的主题刷新界面与标题栏
+
+        ``create_application`` 默认应用浅色主题；若配置为深色，需在此
+        覆盖 QSS、卡片表面色与标题栏。仅当 ``self._is_dark`` 为 True
+        时执行完整切换；浅色时仅尝试应用标题栏（QSS 已是浅色无需重刷）。
+        """
+        if self._is_dark:
+            self._toggle_theme(True)
+        else:
+            # 浅色：QSS 已由 create_application 应用，仅尝试标题栏
+            apply_titlebar_theme(self, False)
 
     def _toggle_theme(self, checked: bool) -> None:
         self._is_dark = checked
         colors = MaterialColors.dark() if checked else MaterialColors.light()
+        # 先更新 Windows 原生标题栏主题：DWM 属性变更 + 同步重绘耗时 ~1ms，
+        # 放在最前让标题栏即时切换；若放在 QSS 重计算（~200ms）之后，
+        # 标题栏会等到 QSS 完成才更新，用户感知为"延迟切换"。
+        apply_titlebar_theme(self, checked)
         style = MaterialStyle(colors=colors, typography=MaterialTypography())
         app = QApplication.instance()
         if app is not None:
@@ -626,6 +654,13 @@ class MainWindow(QMainWindow):
         from arknights_video_pipeline.gui.components.about_dialog import AboutDialog
         dlg = AboutDialog(colors=self._settings_page.colors, parent=self)
         dlg.exec()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # 首次 show 后窗口句柄（HWND）才稳定可用，此时应用标题栏主题
+        if not self._titlebar_applied:
+            self._titlebar_applied = True
+            apply_titlebar_theme(self, self._is_dark)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -695,11 +730,13 @@ class MainWindow(QMainWindow):
                 self._service.cancel_pipeline()
                 # 等待 worker 线程退出，避免 QThread 被销毁时仍在运行
                 self._service.wait_for_shutdown(timeout_ms=3000)
+                self._gui_config.save()
                 self._config.save()
                 event.accept()
             else:
                 event.ignore()
         else:
+            self._gui_config.save()
             self._config.save()
             event.accept()
 

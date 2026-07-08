@@ -185,7 +185,8 @@ python gui.py
 #### 3.12.1 外观（Appearance）—— 主题切换
 
 - 卡片右侧有一个 Material Design 3 风格的开关 **深色主题**；
-- 拨动开关即可在浅色与深色主题之间切换，**效果即时生效**（实时预览）：Navigation Rail、卡片、按钮等所有控件颜色会立即同步更新；
+- 拨动开关即可在浅色与深色主题之间切换，**效果即时生效**（实时预览）：Navigation Rail、卡片、按钮等所有控件颜色会立即同步更新，原生窗口标题栏也会跟随切换为深色或浅色（Windows 需 10 1809+，通过 DWM API 即时刷新；macOS 通过 NSAppearance 跟随；Linux 效果取决于桌面环境，KDE 通常跟随，GNOME 标题栏由 GTK 主题控制可能不跟随）；
+- **主题会持久化保存**：切换后关闭窗口，主题写入独立的 `config/gui.json`（与 `pipeline.json` 完全解耦）；下次启动 GUI 时自动恢复上次的主题，无需重新切换；
 - 再次进入设置页时，开关会自动反映当前主题状态。
 
 #### 3.12.2 配置文件（Configuration files）—— 按类型生成
@@ -323,7 +324,20 @@ pip install -r requirements.txt
 
 **原因**：程序仅在正常关闭窗口时保存当前配置；强制结束进程可能导致配置丢失。
 
-**解决**：点击窗口右上角关闭按钮正常退出。配置会保存到 `config/pipeline.json`。
+**解决**：点击窗口右上角关闭按钮正常退出。流水线配置保存到 `config/pipeline.json`，GUI 主题偏好独立保存到 `config/gui.json`，下次启动自动恢复。
+
+### Q9：深色主题下窗口标题栏仍是白色
+
+**原因**：标题栏由操作系统绘制，需通过平台 API 单独设置。本程序在切换主题时会同步调用：
+- **Windows 10 1809+ / Windows 11**：通过 DWM API（`DwmSetWindowAttribute` + `DwmFlush`）即时刷新标题栏；
+- **macOS**：通过 Qt 的 `setColorScheme` 映射到 `NSAppearance`，原生标题栏自动跟随；
+- **Linux**：通过 Qt 的 `setColorScheme` 通知平台插件，标题栏是否跟随取决于窗口管理器/桌面环境（KDE 通常跟随，GNOME 标题栏由 GTK 主题控制可能不跟随）。
+
+**解决**：
+- Windows：确认系统版本为 10 1809+ 或 Windows 11；
+- macOS：无需额外操作，标题栏应自动跟随；
+- Linux：若标题栏未跟随，属于桌面环境限制，不影响应用内部主题切换功能；
+- 旧版本 Windows（低于 1809）不支持此特性，标题栏会保持系统默认颜色。
 
 ---
 
