@@ -27,6 +27,61 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+# ── Win32 常量 ────────────────────────────────────────────
+# SetWindowPos flags
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+
+# RedrawWindow flags
+RDW_INVALIDATE = 0x0001
+RDW_UPDATENOW = 0x0100
+RDW_FRAME = 0x0400
+
+# DWM window attributes
+DWMWA_CLOAK = 13
+_DWMWA_USE_IMMERSIVE_DARK_MODE_NEW = 20  # build 18985+
+_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19  # build 17763-18984
+
+# 懒加载缓存的 Win32 API 句柄（首次调用时初始化，后续复用）
+_user32 = None
+_dwmapi = None
+
+
+def _get_win32_apis():
+    """懒加载并缓存 user32/dwmapi DLL 及函数签名（仅 Windows 调用）
+
+    首次调用时导入 ``ctypes`` 并配置 ``argtypes``/``restype``，
+    后续调用直接返回缓存值，避免每次主题切换都重复配置。
+    """
+    global _user32, _dwmapi
+    if _user32 is not None:
+        return _user32, _dwmapi
+
+    import ctypes
+
+    _user32 = ctypes.WinDLL("user32")
+    _user32.SetWindowPos.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint32,
+    ]
+    _user32.SetWindowPos.restype = ctypes.c_bool
+    _user32.RedrawWindow.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+    ]
+    _user32.RedrawWindow.restype = ctypes.c_bool
+
+    _dwmapi = ctypes.WinDLL("dwmapi")
+    _dwmapi.DwmSetWindowAttribute.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+    ]
+    _dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+    _dwmapi.DwmFlush.argtypes = []
+    _dwmapi.DwmFlush.restype = ctypes.c_long
+    return _user32, _dwmapi
+
 
 def _get_windows_build() -> int | None:
     """获取 Windows 内部版本号；非 Windows 或读取失败返回 None"""
@@ -37,33 +92,6 @@ def _get_windows_build() -> int | None:
         return int(sys.getwindowsversion().build)  # type: ignore[attr-defined]
     except Exception:
         return None
-
-
-# #region debug-point INSTRUMENT:debug-log
-def _debug_log(hypothesis_id: str, msg: str, data=None, location: str = "") -> None:
-    """向调试服务器发送日志事件（仅调试会话期间使用）"""
-    import json as _json
-    import urllib.request as _urlreq
-    import time as _time
-    import os as _os
-    _p = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))), ".dbg", "titlebar-ltsc-refresh.env")
-    _u, _s = "http://127.0.0.1:7777/event", "titlebar-ltsc-refresh"
-    try:
-        with open(_p) as f:
-            c = f.read()
-            _u = next((l.split("=", 1)[1].strip() for l in c.split("\n") if l.startswith("DEBUG_SERVER_URL=")), _u)
-            _s = next((l.split("=", 1)[1].strip() for l in c.split("\n") if l.startswith("DEBUG_SESSION_ID=")), _s)
-    except Exception:
-        pass
-    try:
-        _urlreq.urlopen(_urlreq.Request(_u, data=_json.dumps({
-            "sessionId": _s, "runId": "post-fix", "hypothesisId": hypothesis_id,
-            "location": location, "msg": f"[DEBUG] {msg}", "data": data or {},
-            "ts": int(_time.time() * 1000)
-        }).encode(), headers={"Content-Type": "application/json"})).read()
-    except Exception:
-        pass
-# #endregion
 
 
 def is_titlebar_theming_supported() -> bool:
@@ -95,70 +123,41 @@ def _force_titlebar_redraw(hwnd: int) -> None:
     cloak 和 decloak 之间**不**调用 ``DwmFlush``，避免 DWM 将 cloaked
     （不可见）状态合成到屏幕，从而消除窗口闪烁。
     """
-    # #region debug-point FIX-A:cloak-decloak-no-intermediate-flush
     import ctypes
-    import time as _time
-    t0 = _time.perf_counter()
-    try:
-        user32 = ctypes.WinDLL("user32")
-        user32.SetWindowPos.argtypes = [
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-            ctypes.c_int, ctypes.c_int, ctypes.c_uint32,
-        ]
-        user32.SetWindowPos.restype = ctypes.c_bool
-        user32.RedrawWindow.argtypes = [
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
-        ]
-        user32.RedrawWindow.restype = ctypes.c_bool
 
-        dwmapi = ctypes.WinDLL("dwmapi")
-        dwmapi.DwmSetWindowAttribute.argtypes = [
-            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
-        ]
-        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
-        dwmapi.DwmFlush.argtypes = []
-        dwmapi.DwmFlush.restype = ctypes.c_long
+    user32, dwmapi = _get_win32_apis()
 
-        # 步骤 1：应用侧 NC 区同步重绘
-        SWP_FLAGS = 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020  # NOMOVE|NOSIZE|NOZORDER|NOACTIVATE|FRAMECHANGED
-        swp_ret = user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FLAGS)
-        RDW_FLAGS = 0x0400 | 0x0001 | 0x0100  # FRAME|INVALIDATE|UPDATENOW
-        rdw_ret = user32.RedrawWindow(hwnd, None, None, RDW_FLAGS)
+    # 步骤 1：应用侧 NC 区同步重绘
+    swp_flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+    if not user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, swp_flags):
+        logger.debug("SetWindowPos[FRAMECHANGED] 失败 (hwnd=%s)", hwnd)
+    rdw_flags = RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW
+    if not user32.RedrawWindow(hwnd, None, None, rdw_flags):
+        logger.debug("RedrawWindow[FRAME|INVALIDATE|UPDATENOW] 失败 (hwnd=%s)", hwnd)
 
-        # 步骤 2：DWM 侧合成表面重建（cloak → decloak → 单次 flush）
-        DWMWA_CLOAK = 13
-        cloak_val = ctypes.c_int(1)
-        cloak_ret = dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
-        )
-        cloak_val = ctypes.c_int(0)
-        decloak_ret = dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
-        )
-        flush_ret = dwmapi.DwmFlush()
-
-        total_ms = round((_time.perf_counter() - t0) * 1000, 1)
-        _debug_log("FIX-A",
-                   f"Fix A 完成: swp={swp_ret} rdw={rdw_ret} "
-                   f"cloak=0x{cloak_ret & 0xFFFFFFFF:08X} decloak=0x{decloak_ret & 0xFFFFFFFF:08X} "
-                   f"flush=0x{flush_ret & 0xFFFFFFFF:08X} total_ms={total_ms}",
-                   {"swp": swp_ret, "rdw": rdw_ret,
-                    "cloak_hresult": cloak_ret & 0xFFFFFFFF,
-                    "decloak_hresult": decloak_ret & 0xFFFFFFFF,
-                    "flush_hresult": flush_ret & 0xFFFFFFFF,
-                    "flush_ok": flush_ret == 0,
-                    "total_ms": total_ms},
-                   "titlebar.py:_force_titlebar_redraw")
-    except Exception as exc:
-        _debug_log("FIX-A", f"Fix A 异常: {exc}", {"error": str(exc)}, "titlebar.py:_force_titlebar_redraw")
-    # #endregion
+    # 步骤 2：DWM 侧合成表面重建（cloak → decloak → 单次 flush）
+    cloak_val = ctypes.c_int(1)
+    result = dwmapi.DwmSetWindowAttribute(
+        hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
+    )
+    if result != 0:
+        logger.debug("DwmSetWindowAttribute[cloak] 失败: 0x%08X", result & 0xFFFFFFFF)
+    cloak_val = ctypes.c_int(0)
+    result = dwmapi.DwmSetWindowAttribute(
+        hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
+    )
+    if result != 0:
+        logger.debug("DwmSetWindowAttribute[decloak] 失败: 0x%08X", result & 0xFFFFFFFF)
+    result = dwmapi.DwmFlush()
+    if result != 0:
+        logger.debug("DwmFlush 失败: 0x%08X", result & 0xFFFFFFFF)
 
 
 def apply_titlebar_theme(window, dark: bool) -> bool:
     """设置窗口标题栏为深色或浅色（跨平台）
 
     平台策略：
-    - Windows 10 1809+：DWM API（``DwmSetWindowAttribute`` + 强制重绘
+    - Windows 10 1809+：DWM API（``DwmSetWindowAttribute`` + cloak/decloak
       + ``DwmFlush``），原生标题栏即时切换
     - macOS / Linux：``QApplication.styleHints().setColorScheme()``
       （Qt 6.5+），macOS 映射到 NSAppearance 原生标题栏跟随；Linux
@@ -190,8 +189,9 @@ def _apply_titlebar_theme_windows(window, dark: bool) -> bool:
     """Windows：通过 DWM API 设置标题栏深色/浅色并强制即时刷新
 
     ``DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)`` 提交属性后，
-    调用 ``_force_titlebar_redraw`` 触发非客户区重绘 + ``DwmFlush`` 强制
-    DWM 合成上屏，确保标题栏在用户切换主题后立即变色。
+    调用 ``_force_titlebar_redraw`` 触发非客户区重绘 + cloak/decloak +
+    ``DwmFlush`` 强制 DWM 重建合成表面上屏，确保标题栏在用户切换主题后
+    立即变色。
     """
     if not is_titlebar_theming_supported():
         return False
@@ -207,34 +207,14 @@ def _apply_titlebar_theme_windows(window, dark: bool) -> bool:
         #   build 18985（20H1）起使用 attr id = 20
         #   build 17763~18984 使用 attr id = 19
         build = _get_windows_build() or 0
-        attr = 20 if build >= 18985 else 19
+        attr = _DWMWA_USE_IMMERSIVE_DARK_MODE_NEW if build >= 18985 else _DWMWA_USE_IMMERSIVE_DARK_MODE_OLD
 
-        dwmapi = ctypes.WinDLL("dwmapi")
-        dwmapi.DwmSetWindowAttribute.argtypes = [
-            ctypes.c_void_p,  # HWND
-            ctypes.c_uint32,  # DWORD (attribute id)
-            ctypes.c_void_p,  # LPCVOID (pointer to value)
-            ctypes.c_uint32,  # DWORD (cbAttribute)
-        ]
-        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long  # HRESULT
-        dwmapi.DwmGetWindowAttribute.argtypes = [
-            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
-        ]
-        dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+        _, dwmapi = _get_win32_apis()
 
         value = ctypes.c_int(1 if dark else 0)
         result = dwmapi.DwmSetWindowAttribute(
             hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)
         )
-
-        # #region debug-point DWMSET:attr-result
-        readback = ctypes.c_int(-1)
-        dwmapi.DwmGetWindowAttribute(hwnd, attr, ctypes.byref(readback), ctypes.sizeof(readback))
-        _debug_log("DWMSET", f"DwmSetWindowAttribute attr={attr} dark={dark} hwnd=0x{hwnd:X} hresult=0x{result & 0xFFFFFFFF:08X} readback={readback.value} build={build}",
-                   {"attr": attr, "dark": dark, "hwnd": hwnd, "hresult": result & 0xFFFFFFFF,
-                    "set_ok": result == 0, "readback": readback.value, "readback_match": readback.value == (1 if dark else 0), "build": build},
-                   "titlebar.py:_apply_titlebar_theme_windows")
-        # #endregion
 
         if result != 0:  # S_OK == 0
             logger.debug(
@@ -243,11 +223,9 @@ def _apply_titlebar_theme_windows(window, dark: bool) -> bool:
             )
             return False
 
-        # 触发标题栏重绘 + DwmFlush 强制 DWM 合成上屏（同步，约 17-25ms）
         _force_titlebar_redraw(hwnd)
         return True
     except Exception as exc:
-        _debug_log("DWMSET", f"_apply_titlebar_theme_windows 异常: {exc}", {"error": str(exc)}, "titlebar.py")
         logger.debug("_apply_titlebar_theme_windows 调用失败: %s", exc)
         return False
 

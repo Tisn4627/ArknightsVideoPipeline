@@ -329,7 +329,7 @@ pip install -r requirements.txt
 ### Q9：深色主题下窗口标题栏仍是白色
 
 **原因**：标题栏由操作系统绘制，需通过平台 API 单独设置。本程序在切换主题时会同步调用：
-- **Windows 10 1809+ / Windows 11**：通过 DWM API（`DwmSetWindowAttribute` + `DwmFlush`）即时刷新标题栏；
+- **Windows 10 1809+ / Windows 11**：通过 DWM API（`DwmSetWindowAttribute` 设置 `DWMWA_USE_IMMERSIVE_DARK_MODE`，配合 `DWMWA_CLOAK` cloak/decloak + `DwmFlush` 强制 DWM 重建合成表面）即时刷新标题栏；
 - **macOS**：通过 Qt 的 `setColorScheme` 映射到 `NSAppearance`，原生标题栏自动跟随；
 - **Linux**：通过 Qt 的 `setColorScheme` 通知平台插件，标题栏是否跟随取决于窗口管理器/桌面环境（KDE 通常跟随，GNOME 标题栏由 GTK 主题控制可能不跟随）。
 

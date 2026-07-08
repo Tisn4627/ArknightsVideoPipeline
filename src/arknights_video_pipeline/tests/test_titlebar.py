@@ -81,19 +81,30 @@ class TestApplyTitlebarThemeDispatch:
 
 
 class TestForceTitlebarRedrawDwmFlush:
-    """回归测试：确保 DwmFlush 被调用且顺序正确
+    """回归测试：确保 cloak/decloak + DwmFlush 调用顺序正确
 
-    历史 bug：DwmFlush 曾被误删，导致标题栏切换后不即时刷新，需晃动
-    窗口才更新。此测试防止该问题再次出现。
+    历史 bug：
+    1. DwmFlush 曾被误删，导致标题栏切换后不即时刷新
+    2. 在 LTSC 2021 上仅 SetWindowPos + RedrawWindow + DwmFlush 不足以
+       触发 DWM 重绘标题栏（DWM 缓存了标题栏位图），需 cloak/decloak
+       强制 DWM 重建合成表面
+    3. cloak 和 decloak 之间不能有 DwmFlush（否则窗口闪烁）
+    此测试防止这些问题再次出现。
     """
 
-    def test_dwmflush_called_after_setwindowpos_and_redrawwindow(self) -> None:
+    def test_cloak_decloak_flush_called_in_correct_order(self) -> None:
+        """验证调用顺序：SetWindowPos → RedrawWindow → cloak → decloak → DwmFlush
+
+        cloak 和 decloak 之间不得有 DwmFlush，否则 DWM 会将 cloaked
+        （不可见）状态合成到屏幕，造成窗口闪烁。
+        """
         call_order: list[str] = []
 
         fake_user32 = mock.MagicMock()
         fake_dwmapi = mock.MagicMock()
         fake_user32.SetWindowPos.side_effect = lambda *a, **kw: call_order.append("SetWindowPos")
         fake_user32.RedrawWindow.side_effect = lambda *a, **kw: call_order.append("RedrawWindow")
+        fake_dwmapi.DwmSetWindowAttribute.side_effect = lambda *a, **kw: call_order.append("DwmSetWindowAttribute")
         fake_dwmapi.DwmFlush.side_effect = lambda *a, **kw: (call_order.append("DwmFlush"), 0)[1]
 
         def fake_windll(name: str) -> mock.MagicMock:
@@ -106,13 +117,41 @@ class TestForceTitlebarRedrawDwmFlush:
         with mock.patch.object(ctypes, "WinDLL", side_effect=fake_windll):
             titlebar._force_titlebar_redraw(12345)
 
-        # 三个关键调用都必须发生，且顺序为 SetWindowPos -> RedrawWindow -> DwmFlush
-        assert call_order == ["SetWindowPos", "RedrawWindow", "DwmFlush"], (
-            f"调用顺序错误: {call_order}"
-        )
+        assert call_order == [
+            "SetWindowPos", "RedrawWindow",
+            "DwmSetWindowAttribute", "DwmSetWindowAttribute",
+            "DwmFlush",
+        ], f"调用顺序错误: {call_order}"
+
+    def test_dwmsetwindowattribute_called_twice_for_cloak_and_decloak(self) -> None:
+        """cloak (val=1) 和 decloak (val=0) 各调用一次 DwmSetWindowAttribute"""
+        fake_user32 = mock.MagicMock()
+        fake_dwmapi = mock.MagicMock()
+        fake_dwmapi.DwmFlush.return_value = 0
+
+        attr_values: list[int] = []
+
+        def capture_attr(hwnd, attr, value_ptr, cb):
+            import ctypes
+            attr_values.append(ctypes.cast(value_ptr, ctypes.POINTER(ctypes.c_int))[0])
+            return 0
+
+        fake_dwmapi.DwmSetWindowAttribute.side_effect = capture_attr
+
+        def fake_windll(name: str) -> mock.MagicMock:
+            if name == "user32":
+                return fake_user32
+            if name == "dwmapi":
+                return fake_dwmapi
+            return mock.MagicMock()
+
+        with mock.patch.object(ctypes, "WinDLL", side_effect=fake_windll):
+            titlebar._force_titlebar_redraw(12345)
+
+        assert attr_values == [1, 0], f"cloak/decloak 值错误: {attr_values}"
 
     def test_dwmflush_nonzero_result_does_not_raise(self) -> None:
-        """DwmFlush 返回非零 HRESULT 时不应抛异常（仅记录 debug 日志）"""
+        """DwmFlush 返回非零 HRESULT 时不应抛异常"""
         parent = mock.MagicMock()
         parent.dwmapi.DwmFlush.return_value = -1  # 非 S_OK
 

@@ -47,6 +47,10 @@ class SettingsPage(QWidget):
     # MainWindow 监听后需重新加载磁盘配置并刷新 MAA/Output/Log level 等
     # 共享控件，确保关闭 GUI 时不会将重置前的旧值写回配置文件。
     config_reset = pyqtSignal(list)
+    # 高级配置变更信号（供 MainWindow 连接到 ConfigProxy 写回）
+    maa_path_changed = pyqtSignal(str)
+    output_dir_changed = pyqtSignal(str)
+    log_level_changed = pyqtSignal(str)
 
     # (module_key, 标题, 说明, 文件名)
     CONFIG_TYPES: list[tuple[str, str, str, str]] = [
@@ -238,9 +242,9 @@ class SettingsPage(QWidget):
     def _build_advanced_card(self) -> MaterialCard:
         """高级配置卡片：MAA 路径 / Output 路径 / 日志级别，
         全部使用 QVBoxLayout 竖直排列，不做 2x2 网格。
-        这三个控件由 MainWindow 共享：在 SettingsPage 创建并暴露属性，
-        Home 选项卡不再持有相同的 FileSelector / QComboBox 实例，
-        避免双源状态不同步。"""
+        这三个控件由 SettingsPage 创建并通过公开信号/方法暴露
+        （``maa_path_changed`` / ``set_maa_path`` 等），MainWindow
+        不直接访问私有成员，避免双源状态不同步。"""
         card = MaterialCard("高级")
         layout = QVBoxLayout()
         layout.setSpacing(16)
@@ -301,6 +305,11 @@ class SettingsPage(QWidget):
         )
         log_row.addWidget(self._log_level_arrow)
         layout.addLayout(log_row)
+
+        # 将内部控件信号转发为公开信号，供 MainWindow 连接
+        self._maa_selector.path_changed.connect(self.maa_path_changed)
+        self._output_selector.path_changed.connect(self.output_dir_changed)
+        self._log_level_combo.currentTextChanged.connect(self.log_level_changed)
 
         card.add_layout(layout)
         return card
@@ -446,6 +455,40 @@ class SettingsPage(QWidget):
         self._theme_switch.blockSignals(True)
         self._theme_switch.set_checked(dark)
         self._theme_switch.blockSignals(False)
+
+    # ── 高级配置控件公开访问 ────────────────────────────────
+
+    def set_maa_path(self, path: str) -> None:
+        """设置 MAA 路径（阻塞信号，避免触发 maa_path_changed 回写）"""
+        self._maa_selector.blockSignals(True)
+        try:
+            self._maa_selector.set_path(path)
+        finally:
+            self._maa_selector.blockSignals(False)
+
+    def set_output_dir(self, path: str) -> None:
+        """设置 Output 路径（阻塞信号，避免触发 output_dir_changed 回写）"""
+        self._output_selector.blockSignals(True)
+        try:
+            self._output_selector.set_path(path)
+        finally:
+            self._output_selector.blockSignals(False)
+
+    def set_log_level(self, level: str) -> None:
+        """设置日志级别（阻塞信号，避免触发 log_level_changed 回写）"""
+        self._log_level_combo.blockSignals(True)
+        try:
+            index = self._log_level_combo.findText(level)
+            if index >= 0:
+                self._log_level_combo.setCurrentIndex(index)
+        finally:
+            self._log_level_combo.blockSignals(False)
+
+    def set_advanced_enabled(self, enabled: bool) -> None:
+        """启用/禁用所有高级配置控件（MAA/Output/Log level）"""
+        self._maa_selector.setEnabled(enabled)
+        self._output_selector.setEnabled(enabled)
+        self._log_level_combo.setEnabled(enabled)
 
     def _apply_colors(self) -> None:
         # 注意：不要在此调用 self.setStyleSheet()，否则会覆盖整棵 widget tree

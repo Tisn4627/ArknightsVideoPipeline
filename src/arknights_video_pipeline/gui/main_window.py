@@ -395,11 +395,11 @@ class MainWindow(QMainWindow):
         # 配置同步
         self._video_selector.path_changed.connect(self._config.set_video_path)
         self._bg_selector.path_changed.connect(self._config.set_background_image)
-        # MAA / Output / Log level 控件由 SettingsPage 创建并持有
+        # MAA / Output / Log level 通过 SettingsPage 公开信号连接
         sp = self._settings_page
-        sp._maa_selector.path_changed.connect(self._config.set_maa_path)
-        sp._output_selector.path_changed.connect(self._config.set_output_dir)
-        sp._log_level_combo.currentTextChanged.connect(self._config.set_log_level)
+        sp.maa_path_changed.connect(self._config.set_maa_path)
+        sp.output_dir_changed.connect(self._config.set_output_dir)
+        sp.log_level_changed.connect(self._config.set_log_level)
         sp.config_reset.connect(self._on_config_reset)
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
@@ -421,26 +421,19 @@ class MainWindow(QMainWindow):
 
     def _load_config_to_ui(self) -> None:
         self._config.load()
-        # 加载期间阻塞控件信号，避免 setChecked/setText 触发回写配置
+        # 加载期间阻塞 MainWindow 自有控件信号，避免 setChecked/setText
+        # 触发回写配置。SettingsPage 的控件由其公开方法内部自行阻塞信号。
         controls = [
             self._video_selector._edit,
             self._bg_selector._edit,
             self._style_combo,
         ]
-        sp = self._settings_page
-        controls.extend([
-            sp._maa_selector._edit,
-            sp._output_selector._edit,
-            sp._log_level_combo,
-        ])
         controls.extend(cb for cb in self._skip_checkboxes.values())
         for ctrl in controls:
             ctrl.blockSignals(True)
         try:
             self._video_selector.set_path(self._config.video_path())
             self._bg_selector.set_path(self._config.background_image())
-            sp._maa_selector.set_path(self._config.maa_path())
-            sp._output_selector.set_path(self._config.output_dir())
 
             style = self._config.style()
             index = self._style_combo.findText(style)
@@ -448,17 +441,17 @@ class MainWindow(QMainWindow):
                 self._style_combo.setCurrentIndex(index)
             self._on_style_changed(style)
 
-            level = self._config.log_level()
-            index = sp._log_level_combo.findText(level)
-            if index >= 0:
-                sp._log_level_combo.setCurrentIndex(index)
-
             skip_steps = self._config.skip_steps()
             for key, cb in self._skip_checkboxes.items():
                 cb.setChecked(key in skip_steps)
         finally:
             for ctrl in controls:
                 ctrl.blockSignals(False)
+        # SettingsPage 控件通过公开方法设置（内部阻塞信号避免回写）
+        sp = self._settings_page
+        sp.set_maa_path(self._config.maa_path())
+        sp.set_output_dir(self._config.output_dir())
+        sp.set_log_level(self._config.log_level())
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -487,39 +480,22 @@ class MainWindow(QMainWindow):
         # 1. 重新从磁盘加载配置，让内存 pipeline 与刚写入的默认文件一致
         self._config.load()
 
-        # 2. 刷新受重置影响的共享控件显示
-        sp = self._settings_page
-        controls = [
-            sp._maa_selector._edit,
-            sp._output_selector._edit,
-            sp._log_level_combo,
-            self._style_combo,
-        ]
-        for ctrl in controls:
-            ctrl.blockSignals(True)
+        # 2. 刷新 Style（MainWindow 自有控件，需阻塞信号）
+        self._style_combo.blockSignals(True)
         try:
-            # MAA / Output 路径：与默认 PIPELINE_DEFAULTS 保持一致
-            # （maa_path="", output_dir="output"）。set_path 内部通过
-            # setText 触发 textChanged，阻塞信号后不会再回写 ConfigProxy。
-            sp._maa_selector.set_path(self._config.maa_path())
-            sp._output_selector.set_path(self._config.output_dir())
-
-            # Log level：与磁盘默认值（INFO）保持一致
-            level = self._config.log_level()
-            index = sp._log_level_combo.findText(level)
-            if index >= 0:
-                sp._log_level_combo.setCurrentIndex(index)
-
-            # Style：磁盘默认值为 style1；刷新后 _on_style_changed 会
-            # 同步 Background 路径与可编辑状态。
             style = self._config.style()
             index = self._style_combo.findText(style)
             if index >= 0:
                 self._style_combo.setCurrentIndex(index)
             self._on_style_changed(style)
         finally:
-            for ctrl in controls:
-                ctrl.blockSignals(False)
+            self._style_combo.blockSignals(False)
+
+        # 3. 刷新 SettingsPage 控件（公开方法内部阻塞信号避免回写）
+        sp = self._settings_page
+        sp.set_maa_path(self._config.maa_path())
+        sp.set_output_dir(self._config.output_dir())
+        sp.set_log_level(self._config.log_level())
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
@@ -579,12 +555,9 @@ class MainWindow(QMainWindow):
         self._cancel_btn.setEnabled(running)
         self._video_selector.setEnabled(not running)
         self._bg_selector.setEnabled(not running and self._style_combo.currentText() == "style1")
-        # MAA / Output / Log level 控件由 SettingsPage 持有
-        sp = self._settings_page
-        sp._maa_selector.setEnabled(not running)
-        sp._output_selector.setEnabled(not running)
         self._style_combo.setEnabled(not running)
-        sp._log_level_combo.setEnabled(not running)
+        # MAA / Output / Log level 通过 SettingsPage 公开方法统一控制
+        self._settings_page.set_advanced_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
 
@@ -609,13 +582,9 @@ class MainWindow(QMainWindow):
             # 浅色：QSS 已由 create_application 应用，仅尝试标题栏
             apply_titlebar_theme(self, False)
 
-    def _toggle_theme(self, checked: bool) -> None:
-        self._is_dark = checked
-        colors = MaterialColors.dark() if checked else MaterialColors.light()
-        # 先更新 Windows 原生标题栏主题：DWM 属性变更 + 同步重绘耗时 ~1ms，
-        # 放在最前让标题栏即时切换；若放在 QSS 重计算（~200ms）之后，
-        # 标题栏会等到 QSS 完成才更新，用户感知为"延迟切换"。
-        apply_titlebar_theme(self, checked)
+    def _toggle_theme(self, dark: bool) -> None:
+        self._is_dark = dark
+        colors = MaterialColors.dark() if dark else MaterialColors.light()
         style = MaterialStyle(colors=colors, typography=MaterialTypography())
         app = QApplication.instance()
         if app is not None:
@@ -647,6 +616,11 @@ class MainWindow(QMainWindow):
         # 无需清空历史日志；解决深色模式下 [INFO] 文字几乎不可见问题
         if getattr(self, "_log_viewer", None) is not None:
             self._log_viewer.set_colors(colors)
+        # 标题栏放在最后：QSS 重计算（~200ms）+ 自定义组件刷新完成后，
+        # 标题栏与主界面在同一帧切换，避免标题栏先变/主界面后变的视觉不同步。
+        # apply_titlebar_theme 含 DwmFlush（~15ms），放在最后让 DWM 合成
+        # 新帧时主界面已完成重绘，标题栏与主界面同时上屏。
+        apply_titlebar_theme(self, dark)
 
     def _show_about(self) -> None:
         # 使用自定义 AboutDialog 而非 QMessageBox.about()：

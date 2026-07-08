@@ -33,6 +33,8 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "track": "config/track.json",
     "video_compose_style": "style1",
     "video_compose_config": "config/video_compose/style1.json",
+    "skip_steps": [],
+    "video_path": "",
 }
 
 
