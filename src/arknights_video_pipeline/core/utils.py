@@ -204,6 +204,13 @@ def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
             ],
             capture_output=True,
             text=True,
+            # ffprobe 输出 UTF-8 JSON（含回显的文件名）。若不显式指定编码，
+            # text=True 会用 locale.getpreferredencoding() 解码——在中文
+            # Windows 上为 cp936/gbk，遇到非英文字节即 UnicodeDecodeError，
+            # 导致非英文文件名的视频在验证阶段被错误拒绝。显式 utf-8 跨平台
+            # 一致；errors="replace" 防御异常元数据字节破坏 JSON 结构。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if result.returncode != 0:
