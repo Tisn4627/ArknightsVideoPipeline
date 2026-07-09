@@ -45,6 +45,7 @@ from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
+    apply_custom_ffmpeg_path,
     ensure_dir,
     ensure_ffmpeg_in_path,
     format_duration,
@@ -98,6 +99,10 @@ class Pipeline:
         self.config = config_mgr
         self.logger = logger
         self.skip_steps = skip_steps or set()
+
+        # 按当前配置将 FFmpeg 目录前置到 PATH（覆盖 bare ffmpeg/ffprobe 调用 +
+        # movielite 内部调用）。幂等：多 worker 场景下重复调用不会堆积 PATH。
+        apply_custom_ffmpeg_path(self.config.get_ffmpeg_exe_path())
 
         self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
         self.output_dir = self.config.get_output_dir(self.video_name)
@@ -875,6 +880,9 @@ def main() -> None:
     cli_overrides["video_compose_style"] = style
     cli_overrides["video_compose_config"] = f"config/video_compose/{style}.json"
     config_mgr.merge_cli_overrides(cli_overrides)
+
+    # ── 注入 FFmpeg 路径到 PATH（验证/合成前生效）─────────
+    apply_custom_ffmpeg_path(config_mgr.get_ffmpeg_exe_path())
 
     # ── 初始化日志 ────────────────────────────────────────
     # 单文件：日志写入该视频输出目录（保持向后兼容）；
