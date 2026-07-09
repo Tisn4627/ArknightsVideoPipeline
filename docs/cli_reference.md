@@ -261,30 +261,6 @@ python main.py video.mp4 -b bg.png --dry-run
 
 ---
 
-## FFmpeg 路径配置
-
-CLI 不提供独立的 FFmpeg 路径参数，但可通过 `config/pipeline.json` 中的两个字段配置：
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `ffmpeg_custom_enabled` | boolean | `false` | FFmpeg 自定义路径开关 |
-| `ffmpeg_path` | string | `"resource/ffmpeg/bin/ffmpeg.exe"` | FFmpeg 可执行文件路径 |
-
-- **关闭**（默认）：使用内置 FFmpeg `resource/ffmpeg/bin/ffmpeg.exe`；
-- **开启**：将 `ffmpeg_custom_enabled` 设为 `true`，并在 `ffmpeg_path` 填入目标 `ffmpeg.exe` 的完整路径；
-- 生效方式：程序将目标 `ffmpeg.exe` 所在目录前置到 `PATH`，使 ffprobe 验证、ffmpeg 转码与 movielite 合成库统一解析到该二进制；
-- **平台限制**：此功能仅 Windows GUI 暴露设置卡片；CLI 用户可手动编辑 pipeline.json。非 Windows 上内置 `ffmpeg.exe` 不存在时自动回退到系统 PATH 中的 ffmpeg，不会报错。
-
-```json
-// pipeline.json 中启用自定义 FFmpeg 路径示例
-{
-    "ffmpeg_custom_enabled": true,
-    "ffmpeg_path": "C:/tools/ffmpeg/bin/ffmpeg.exe"
-}
-```
-
----
-
 ## 完整使用示例
 
 ### 基础用法

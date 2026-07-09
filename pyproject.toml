@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "明日方舟视频处理流水线 - 一键完成视频识别、文本提取与视频合成"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "GNU General Public License v2.0" }
+license = { text = "仅供学习交流使用" }
 authors = [
     { name = "ArknightsVideoPipeline" }
 ]

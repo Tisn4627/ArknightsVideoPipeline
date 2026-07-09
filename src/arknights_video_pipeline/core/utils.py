@@ -49,29 +49,6 @@ def ensure_ffmpeg_in_path() -> None:
         pass
 
 
-def apply_custom_ffmpeg_path(ffmpeg_exe_path: str) -> None:
-    """将 ffmpeg.exe 所在目录前置到 PATH，使 bare ffmpeg/ffprobe 解析到指定二进制
-
-    幂等：若目标目录已是 PATH 第一项则跳过。路径不存在时记警告并返回，
-    保留既有 PATH（非 Windows 上默认 ffmpeg.exe 不存在时优雅回退到系统 ffmpeg）。
-
-    Args:
-        ffmpeg_exe_path: ffmpeg 可执行文件绝对路径（目录将被前置到 PATH）
-    """
-    if not ffmpeg_exe_path:
-        return
-    bin_dir = os.path.dirname(ffmpeg_exe_path)
-    if not bin_dir or not os.path.isdir(bin_dir):
-        logger.warning(f"FFmpeg 目录不存在，跳过 PATH 注入: {ffmpeg_exe_path}")
-        return
-    current_path = os.environ.get("PATH", "")
-    parts = current_path.split(os.pathsep)
-    if parts and os.path.normcase(parts[0]) == os.path.normcase(bin_dir):
-        return
-    os.environ["PATH"] = bin_dir + os.pathsep + current_path
-    logger.info(f"已将 FFmpeg 目录前置到 PATH: {bin_dir}")
-
-
 # ── 项目根目录 ────────────────────────────────────────────
 
 def _find_project_root() -> str:
@@ -220,43 +197,25 @@ def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
         VideoValidationError: ffprobe 不可用、超时、返回非零、输出无法解析
     """
     try:
-        # 不使用 text=True（修复 GBK 编码崩溃）。
-        # 中文 Windows 上 text=True 让 subprocess 用 GBK 解码子进程输出，
-        # ffprobe 输出的某些字节无法被 GBK 解码，reader 线程抛出
-        # UnicodeDecodeError，导致 result.stdout 被设为 None，
-        # 最终 json.loads(None) 抛出 TypeError 崩溃。
-        # 改用 text=False 捕获原始字节，手动解码 + errors='replace' 兜底。
         result = subprocess.run(
             [
                 "ffprobe", "-v", "quiet", "-print_format", "json",
                 "-show_format", "-show_streams", video_path,
             ],
             capture_output=True,
-            text=False,
+            text=True,
             timeout=timeout,
         )
         if result.returncode != 0:
             raise VideoValidationError(f"无法解析视频文件: {video_path}")
-
-        stdout = result.stdout
-        if stdout is None:
-            raise VideoValidationError(
-                f"ffprobe 输出为空（stdout is None）: {video_path}"
-            )
-        # 统一用 utf-8 解码，无法解码的字节用 U+FFFD 替换
-        decoded = stdout.decode("utf-8", errors="replace")
-        if not decoded.strip():
-            raise VideoValidationError(
-                f"ffprobe 输出为空: {video_path}"
-            )
-        return json.loads(decoded)
+        return json.loads(result.stdout)
     except FileNotFoundError as exc:
         raise VideoValidationError(
             "ffprobe未找到，请确保ffmpeg已安装并在PATH中"
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise VideoValidationError("ffprobe执行超时") from exc
-    except (json.JSONDecodeError, TypeError) as exc:
+    except json.JSONDecodeError as exc:
         raise VideoValidationError(
             f"无法解析ffprobe输出: {video_path}"
         ) from exc

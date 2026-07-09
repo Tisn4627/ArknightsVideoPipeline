@@ -395,11 +395,6 @@ class MainWindow(QMainWindow):
         # 性能配置（多线程开关 / 最大并发数）
         sp.multithreading_changed.connect(self._config.set_multithreading)
         sp.max_concurrent_changed.connect(self._config.set_max_concurrent)
-        # FFmpeg 路径配置（自定义开关 / 路径）—— 写回配置并即时注入 PATH
-        sp.ffmpeg_custom_enabled_changed.connect(self._config.set_ffmpeg_custom_enabled)
-        sp.ffmpeg_path_changed.connect(self._config.set_ffmpeg_path)
-        sp.ffmpeg_custom_enabled_changed.connect(lambda _: self._config.apply_ffmpeg_path())
-        sp.ffmpeg_path_changed.connect(lambda _: self._config.apply_ffmpeg_path())
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
         for key, cb in self._skip_checkboxes.items():
@@ -462,10 +457,6 @@ class MainWindow(QMainWindow):
         # 性能配置：从 pipeline.json 恢复多线程开关与最大并发数
         sp.set_multithreading(self._config.multithreading())
         sp.set_max_concurrent(self._config.max_concurrent())
-        # FFmpeg 路径配置：从 pipeline.json 恢复开关与路径，并即时注入 PATH
-        sp.set_ffmpeg_custom_enabled(self._config.ffmpeg_custom_enabled())
-        sp.set_ffmpeg_path(self._config.ffmpeg_path())
-        self._config.apply_ffmpeg_path()
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -513,10 +504,6 @@ class MainWindow(QMainWindow):
         # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
         sp.set_multithreading(self._config.multithreading())
         sp.set_max_concurrent(self._config.max_concurrent())
-        # FFmpeg 路径配置同步刷新（重置后恢复默认值）并重新注入 PATH
-        sp.set_ffmpeg_custom_enabled(self._config.ffmpeg_custom_enabled())
-        sp.set_ffmpeg_path(self._config.ffmpeg_path())
-        self._config.apply_ffmpeg_path()
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
@@ -553,19 +540,7 @@ class MainWindow(QMainWindow):
             self._show_warning("No video files", "请先添加至少一个视频文件")
             return
 
-        # 校验文件完整性（可能抛出意外异常，如 ffprobe 编码问题）
-        # 用 try/except 兜底，确保任何未预期的异常都能被捕获并以友好
-        # 对话框提示，而非直接崩溃退出。
-        try:
-            errors = self._service.validate_batch(paths)
-        except Exception as exc:
-            self._show_critical(
-                "校验文件时发生错误",
-                f"无法验证视频文件，请确认 ffmpeg/ffprobe 已正确安装并配置。\n\n"
-                f"错误详情: {exc}",
-            )
-            return
-
+        errors = self._service.validate_batch(paths)
         if errors:
             self._show_warning("Input validation failed", "\n".join(errors))
             return
@@ -574,21 +549,7 @@ class MainWindow(QMainWindow):
         self._progress_card.reset()
         self._log_viewer.clear_logs()
         self._set_running_ui(True)
-        try:
-            started = self._service.run_pipeline(paths)
-            if not started:
-                self._set_running_ui(False)
-                self._show_warning(
-                    "无法启动",
-                    "管道已在运行中，请等待当前任务完成后再试。",
-                )
-        except Exception as exc:
-            self._set_running_ui(False)
-            self._show_critical(
-                "启动管道时发生错误",
-                f"无法启动视频处理管道。\n\n"
-                f"错误详情: {exc}",
-            )
+        self._service.run_pipeline(paths)
 
     def _on_cancel(self) -> None:
         self._service.cancel_pipeline()
@@ -614,8 +575,6 @@ class MainWindow(QMainWindow):
         self._settings_page.set_advanced_enabled(not running)
         # 性能配置（多线程开关 / 最大并发数）运行期间禁止修改
         self._settings_page.set_performance_enabled(not running)
-        # FFmpeg 路径配置运行期间禁止修改
-        self._settings_page.set_ffmpeg_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
 

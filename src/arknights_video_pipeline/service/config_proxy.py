@@ -151,25 +151,6 @@ class ConfigProxy(QObject):
             n = self.MAX_CONCURRENT_LIMIT
         self.set("max_concurrent", int(n))
 
-    # ── FFmpeg 路径配置 ──────────────────────────────────
-
-    def ffmpeg_custom_enabled(self) -> bool:
-        return bool(self.get("ffmpeg_custom_enabled", False))
-
-    def set_ffmpeg_custom_enabled(self, enabled: bool) -> None:
-        self.set("ffmpeg_custom_enabled", bool(enabled))
-
-    def ffmpeg_path(self) -> str:
-        return self.get("ffmpeg_path", "resource/ffmpeg/bin/ffmpeg.exe")
-
-    def set_ffmpeg_path(self, path: str) -> None:
-        self.set("ffmpeg_path", os.path.abspath(path) if path else "")
-
-    def apply_ffmpeg_path(self) -> None:
-        """按当前配置将 FFmpeg 目录前置到 PATH（供 GUI 改配置后即时生效）"""
-        from arknights_video_pipeline.core.utils import apply_custom_ffmpeg_path
-        apply_custom_ffmpeg_path(self._config_mgr.get_ffmpeg_exe_path())
-
     # ── 构建运行参数 ──────────────────────────────────────
 
     def build_overrides(self) -> dict[str, Any]:

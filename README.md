@@ -47,8 +47,6 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 ## 感谢
 
 - **Maa** [(MaaAssistantArknights)](https://github.com/MAAAssistantArknights/MAAAssistantArknights) - 提供视频转作业Json功能和开始按钮底板图片
-- **FFmpeg** (https://github.com/ffmpeg/ffmpeg) - 视频处理库
-- **material-design-icons-master** (https://github.com/material-design-icons/material-design-icons) - 图标资源
 
 ## 最后说明
 

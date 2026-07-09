@@ -194,7 +194,6 @@ material-design-icons-master
 MAA-*/
 output/
 bg.png
-background.png
 *.tmp
 *.bak
 /site
@@ -203,8 +202,3 @@ background.png
 # Configuration files
 # ================================
 config/
-
-## ================================
-## FFmpeg release files
-## ================================
-resource/ffmpeg/

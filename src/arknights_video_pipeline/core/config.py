@@ -40,11 +40,6 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     # 启用后由 max_concurrent 限制同时运行的合成任务数。
     "multithreading": False,
     "max_concurrent": 1,
-    # FFmpeg 路径自定义（仅 Windows GUI 暴露；配置项跨平台存在）。
-    # ffmpeg_custom_enabled=False 时使用默认内置 ffmpeg（resource/ffmpeg/bin/ffmpeg.exe）；
-    # True 时使用 ffmpeg_path 指向的用户二进制。
-    "ffmpeg_custom_enabled": False,
-    "ffmpeg_path": "resource/ffmpeg/bin/ffmpeg.exe",
 }
 
 
@@ -202,15 +197,3 @@ class ConfigManager:
         style_name = style or self.get_video_compose_style()
         config_path = f"config/video_compose/{style_name}.json"
         return self.resolve_path(config_path)
-
-    def get_ffmpeg_exe_path(self) -> str:
-        """返回生效的 FFmpeg 可执行文件绝对路径
-
-        ffmpeg_custom_enabled=True 且 ffmpeg_path 非空时使用用户路径，
-        否则回退到默认内置路径 resource/ffmpeg/bin/ffmpeg.exe。
-        """
-        if self.pipeline.get("ffmpeg_custom_enabled"):
-            path = self.pipeline.get("ffmpeg_path", "")
-            if path:
-                return self.resolve_path(path)
-        return self.resolve_path("resource/ffmpeg/bin/ffmpeg.exe")

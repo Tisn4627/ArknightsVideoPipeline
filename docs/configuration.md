@@ -54,8 +54,6 @@ python main.py --init-config compose
 | `video_path` | string | `""` | 单个视频文件路径（旧字段，**已弃用**，保留以向后兼容）。批量场景请使用 `video_paths`；GUI 与 CLI 现均通过 `video_paths` / 位置参数处理视频列表，不再写入此字段 |
 | `multithreading` | boolean | `false` | 多线程批量处理开关。`false`（默认）时批量任务严格串行执行，一次仅运行一个合成任务，避免 MAA 资源争用；`true` 时按 `max_concurrent` 上限并发派发多个 PipelineWorker。仅在 GUI 批量处理时生效，CLI 不受此字段影响 |
 | `max_concurrent` | integer | `1` | 最大并发视频合成任务数（正整数，范围 1~16）。仅当 `multithreading=true` 时生效；`multithreading=false` 或该值为 1 时退化为完全串行。每个并发任务会拉起独立的 Pipeline 实例及 MAA/ffmpeg 子进程，设置过大可能耗尽 CPU/内存/IO 资源 |
-| `ffmpeg_custom_enabled` | boolean | `false` | FFmpeg 自定义路径开关。`false`（默认）使用内置 FFmpeg（`resource/ffmpeg/bin/ffmpeg.exe`）；`true` 使用 `ffmpeg_path` 指向的用户二进制。仅 Windows GUI 暴露此设置，CLI 用户可手动编辑 pipeline.json。配置项跨平台存在，但非 Windows 上内置 `ffmpeg.exe` 不存在时自动回退到系统 PATH 中的 ffmpeg |
-| `ffmpeg_path` | string | `"resource/ffmpeg/bin/ffmpeg.exe"` | FFmpeg 可执行文件路径（相对路径基于项目根目录，或绝对路径）。仅当 `ffmpeg_custom_enabled=true` 时生效；关闭时回退到内置默认路径。GUI 保存时转为绝对路径，默认值保留相对路径 |
 
 ### 配置示例
 
@@ -77,17 +75,13 @@ python main.py --init-config compose
     "video_paths": [],
     "video_path": "",
     "multithreading": false,
-    "max_concurrent": 1,
-    "ffmpeg_custom_enabled": false,
-    "ffmpeg_path": "resource/ffmpeg/bin/ffmpeg.exe"
+    "max_concurrent": 1
 }
 ```
 
 > **`video_paths` 与 `video_path` 说明**：`video_paths`（复数）是批量视频处理引入的新字段，GUI 用于持久化 **Video files** 卡片中的文件列表与顺序，下次启动时自动恢复。`video_path`（单数）为旧字段，保留仅为向后兼容，新版本不再写入；批量场景请统一使用 `video_paths`。CLI 不读取这两个字段，而是通过 `video` 位置参数接收视频列表。
 
 > **多线程说明与风险提示**：`multithreading` 默认关闭，保持串行执行以避免 MAA 资源争用（多个 MAA 实例可能共享同一 ADB 连接或资源目录，并发运行可能互相干扰）。启用前请确认你的任务之间不存在共享资源冲突。每个并发 worker 会获得独立的 `ConfigManager` 快照与独立输出目录（按视频名分目录），不存在中间文件冲突；日志按线程过滤后分别回传到 GUI，不会重复显示。任务失败互不影响——单个 worker 的异常会被捕获并标记为 failed，其余并行任务继续执行。
-
-> **FFmpeg 路径说明**：`ffmpeg_custom_enabled` 控制是否使用用户自定义的 FFmpeg 可执行文件。关闭时（默认）使用内置路径 `resource/ffmpeg/bin/ffmpeg.exe`；开启后使用 `ffmpeg_path` 指定的路径。生效方式为将目标 ffmpeg.exe 所在目录前置到 `PATH` 环境变量，使所有 ffmpeg/ffprobe 调用（含视频合成库 movielite 的内部调用）统一解析到该二进制。**平台限制**：此功能仅 Windows GUI 暴露设置卡片，非 Windows 系统 GUI 不显示该卡片；CLI 用户可手动编辑 pipeline.json 的这两个字段，配置项跨平台存在但非 Windows 上内置 `ffmpeg.exe` 不存在时会自动回退到系统 PATH 中的 ffmpeg（不会报错）。修改后立即生效，无需重启。
 
 ---
 
@@ -204,9 +198,9 @@ python main.py --init-config compose
 |--------|------|--------|------|
 | `output_width` | integer | `1920` | 输出视频宽度（像素） |
 | `output_height` | integer | `1080` | 输出视频高度（像素） |
-| `video_scale` | float | `0.85` | 视频缩放比例（相对于输出尺寸） |
-| `video_x` | integer | `272` | 视频在底板上的 X 坐标偏移 |
-| `video_y` | integer | `47` | 视频在底板上的 Y 坐标偏移 |
+| `video_scale` | float | `0.8` | 视频缩放比例（相对于输出尺寸） |
+| `video_x` | integer | `320` | 视频在底板上的 X 坐标偏移 |
+| `video_y` | integer | `72` | 视频在底板上的 Y 坐标偏移 |
 | `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high`、`very_high` |
 
 ### style2 配置
@@ -290,9 +284,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.85,
-    "video_x": 272,
-    "video_y": 47,
+    "video_scale": 0.8,
+    "video_x": 320,
+    "video_y": 72,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
@@ -309,9 +303,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.85,
-    "video_x": 272,
-    "video_y": 47,
+    "video_scale": 0.8,
+    "video_x": 320,
+    "video_y": 72,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
@@ -330,9 +324,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.85,
-    "video_x": 272,
-    "video_y": 47,
+    "video_scale": 0.8,
+    "video_x": 320,
+    "video_y": 72,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
