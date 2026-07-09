@@ -58,6 +58,13 @@ class ConfigProxy(QObject):
     def set_video_path(self, path: str) -> None:
         self.set("video_path", os.path.abspath(path) if path else "")
 
+    def video_paths(self) -> list[str]:
+        """批量视频路径列表（GUI 批量处理用）"""
+        return list(self.get("video_paths", []))
+
+    def set_video_paths(self, paths: list[str]) -> None:
+        self.set("video_paths", [os.path.abspath(p) for p in paths if p])
+
     def background_image(self) -> str:
         return self.get("background_image", "")
 

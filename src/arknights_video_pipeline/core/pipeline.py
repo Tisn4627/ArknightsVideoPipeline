@@ -691,9 +691,9 @@ def build_argparser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "video",
-        nargs="?",
-        default=None,
-        help=f"输入视频文件路径 (支持: {supported_video})",
+        nargs="*",
+        default=[],
+        help=f"输入视频文件路径，支持多个 (支持: {supported_video})，按给定顺序依次处理",
     )
     parser.add_argument(
         "--background-image", "-b",
@@ -833,18 +833,18 @@ def main() -> None:
         _init_config(args.init_config)
         return
 
-    # ── 视频路径必须提供 ──────────────────────────────────
-    if args.video is None:
+    # ── 视频路径必须提供（现为列表，支持批量） ────────────
+    if not args.video:
         parser.error(
-            "请提供视频文件路径，或使用 --init-config 生成默认配置\n"
-            "用法: python main.py <video> --background-image <image>"
+            "请提供至少一个视频文件路径，或使用 --init-config 生成默认配置\n"
+            "用法: python main.py <video...> --background-image <image>"
         )
 
-    video_path = args.video
-    if not os.path.isabs(video_path):
-        video_path = os.path.abspath(video_path)
+    videos: list[str] = []
+    for v in args.video:
+        videos.append(v if os.path.isabs(v) else os.path.abspath(v))
 
-    # ── 背景板图片路径 ────────────────────────────────────
+    # ── 背景板图片路径（整批共享） ────────────────────────
     style = args.style
     background_image_path = None
     if args.background_image:
@@ -856,7 +856,7 @@ def main() -> None:
             "style1 需要背景板图片，请使用 --background-image / -b 指定\n"
             "若不需要背景板图片，可使用 --style style2\n"
             f"支持的图片格式: {', '.join(sorted(SUPPORTED_IMAGE_EXTENSIONS))}\n"
-            "用法: python main.py <video> --background-image <image>"
+            "用法: python main.py <video...> --background-image <image>"
         )
 
     # ── 加载配置 ──────────────────────────────────────────
@@ -877,34 +877,24 @@ def main() -> None:
     config_mgr.merge_cli_overrides(cli_overrides)
 
     # ── 初始化日志 ────────────────────────────────────────
-    video_name = os.path.splitext(os.path.basename(video_path))[0]
-    log_dir = (
-        config_mgr.get_output_dir(video_name)
-        if config_mgr.pipeline.get("log_to_file", True)
-        else None
-    )
+    # 单文件：日志写入该视频输出目录（保持向后兼容）；
+    # 多文件：日志写入基础输出目录，覆盖整批。
+    log_to_file = config_mgr.pipeline.get("log_to_file", True)
+    if len(videos) == 1:
+        log_video_name = os.path.splitext(os.path.basename(videos[0]))[0]
+        log_dir = config_mgr.get_output_dir(log_video_name) if log_to_file else None
+    else:
+        log_dir = config_mgr.get_output_dir() if log_to_file else None
     logger = setup_logger(
         "pipeline",
         log_dir=log_dir,
         log_level=config_mgr.get_log_level(),
-        log_to_file=config_mgr.pipeline.get("log_to_file", True),
+        log_to_file=log_to_file,
         max_bytes=config_mgr.pipeline.get("log_max_bytes", 10 * 1024 * 1024),
         backup_count=config_mgr.pipeline.get("log_backup_count", 3),
     )
 
-    # ── 验证视频 ──────────────────────────────────────────
-    try:
-        logger.info(f"验证视频文件: {video_path}")
-        video_info = validate_video_file(video_path)
-        logger.info(
-            f"视频信息: {video_info['width']}x{video_info['height']}, "
-            f"时长{video_info['duration']:.2f}s"
-        )
-    except VideoValidationError as exc:
-        logger.error(str(exc))
-        sys.exit(1)
-
-    # ── 验证背景板图片 ────────────────────────────────────
+    # ── 验证背景板图片（整批共享，失败即退出） ────────────
     if background_image_path:
         try:
             logger.info(f"验证背景板图片: {background_image_path}")
@@ -919,24 +909,69 @@ def main() -> None:
             logger.error(str(exc))
             sys.exit(1)
 
-    # ── Dry-run 模式 ──────────────────────────────────────
+    # ── Dry-run 模式：验证全部视频后返回 ──────────────────
     if args.dry_run:
-        logger.info("Dry-run模式：输入验证通过")
-        logger.info(f"视频: {video_path}")
+        logger.info("Dry-run模式：开始验证全部输入")
         logger.info(f"背景板图片: {background_image_path}")
-        logger.info(f"输出目录: {config_mgr.get_output_dir(video_name)}")
         logger.info(f"MAA路径: {config_mgr.get_maa_path()}")
         logger.info(f"跳过步骤: {args.skip_step}")
-        return
+        all_ok = True
+        for idx, video_path in enumerate(videos, start=1):
+            try:
+                logger.info(f"[{idx}/{len(videos)}] 验证视频文件: {video_path}")
+                video_info = validate_video_file(video_path)
+                logger.info(
+                    f"  视频信息: {video_info['width']}x{video_info['height']}, "
+                    f"时长{video_info['duration']:.2f}s"
+                )
+            except VideoValidationError as exc:
+                logger.error(f"  验证失败: {exc}")
+                all_ok = False
+        logger.info(
+            f"Dry-run完成：{'全部通过' if all_ok else '存在无效输入'}"
+        )
+        sys.exit(0 if all_ok else 1)
 
-    # ── 执行流水线 ────────────────────────────────────────
-    pipeline = Pipeline(
-        video_path=video_path,
-        config_mgr=config_mgr,
-        logger=logger,
-        background_image_path=background_image_path,
-        skip_steps=set(args.skip_step),
-    )
+    # ── 批量执行流水线 ────────────────────────────────────
+    total = len(videos)
+    success_count = 0
+    logger.info(f"开始批量处理：共 {total} 个文件")
+    for idx, video_path in enumerate(videos, start=1):
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"  批量处理 {idx}/{total}: {video_name}")
+        logger.info("=" * 60)
 
-    success = pipeline.run()
-    sys.exit(0 if success else 1)
+        # 单文件验证失败 → 记录并继续下一个
+        try:
+            video_info = validate_video_file(video_path)
+            logger.info(
+                f"视频信息: {video_info['width']}x{video_info['height']}, "
+                f"时长{video_info['duration']:.2f}s"
+            )
+        except VideoValidationError as exc:
+            logger.error(f"视频验证失败，跳过该文件: {exc}")
+            continue
+
+        try:
+            pipeline = Pipeline(
+                video_path=video_path,
+                config_mgr=config_mgr,
+                logger=logger,
+                background_image_path=background_image_path,
+                skip_steps=set(args.skip_step),
+            )
+            if pipeline.run():
+                success_count += 1
+            else:
+                logger.error(f"文件处理失败: {video_path}")
+        except Exception as exc:
+            # 单文件异常不应中断整个队列
+            logger.error(f"文件处理异常，跳过该文件: {video_path} - {exc}")
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"  批量处理结束：成功 {success_count}/{total}")
+    logger.info("=" * 60)
+    sys.exit(0 if success_count == total else 1)

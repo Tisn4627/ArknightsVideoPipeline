@@ -20,8 +20,8 @@ from PyQt6.QtWidgets import (
 )
 
 from arknights_video_pipeline.gui.components import (
-    FileSelector, LogViewer, MaterialButton, MaterialCard, MaterialCheckBox,
-    NavigationRail, ProgressCard, SettingsPage, StepPanel,
+    BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
+    MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage,
 )
 from arknights_video_pipeline.gui.theme import (
     MaterialColors, MaterialStyle, MaterialTypography, apply_titlebar_theme,
@@ -281,24 +281,15 @@ class MainWindow(QMainWindow):
     def _build_config_card(self) -> MaterialCard:
         """输入配置卡片（主页）
 
-        只保留主页相关的轻量配置：Video、Background、Style、Skip steps，
-        以及运行按钮。MAA path、Output、Log level 已迁移到 Settings 页
+        只保留主页相关的轻量配置：Background、Style、Skip steps，
+        以及运行按钮。视频输入由独立的 ``BatchVideoList`` 卡片承担；
+        MAA path、Output、Log level 已迁移到 Settings 页
         （``_build_advanced_card``），由 MainWindow 通过 settings_page
         共享同一组控件实例，避免双源状态不同步。
         """
         card = MaterialCard("Input configuration")
         layout = QVBoxLayout()
         layout.setSpacing(16)
-
-        self._video_selector = FileSelector(
-            mode=FileSelector.MODE_OPEN_FILE,
-            label="Video",
-            placeholder="Select game recording",
-        )
-        self._video_selector.set_filter(
-            "Video files (*.mp4 *.avi *.mkv *.mov *.flv *.wmv);;All files (*.*)"
-        )
-        layout.addWidget(self._video_selector)
 
         self._bg_selector = FileSelector(
             mode=FileSelector.MODE_OPEN_FILE,
@@ -373,10 +364,10 @@ class MainWindow(QMainWindow):
         return card
 
     def _build_steps_card(self) -> MaterialCard:
-        """步骤面板卡片"""
-        card = MaterialCard("Pipeline steps")
-        self._step_panel = StepPanel()
-        card.add_widget(self._step_panel)
+        """批量视频文件列表卡片（取代原 Pipeline steps 面板）"""
+        card = MaterialCard("Video files")
+        self._batch_list = BatchVideoList(colors=self._settings_page.colors)
+        card.add_widget(self._batch_list)
         return card
 
     @staticmethod
@@ -393,7 +384,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         # 配置同步
-        self._video_selector.path_changed.connect(self._config.set_video_path)
+        self._batch_list.video_paths_changed.connect(self._on_video_paths_changed)
         self._bg_selector.path_changed.connect(self._config.set_background_image)
         # MAA / Output / Log level 通过 SettingsPage 公开信号连接
         sp = self._settings_page
@@ -410,12 +401,15 @@ class MainWindow(QMainWindow):
         self._run_btn.clicked.connect(self._on_run)
         self._cancel_btn.clicked.connect(self._on_cancel)
 
-        # 服务信号
-        self._service.step_started.connect(self._step_panel.set_step_running)
-        self._service.step_finished.connect(self._step_panel.set_step_finished)
-        self._service.progress_updated.connect(self._progress_card.set_progress)
+        # 服务信号（批量原生，带文件索引）
+        self._service.file_started.connect(self._batch_list.set_file_running)
+        self._service.file_progress.connect(self._batch_list.set_file_progress)
+        self._service.file_finished.connect(
+            lambda idx, success, _report: self._batch_list.set_file_finished(idx, success)
+        )
+        self._service.overall_progress.connect(self._progress_card.set_progress)
         self._service.log_emitted.connect(self._log_viewer.append)
-        self._service.pipeline_finished.connect(self._on_pipeline_finished)
+        self._service.batch_finished.connect(self._on_batch_finished)
 
     # ── 配置加载与同步 ────────────────────────────────────
 
@@ -424,15 +418,15 @@ class MainWindow(QMainWindow):
         # 加载期间阻塞 MainWindow 自有控件信号，避免 setChecked/setText
         # 触发回写配置。SettingsPage 的控件由其公开方法内部自行阻塞信号。
         controls = [
-            self._video_selector._edit,
             self._bg_selector._edit,
             self._style_combo,
         ]
         controls.extend(cb for cb in self._skip_checkboxes.values())
         for ctrl in controls:
             ctrl.blockSignals(True)
+        # 阻塞批量列表信号，避免 add_paths 回写配置
+        self._batch_list.blockSignals(True)
         try:
-            self._video_selector.set_path(self._config.video_path())
             self._bg_selector.set_path(self._config.background_image())
 
             style = self._config.style()
@@ -444,9 +438,14 @@ class MainWindow(QMainWindow):
             skip_steps = self._config.skip_steps()
             for key, cb in self._skip_checkboxes.items():
                 cb.setChecked(key in skip_steps)
+
+            # 从配置恢复视频路径列表
+            self._batch_list.clear()
+            self._batch_list.add_paths(self._config.video_paths())
         finally:
             for ctrl in controls:
                 ctrl.blockSignals(False)
+            self._batch_list.blockSignals(False)
         # SettingsPage 控件通过公开方法设置（内部阻塞信号避免回写）
         sp = self._settings_page
         sp.set_maa_path(self._config.maa_path())
@@ -471,7 +470,7 @@ class MainWindow(QMainWindow):
            ``self._config.save()`` 会把重置前的旧值写回文件）。
         2. 刷新共享控件（MAA/Output 路径、Log level、Style）的显示，
            阻塞控件信号以避免刷新过程触发回写配置。
-        3. 不修改与重置无关的字段（如 video_path、skip_steps），
+        3. 不修改与重置无关的字段（如 video_paths、skip_steps），
            保证其他路径设置功能正常使用。
         """
         if "pipeline" not in generated:
@@ -501,6 +500,12 @@ class MainWindow(QMainWindow):
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
         self._config.set_skip_steps(steps)
 
+    def _on_video_paths_changed(self, paths: list) -> None:
+        """批量列表变化时同步到配置（持久化）并刷新 Start 按钮可用态"""
+        self._config.set_video_paths(list(paths))
+        if not self._service.is_running():
+            self._run_btn.setEnabled(bool(paths))
+
     def _on_nav_changed(self, index: int) -> None:
         # 0=Home, 1=Settings, 2=Info（仅弹出关于对话框，不切换页面）
         if index == 0:
@@ -521,39 +526,40 @@ class MainWindow(QMainWindow):
     # ── 操作处理 ──────────────────────────────────────────
 
     def _on_run(self) -> None:
-        errors = self._service.validate_inputs()
+        paths = self._batch_list.video_paths()
+        if not paths:
+            self._show_warning("No video files", "请先添加至少一个视频文件")
+            return
+
+        errors = self._service.validate_batch(paths)
         if errors:
             self._show_warning("Input validation failed", "\n".join(errors))
             return
 
-        self._step_panel.reset_all()
+        self._batch_list.reset_states()
         self._progress_card.reset()
         self._log_viewer.clear_logs()
         self._set_running_ui(True)
-        self._service.run_pipeline()
+        self._service.run_pipeline(paths)
 
     def _on_cancel(self) -> None:
         self._service.cancel_pipeline()
         self._cancel_btn.setEnabled(False)
 
-    def _on_pipeline_finished(self, success: bool, report_dict: dict[str, Any],
-                              cancelled: bool) -> None:
+    def _on_batch_finished(self, success_count: int, total: int,
+                           cancelled: bool) -> None:
         self._set_running_ui(False)
-        if cancelled:
-            self._progress_card.set_finished(False, "Pipeline cancelled")
-        elif success:
-            self._progress_card.set_finished(True, "Pipeline completed")
-        else:
-            self._progress_card.set_finished(False, "Pipeline failed, check logs")
+        self._progress_card.set_batch_finished(success_count, total, cancelled)
+        if not cancelled and success_count < total:
             self._show_critical(
-                "Processing failed",
-                "Pipeline failed. Please check the logs and inputs.",
+                "Processing completed with errors",
+                f"{total - success_count} 个文件处理失败，请查看日志。",
             )
 
     def _set_running_ui(self, running: bool) -> None:
         self._run_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
-        self._video_selector.setEnabled(not running)
+        self._batch_list.set_editable(not running)
         self._bg_selector.setEnabled(not running and self._style_combo.currentText() == "style1")
         self._style_combo.setEnabled(not running)
         # MAA / Output / Log level 通过 SettingsPage 公开方法统一控制
@@ -605,10 +611,11 @@ class MainWindow(QMainWindow):
             if card is not None:
                 card.set_surface_color(colors.surface)
         # 同步刷新主页 FileSelector 内联样式（输入框 + 浏览按钮）
-        for selector in (getattr(self, "_video_selector", None),
-                         getattr(self, "_bg_selector", None)):
-            if selector is not None:
-                selector.set_colors(colors)
+        if getattr(self, "_bg_selector", None) is not None:
+            self._bg_selector.set_colors(colors)
+        # 同步刷新批量视频列表配色（行/进度条/状态图标按主题切换）
+        if getattr(self, "_batch_list", None) is not None:
+            self._batch_list.set_colors(colors)
         # 同步刷新 Skip steps 容器、标题与复选框配色（修复深色模式下
         # 硬编码白色背景导致的刺眼白块，以及复选框 indicator 颜色不更新）
         self._apply_skip_theme(colors)

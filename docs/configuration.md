@@ -50,6 +50,8 @@ python main.py --init-config compose
 | `track` | string | `"config/track.json"` | 开始按钮识别配置文件路径 |
 | `video_compose_style` | string | `"style1"` | 视频合成风格名称，对应 `config/video_compose/` 目录下的同名 JSON 文件 |
 | `video_compose_config` | string | `"config/video_compose/style1.json"` | 视频合成配置文件路径 |
+| `video_paths` | array of strings | `[]` | 批量视频文件路径列表，GUI 用于持久化用户在 **Video files** 卡片中添加的视频文件及其顺序。CLI 不读取此字段（CLI 通过位置参数接收视频列表）。每个路径在保存时会被转为绝对路径；空字符串会被过滤。示例：`"video_paths": ["C:/Videos/v1.mp4", "C:/Videos/v2.mp4"]` |
+| `video_path` | string | `""` | 单个视频文件路径（旧字段，**已弃用**，保留以向后兼容）。批量场景请使用 `video_paths`；GUI 与 CLI 现均通过 `video_paths` / 位置参数处理视频列表，不再写入此字段 |
 
 ### 配置示例
 
@@ -67,9 +69,13 @@ python main.py --init-config compose
     "actions": "config/actions.json",
     "track": "config/track.json",
     "video_compose_style": "style1",
-    "video_compose_config": "config/video_compose/style1.json"
+    "video_compose_config": "config/video_compose/style1.json",
+    "video_paths": [],
+    "video_path": ""
 }
 ```
+
+> **`video_paths` 与 `video_path` 说明**：`video_paths`（复数）是批量视频处理引入的新字段，GUI 用于持久化 **Video files** 卡片中的文件列表与顺序，下次启动时自动恢复。`video_path`（单数）为旧字段，保留仅为向后兼容，新版本不再写入；批量场景请统一使用 `video_paths`。CLI 不读取这两个字段，而是通过 `video` 位置参数接收视频列表。
 
 ---
 

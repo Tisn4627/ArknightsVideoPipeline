@@ -35,6 +35,7 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "video_compose_config": "config/video_compose/style1.json",
     "skip_steps": [],
     "video_path": "",
+    "video_paths": [],
 }
 
 

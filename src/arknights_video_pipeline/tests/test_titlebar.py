@@ -92,6 +92,20 @@ class TestForceTitlebarRedrawDwmFlush:
     此测试防止这些问题再次出现。
     """
 
+    @pytest.fixture(autouse=True)
+    def _reset_win32_cache(self) -> None:
+        """每个测试前后重置 titlebar 模块级 Win32 API 缓存
+
+        ``_get_win32_apis()`` 将 user32/dwmapi 句柄缓存于模块级变量，
+        若不在测试间重置，后续测试会复用前一个测试的 mock，导致
+        断言失效或 TypeError。
+        """
+        titlebar._user32 = None
+        titlebar._dwmapi = None
+        yield
+        titlebar._user32 = None
+        titlebar._dwmapi = None
+
     def test_cloak_decloak_flush_called_in_correct_order(self) -> None:
         """验证调用顺序：SetWindowPos → RedrawWindow → cloak → decloak → DwmFlush
 
@@ -104,7 +118,7 @@ class TestForceTitlebarRedrawDwmFlush:
         fake_dwmapi = mock.MagicMock()
         fake_user32.SetWindowPos.side_effect = lambda *a, **kw: call_order.append("SetWindowPos")
         fake_user32.RedrawWindow.side_effect = lambda *a, **kw: call_order.append("RedrawWindow")
-        fake_dwmapi.DwmSetWindowAttribute.side_effect = lambda *a, **kw: call_order.append("DwmSetWindowAttribute")
+        fake_dwmapi.DwmSetWindowAttribute.side_effect = lambda *a, **kw: (call_order.append("DwmSetWindowAttribute"), 0)[1]
         fake_dwmapi.DwmFlush.side_effect = lambda *a, **kw: (call_order.append("DwmFlush"), 0)[1]
 
         def fake_windll(name: str) -> mock.MagicMock:
@@ -154,6 +168,7 @@ class TestForceTitlebarRedrawDwmFlush:
         """DwmFlush 返回非零 HRESULT 时不应抛异常"""
         parent = mock.MagicMock()
         parent.dwmapi.DwmFlush.return_value = -1  # 非 S_OK
+        parent.dwmapi.DwmSetWindowAttribute.return_value = 0  # S_OK
 
         def fake_windll(name: str) -> mock.MagicMock:
             if name == "user32":

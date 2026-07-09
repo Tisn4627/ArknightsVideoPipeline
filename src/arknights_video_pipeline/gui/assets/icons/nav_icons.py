@@ -13,31 +13,41 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
 
 
-# 图标资源目录（src/arknights_video_pipeline/gui/assets/icons/nav/）
-_ICON_DIR: Path = Path(__file__).parent / "nav"
+# 图标资源根目录（src/arknights_video_pipeline/gui/assets/icons/）
+_ICON_ROOT: Path = Path(__file__).parent
 
 # 当前 GUI 主要用作 24dp 导航项；@2x (48px) 在主流 HiDPI 上
 # 渲染效果最佳，避免拉伸锯齿。文件名映射:
 #   home / settings / info  -> Material Design Icons Filled Baseline
 #   info 图标采用与 help 同等密度的 24dp @2x 资源，确保 nav rail 三项
 #   图标在同一 24dp 网格下渲染尺寸一致、像素对齐。
+# 值为相对 _ICON_ROOT 的子路径（可分布于 nav/、batch/ 等子目录）。
 _ICON_FILES: dict[str, str] = {
-    "home": "home_24dp_2x.png",
-    "settings": "settings_24dp_2x.png",
-    "info": "info_24dp_2x.png",
+    "home": "nav/home_24dp_2x.png",
+    "settings": "nav/settings_24dp_2x.png",
+    "info": "nav/info_24dp_2x.png",
     # 复选框状态图标（Material Symbols Rounded @ 24dp @2x）
-    "check_box": "check_box_24dp_2x.png",
-    "check_box_outline_blank": "check_box_outline_blank_24dp_2x.png",
-    "indeterminate_check_box": "indeterminate_check_box_24dp_2x.png",
+    "check_box": "nav/check_box_24dp_2x.png",
+    "check_box_outline_blank": "nav/check_box_outline_blank_24dp_2x.png",
+    "indeterminate_check_box": "nav/indeterminate_check_box_24dp_2x.png",
+    # 批量视频列表图标（Material Icons Rounded @ 24dp @2x，源自
+    # material-design-icons-master/png/<category>/<name>/materialiconsround）
+    "arrow_upward": "batch/arrow_upward_24dp_2x.png",
+    "arrow_downward": "batch/arrow_downward_24dp_2x.png",
+    "delete": "batch/delete_24dp_2x.png",
+    "pending": "batch/pending_24dp_2x.png",
+    "check_circle": "batch/check_circle_24dp_2x.png",
+    "error": "batch/error_24dp_2x.png",
 }
 
 
-@functools.lru_cache(maxsize=16)
+@functools.lru_cache(maxsize=32)
 def _load_source(name: str) -> QImage | None:
     """加载原始 ARGB32 资源（带透明通道的黑色形状）。"""
-    if name not in _ICON_FILES:
+    rel = _ICON_FILES.get(name)
+    if rel is None:
         return None
-    path = _ICON_DIR / _ICON_FILES[name]
+    path = _ICON_ROOT / rel
     if not path.is_file():
         return None
     img = QImage(str(path))
@@ -75,10 +85,10 @@ def make_icon_pixmap(name: str, color: QColor | str, size_px: int = 24) -> QPixm
 
 def has_icon(name: str) -> bool:
     """检查图标资源是否存在。"""
-    if name not in _ICON_FILES:
+    rel = _ICON_FILES.get(name)
+    if rel is None:
         return False
-    return (_ICON_DIR / _ICON_FILES[name]).is_file()
-
+    return (_ICON_ROOT / rel).is_file()
 
 def icon_url(name: str) -> str | None:
     """返回 QSS `image: url(...)` 用的资源 URL（带 file:/// 前缀）。
@@ -86,9 +96,10 @@ def icon_url(name: str) -> str | None:
     用于 QCheckBox::indicator 等支持 QSS image 属性的子控件，
     复选框选中/未选中/禁用三态可以直接引用不同图标。
     """
-    if name not in _ICON_FILES:
+    rel = _ICON_FILES.get(name)
+    if rel is None:
         return None
-    path = _ICON_DIR / _ICON_FILES[name]
+    path = _ICON_ROOT / rel
     if not path.is_file():
         return None
     # QUrl.fromLocalFile 处理 Windows 路径（含盘符与反斜杠），

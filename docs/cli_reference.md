@@ -6,11 +6,13 @@
 
 ```bash
 # style1（需要背景板图片）
-python main.py <video> --background-image <image> [选项]
+python main.py <video1> <video2> ... --background-image <image> [选项]
 
 # style2（无需背景板图片）
-python main.py <video> --style style2 [选项]
+python main.py <video1> <video2> ... --style style2 [选项]
 ```
+
+支持一次传入多个视频文件，按给定顺序依次处理（批量模式）。仅传入一个视频时与旧版完全兼容，等价于长度为 1 的批量。
 
 ## 位置参数
 
@@ -18,17 +20,32 @@ python main.py <video> --style style2 [选项]
 
 | 属性 | 值 |
 |------|-----|
-| 类型 | 文件路径 |
-| 必填 | 是（除非使用 `--init-config`） |
-| 默认值 | 无 |
+| 类型 | 文件路径（可多个） |
+| 必填 | 是，至少一个（除非使用 `--init-config`） |
+| 默认值 | `[]`（空列表） |
 | 支持格式 | `.mp4`, `.avi`, `.mkv`, `.mov`, `.flv`, `.wmv` |
 
-输入视频文件路径，支持相对路径和绝对路径。
+输入视频文件路径，支持相对路径和绝对路径。可一次传入多个文件，按给定顺序依次处理（批量模式）。使用 `--init-config` 时无需提供视频。
 
 ```bash
+# 单文件（与旧版完全兼容）
 python main.py video.mp4 -b bg.png
 python main.py C:/Videos/game.mp4 -b bg.png
+
+# 多文件批量处理
+python main.py v1.mp4 v2.mp4 v3.mp4 -b bg.png
 ```
+
+#### 批量处理要点
+
+- 多个视频按命令行中的顺序依次处理；
+- 某个文件失败时跳过该文件，继续处理后续文件，不中断整批；
+- 退出码：仅当全部文件成功时为 `0`，任意文件失败或输入验证失败时为 `1`；
+- 共享选项（`--background-image`、`--maa-path`、`--output-dir`、`--style`、`--log-level`、`--skip-step`）作用于整批视频；
+- 多文件运行时，日志文件写入到基础输出目录（`output/`）；单文件运行时仍写入到该视频的输出子目录（`output/<video_name>/`，保持向后兼容）；
+- `--dry-run` 会一次性验证全部视频后退出。
+
+详见下方 [批量处理](#批量处理) 章节。
 
 ---
 
@@ -274,6 +291,13 @@ python main.py video.mp4 \
     --style style2 \
     --output-dir results \
     --log-level DEBUG
+
+# 批量处理多个视频（共享同一背景板与配置）
+python main.py C:/Videos/v1.mp4 C:/Videos/v2.mp4 C:/Videos/v3.mp4 \
+    --background-image bg.png \
+    --output-dir results \
+    --maa-path C:/MAA \
+    --log-level DEBUG
 ```
 
 ### 仅生成配置
@@ -310,12 +334,52 @@ python main.py video.mp4 -b bg.png --log-level DEBUG --no-log-file
 
 ---
 
+## 批量处理
+
+`video` 位置参数支持传入多个文件，多个视频将按给定顺序依次处理。批量模式适用于一次性处理整批录像、夜间队列等场景。
+
+### 处理规则
+
+- **顺序执行**：按命令行中给出的顺序依次处理，不并行；
+- **错误隔离**：单个文件验证或处理失败时跳过该文件，继续处理后续文件，不会中断整批；
+- **退出码**：仅当全部文件成功时返回 `0`；任意文件失败（或输入验证失败）时返回 `1`；
+- **共享选项**：以下选项作用于整批视频，不为单个文件单独配置：
+  - `--background-image` / `-b`：背景板图片（style1 必填）
+  - `--maa-path`：MAA 项目路径
+  - `--output-dir` / `-o`：输出根目录（每个视频仍会写入到 `<output-dir>/<video_name>/` 子目录）
+  - `--style` / `-s`：视频合成风格
+  - `--log-level`：日志级别
+  - `--skip-step`：跳过的步骤
+- **日志文件**：多文件运行时，日志写入到基础输出目录（`output/pipeline.log`）；单文件运行时仍写入到该视频的输出子目录（`output/<video_name>/pipeline.log`，保持向后兼容）；
+- **`--dry-run`**：一次性验证全部视频文件后退出，不会执行实际处理。
+
+### 示例
+
+```bash
+# 批量处理 3 个视频，共享同一背景板与输出目录
+python main.py v1.mp4 v2.mp4 v3.mp4 -b bg.png --output-dir results
+
+# 批量处理并使用 style2（无需背景板图片）
+python main.py v1.mp4 v2.mp4 --style style2 --output-dir results
+
+# 批量验证输入（不执行实际处理）
+python main.py v1.mp4 v2.mp4 v3.mp4 -b bg.png --dry-run
+
+# 批量处理并跳过部分步骤
+python main.py v1.mp4 v2.mp4 -b bg.png \
+    --skip-step track --skip-step compose --output-dir results
+```
+
+> **提示**：单文件调用 `python main.py video.mp4 -b bg.png` 等价于长度为 1 的批量，行为与旧版完全一致。
+
+---
+
 ## 退出码
 
 | 退出码 | 含义 |
 |--------|------|
-| `0` | 流水线全部步骤执行成功 |
-| `1` | 流水线执行失败（某个步骤出错或输入验证失败） |
+| `0` | 全部视频文件处理成功（批量模式下要求每个文件均成功） |
+| `1` | 流水线执行失败（某个步骤出错、输入验证失败，或批量模式下任意文件失败） |
 
 ---
 
@@ -324,8 +388,8 @@ python main.py video.mp4 -b bg.png --log-level DEBUG --no-log-file
 ### 缺少视频文件
 
 ```
-error: 请提供视频文件路径，或使用 --init-config 生成默认配置
-用法: python main.py <video> --background-image <image>
+error: 请提供至少一个视频文件路径，或使用 --init-config 生成默认配置
+用法: python main.py <video...> --background-image <image>
 ```
 
 ### 缺少背景板图片
@@ -334,7 +398,7 @@ error: 请提供视频文件路径，或使用 --init-config 生成默认配置
 error: 请提供背景板图片文件路径 (--background-image / -b)
 视频合成需要背景板图片，请同时上传视频和背景板图片。
 支持的图片格式: .bmp, .jpeg, .jpg, .png, .webp
-用法: python main.py <video> --background-image <image>
+用法: python main.py <video...> --background-image <image>
 ```
 
 > **提示**：如果使用 style2（`--style style2`），则不需要背景板图片。
