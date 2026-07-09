@@ -5,29 +5,47 @@ service.pipeline_worker - 流水线后台工作线程
 
 注：本模块位于 service 层而非 gui 层，因为它是流水线执行的并发单元，
 本质属于服务层职责。gui 层通过 PipelineService 间接使用。
+
+线程安全：每个 worker 接收独立的 ``ConfigManager`` 快照（由
+``ConfigProxy.build_worker_config`` 在主线程深拷贝生成），不再从子线程
+读写共享的 ConfigProxy。日志 handler 按 thread ident 过滤，确保多 worker
+共享 ``pipeline`` logger 时各自只收到本线程的日志记录，避免重复发射。
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from arknights_video_pipeline.core.config import ConfigManager
 from arknights_video_pipeline.core.logger import setup_logger
 from arknights_video_pipeline.core.pipeline import Pipeline
 from arknights_video_pipeline.core.step_defs import STEPS_BY_KEY
-from arknights_video_pipeline.service.config_proxy import ConfigProxy
 
 
 class QtLogHandler(logging.Handler):
-    """将日志记录转发为 Qt 信号的 Handler"""
+    """将日志记录转发为 Qt 信号的 Handler
 
-    def __init__(self, signal: pyqtSignal) -> None:
+    多 worker 共享同一个 ``pipeline`` logger（``setup_logger`` 按名称缓存），
+    每个 worker 在自己的线程里 attach 一个 QtLogHandler。若不过滤，一条
+    日志会被所有已 attach 的 handler 同时转发，导致 GUI 中重复显示且错误
+    归属到其他 worker。这里用 ``thread_ident`` 限定 handler 只处理产生于
+    同一线程的记录——步骤子 logger（``pipeline.<step>``）的记录经传播回到
+    ``pipeline`` logger 时，``record.thread`` 仍是发起日志的 worker 线程，
+    因此能被正确的 handler 捕获。
+    """
+
+    def __init__(self, signal: pyqtSignal, thread_ident: int) -> None:
         super().__init__()
         self._signal = signal
+        self._thread_ident = thread_ident
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.thread != self._thread_ident:
+            return
         try:
             msg = self.format(record)
             self._signal.emit(record.levelname, msg)
@@ -51,14 +69,14 @@ class PipelineWorker(QThread):
     def __init__(
         self,
         video_path: str,
-        config_proxy: ConfigProxy,
+        config_manager: ConfigManager,
         background_image_path: str | None = None,
         skip_steps: set[str] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._video_path = video_path
-        self._config_proxy = config_proxy
+        self._config_manager = config_manager
         self._background_image_path = background_image_path
         self._skip_steps = skip_steps or set()
         self._cancelled = False
@@ -73,21 +91,22 @@ class PipelineWorker(QThread):
         success = False
         pipeline: Pipeline | None = None
 
-        # 安装日志桥接
+        # 安装日志桥接：捕获本 worker 线程的日志记录。
+        # thread_ident 必须在 run() 内（即 worker 线程已启动后）获取，
+        # QThread.run 运行在 worker 线程上下文中，此时 threading.get_ident()
+        # 返回 worker 线程 id。
+        worker_thread_ident = threading.get_ident()
         logger = setup_logger("pipeline")
-        self._log_handler = QtLogHandler(self.log_emitted)
+        self._log_handler = QtLogHandler(self.log_emitted, worker_thread_ident)
         self._log_handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(self._log_handler)
 
         try:
-            # 合并 GUI 覆盖项
-            self._config_proxy.config_manager.merge_cli_overrides(
-                self._config_proxy.build_overrides()
-            )
-
+            # config_manager 已由 ConfigProxy.build_worker_config 在主线程
+            # 完成深拷贝与 overrides 合并，此处直接使用，避免子线程写共享状态。
             pipeline = Pipeline(
                 video_path=self._video_path,
-                config_mgr=self._config_proxy.config_manager,
+                config_mgr=self._config_manager,
                 logger=logger,
                 background_image_path=self._background_image_path,
                 skip_steps=self._skip_steps,

@@ -392,6 +392,9 @@ class MainWindow(QMainWindow):
         sp.output_dir_changed.connect(self._config.set_output_dir)
         sp.log_level_changed.connect(self._config.set_log_level)
         sp.config_reset.connect(self._on_config_reset)
+        # 性能配置（多线程开关 / 最大并发数）
+        sp.multithreading_changed.connect(self._config.set_multithreading)
+        sp.max_concurrent_changed.connect(self._config.set_max_concurrent)
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
         for key, cb in self._skip_checkboxes.items():
@@ -451,6 +454,9 @@ class MainWindow(QMainWindow):
         sp.set_maa_path(self._config.maa_path())
         sp.set_output_dir(self._config.output_dir())
         sp.set_log_level(self._config.log_level())
+        # 性能配置：从 pipeline.json 恢复多线程开关与最大并发数
+        sp.set_multithreading(self._config.multithreading())
+        sp.set_max_concurrent(self._config.max_concurrent())
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -495,6 +501,9 @@ class MainWindow(QMainWindow):
         sp.set_maa_path(self._config.maa_path())
         sp.set_output_dir(self._config.output_dir())
         sp.set_log_level(self._config.log_level())
+        # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
+        sp.set_multithreading(self._config.multithreading())
+        sp.set_max_concurrent(self._config.max_concurrent())
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
@@ -564,6 +573,8 @@ class MainWindow(QMainWindow):
         self._style_combo.setEnabled(not running)
         # MAA / Output / Log level 通过 SettingsPage 公开方法统一控制
         self._settings_page.set_advanced_enabled(not running)
+        # 性能配置（多线程开关 / 最大并发数）运行期间禁止修改
+        self._settings_page.set_performance_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
 

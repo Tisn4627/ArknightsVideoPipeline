@@ -36,6 +36,10 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "skip_steps": [],
     "video_path": "",
     "video_paths": [],
+    # 多线程批量处理：默认关闭（保持串行，避免 MAA 资源争用）。
+    # 启用后由 max_concurrent 限制同时运行的合成任务数。
+    "multithreading": False,
+    "max_concurrent": 1,
 }
 
 

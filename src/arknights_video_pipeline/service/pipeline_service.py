@@ -1,12 +1,19 @@
 """
-service.pipeline_service - 流水线应用服务（批量原生）
+service.pipeline_service - 流水线应用服务（批量 + 可选并发）
 
-对 GUI 暴露统一的批量流水线运行接口，串行调度多个 ``PipelineWorker``
-（一次仅运行一个，避免 MAA 资源争用），并通过带文件索引的 Qt 信号
-反馈每个文件及整体进度。
+对 GUI 暴露统一的批量流水线运行接口，调度多个 ``PipelineWorker``。
+默认串行（``multithreading=false``，一次仅运行一个，避免 MAA 资源争用）；
+启用多线程后按 ``max_concurrent`` 上限并发派发，超出部分入队等待空位。
 
-单文件视为长度为 1 的批量。单文件失败标记 failed 后自动推进下一文件；
-取消请求在当前文件结束后停止后续文件。
+调度模型：
+- ``_queue`` 保存全部待处理视频路径（按用户顺序）；
+- ``_next_dispatch_index`` 指向下一个尚未派发的文件；
+- ``_workers`` 保存当前正在运行的 worker（按文件索引键）；
+- 所有状态变更（派发、完成、计数）均发生在 GUI 主线程的 Qt 信号槽中，
+  worker 仅通过信号回报，因此无需显式锁。
+
+单文件视为长度为 1 的批量。单个文件失败标记 failed 后不影响其他并行
+任务；取消请求会停止队列后续派发，已在运行的 worker 在当前步骤结束后退出。
 """
 
 from __future__ import annotations
@@ -47,16 +54,22 @@ class PipelineService(QObject):
     def __init__(self, config_proxy: ConfigProxy, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._config = config_proxy
-        self._worker: PipelineWorker | None = None
+        # 并发池：按文件索引保存正在运行的 worker
+        self._workers: dict[int, PipelineWorker] = {}
         # 批次状态
         self._queue: list[str] = []          # 待处理视频路径（按用户顺序）
-        self._current_index: int = -1        # 正在处理的文件索引
+        self._next_dispatch_index: int = 0   # 下一个待派发的文件索引
         self._success_count: int = 0
         self._cancelled: bool = False
         # 每个文件对总体进度的贡献值：等待=0、运行=P、完成=100
         self._contributions: list[int] = []
         # 每个文件当前进度百分比（用于 file_progress，失败时停留）
         self._file_percents: list[int] = []
+        # 并发参数（每次 run_pipeline 时从配置读取）
+        self._max_concurrent: int = 1
+        # 批次活跃标志：用于 _finish_batch 幂等保护，防止 worker.cancel()
+        # 同步触发 finished 信号导致 _finish_batch 被重复调用
+        self._batch_active: bool = False
 
     # ── 输入校验 ──────────────────────────────────────────
 
@@ -119,7 +132,7 @@ class PipelineService(QObject):
     # ── 运行控制 ──────────────────────────────────────────
 
     def is_running(self) -> bool:
-        return self._worker is not None and self._worker.isRunning()
+        return len(self._workers) > 0
 
     def run_pipeline(self, video_paths: list[str]) -> bool:
         """启动批量流水线。
@@ -138,80 +151,106 @@ class PipelineService(QObject):
             self.validation_failed.emit(errors)
             return False
 
+        # 读取并发配置：关闭或上限 <=1 时退化为完全串行（max_concurrent=1）
+        if self._config.multithreading():
+            self._max_concurrent = max(1, self._config.max_concurrent())
+        else:
+            self._max_concurrent = 1
+
         # 初始化批次状态
         self._queue = list(video_paths)
-        self._current_index = -1
+        self._next_dispatch_index = 0
         self._success_count = 0
         self._cancelled = False
         self._contributions = [0] * len(self._queue)
         self._file_percents = [0] * len(self._queue)
+        self._batch_active = True
 
-        self.log_emitted.emit("INFO", f"开始批量处理：共 {len(self._queue)} 个文件")
+        mode = "并发" if self._max_concurrent > 1 else "串行"
+        self.log_emitted.emit(
+            "INFO",
+            f"开始批量处理（{mode}，上限 {self._max_concurrent}）："
+            f"共 {len(self._queue)} 个文件",
+        )
         self._emit_overall()
-        self._start_next()
+        self._dispatch_next()
         return True
 
     def cancel_pipeline(self) -> None:
-        """请求取消：当前文件结束后停止后续文件"""
+        """请求取消：停止队列后续派发，已在运行的 worker 在当前步骤结束后退出"""
         self._cancelled = True
-        if self._worker and self._worker.isRunning():
-            self._worker.cancel()
-        else:
-            # 无运行中的 worker，直接结束批次
+        # 取消所有正在运行的 worker
+        for worker in list(self._workers.values()):
+            if worker.isRunning():
+                worker.cancel()
+        # 若没有任何运行中的 worker（例如取消时队列尚未派发），直接结束批次
+        if not self._workers:
             self._finish_batch()
 
     def wait_for_shutdown(self, timeout_ms: int = 3000) -> None:
-        """等待工作线程退出，避免 QThread 被销毁时仍在运行"""
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(timeout_ms)
+        """等待所有工作线程退出，避免 QThread 被销毁时仍在运行"""
+        for worker in list(self._workers.values()):
+            if worker.isRunning():
+                worker.wait(timeout_ms)
 
     # ── 内部：worker 调度 ─────────────────────────────────
 
-    def _start_next(self) -> None:
-        """启动队列中下一个文件的 worker"""
-        if self._cancelled:
-            self._finish_batch()
-            return
+    def _dispatch_next(self) -> None:
+        """按 max_concurrent 上限派发队列中尚未启动的文件
 
-        self._current_index += 1
-        if self._current_index >= len(self._queue):
-            self._finish_batch()
-            return
+        串行模式下 _max_concurrent=1，行为与原 _start_next 等价：
+        一次仅一个 worker 在运行，待其完成后再派发下一个。
+        """
+        while (
+            not self._cancelled
+            and self._next_dispatch_index < len(self._queue)
+            and len(self._workers) < self._max_concurrent
+        ):
+            idx = self._next_dispatch_index
+            self._next_dispatch_index += 1
 
-        idx = self._current_index
-        video_path = self._queue[idx]
-        self._contributions[idx] = 0
-        self._file_percents[idx] = 0
+            video_path = self._queue[idx]
+            self._contributions[idx] = 0
+            self._file_percents[idx] = 0
 
-        self.file_started.emit(idx, video_path)
-        self.file_progress.emit(idx, 0, "处理中")
+            self.file_started.emit(idx, video_path)
+            self.file_progress.emit(idx, 0, "处理中")
+            self.log_emitted.emit(
+                "INFO",
+                f"[{idx + 1}/{len(self._queue)}] 开始处理: {video_path}",
+            )
+
+            # 为每个 worker 构建独立的 ConfigManager 快照，避免多线程
+            # 并发读写共享 ConfigProxy 产生数据竞争。
+            worker_config = self._config.build_worker_config()
+            worker = PipelineWorker(
+                video_path=video_path,
+                config_manager=worker_config,
+                background_image_path=self._config.background_image(),
+                skip_steps=self._config.skip_steps(),
+                parent=self,
+            )
+            self._workers[idx] = worker
+
+            # 连接 worker 信号到带文件索引的服务信号
+            worker.step_started.connect(
+                lambda step_key, step_desc, i=idx: self._on_step_started(i, step_key, step_desc)
+            )
+            worker.step_finished.connect(
+                lambda step_key, success, elapsed, warnings, i=idx:
+                    self.step_finished.emit(i, step_key, success, elapsed, warnings)
+            )
+            worker.progress_updated.connect(
+                lambda percent, msg, i=idx: self._on_file_progress(i, percent, msg)
+            )
+            worker.log_emitted.connect(self.log_emitted)
+            worker.pipeline_finished.connect(
+                lambda success, report, cancelled, i=idx:
+                    self._on_worker_finished(i, success, report, cancelled)
+            )
+            worker.start()
+
         self._emit_overall()
-        self.log_emitted.emit("INFO", f"[{idx + 1}/{len(self._queue)}] 开始处理: {video_path}")
-
-        self._worker = PipelineWorker(
-            video_path=video_path,
-            config_proxy=self._config,
-            background_image_path=self._config.background_image(),
-            skip_steps=self._config.skip_steps(),
-            parent=self,
-        )
-        # 连接 worker 信号到带文件索引的服务信号
-        self._worker.step_started.connect(
-            lambda step_key, step_desc, i=idx: self._on_step_started(i, step_key, step_desc)
-        )
-        self._worker.step_finished.connect(
-            lambda step_key, success, elapsed, warnings, i=idx:
-                self.step_finished.emit(i, step_key, success, elapsed, warnings)
-        )
-        self._worker.progress_updated.connect(
-            lambda percent, msg, i=idx: self._on_file_progress(i, percent, msg)
-        )
-        self._worker.log_emitted.connect(self.log_emitted)
-        self._worker.pipeline_finished.connect(
-            lambda success, report, cancelled, i=idx:
-                self._on_worker_finished(i, success, report, cancelled)
-        )
-        self._worker.start()
 
     def _on_step_started(self, idx: int, step_key: str, step_desc: str) -> None:
         self.step_started.emit(idx, step_key, step_desc)
@@ -239,19 +278,27 @@ class PipelineService(QObject):
             f"[{idx + 1}/{len(self._queue)}] "
             f"{'处理完成' if success else '处理失败'}: {self._queue[idx]}",
         )
-        self._emit_overall()
 
-        # 清理当前 worker
-        if self._worker is not None:
-            self._worker.deleteLater()
-            self._worker = None
+        # 清理该 worker
+        worker = self._workers.pop(idx, None)
+        if worker is not None:
+            worker.deleteLater()
 
-        # 取消或已到队尾 → 结束批次；否则启动下一个
+        # 取消请求：不再派发新任务，等待所有在途 worker 结束后收尾
         if cancelled or self._cancelled:
             self._cancelled = True
-            self._finish_batch()
+            if not self._workers:
+                self._finish_batch()
+            else:
+                self._emit_overall()
             return
-        self._start_next()
+
+        # 继续派发队列中剩余文件（填补空出的并发槽位）
+        self._dispatch_next()
+
+        # 队列耗尽且无在途 worker → 结束批次
+        if self._next_dispatch_index >= len(self._queue) and not self._workers:
+            self._finish_batch()
 
     def _emit_overall(self) -> None:
         """计算并发射总体进度"""
@@ -260,15 +307,27 @@ class PipelineService(QObject):
             return
         total = sum(self._contributions)
         percent = total // n
-        # 当前处理中的文件序号（1-based）
+        # 已完成的文件数
         done = sum(1 for c in self._contributions if c >= 100)
-        processing = 0 if self._current_index >= n or self._contributions[self._current_index] >= 100 else 1
-        current = done + processing
+        # 当前在途（已派发但未完成）的文件数 = 活跃 worker 数
+        active = len(self._workers)
+        current = done + active
         message = f"Processing {current}/{n}"
         self.overall_progress.emit(percent, message)
 
     def _finish_batch(self) -> None:
-        """批次结束：发射 batch_finished"""
+        """批次结束：发射 batch_finished
+
+        幂等保护：worker.cancel() 若同步触发 pipeline_finished，会导致
+        _on_worker_finished 在 cancel_pipeline 调用栈内先行收尾，随后
+        cancel_pipeline 末尾的 ``if not self._workers`` 又会再次调用本方法。
+        通过 _batch_active 标志确保仅第一次调用生效，避免 batch_finished
+        被重复发射且用已清空的 _queue 计算出错误的 total。
+        """
+        if not self._batch_active:
+            return
+        self._batch_active = False
+
         total = len(self._queue)
         self.log_emitted.emit(
             "INFO",
@@ -279,7 +338,9 @@ class PipelineService(QObject):
         self.batch_finished.emit(self._success_count, total, self._cancelled)
         # 重置批次状态（保留 config 不变）
         self._queue = []
-        self._current_index = -1
+        self._next_dispatch_index = 0
+        self._workers = {}
         self._contributions = []
         self._file_percents = []
         self._cancelled = False
+        self._max_concurrent = 1

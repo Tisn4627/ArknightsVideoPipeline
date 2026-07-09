@@ -22,7 +22,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QLabel,
-    QComboBox, QSizePolicy,
+    QComboBox, QSpinBox, QSizePolicy,
 )
 
 from arknights_video_pipeline.core.pipeline import _init_config
@@ -51,6 +51,9 @@ class SettingsPage(QWidget):
     maa_path_changed = pyqtSignal(str)
     output_dir_changed = pyqtSignal(str)
     log_level_changed = pyqtSignal(str)
+    # 性能配置变更信号（多线程开关 + 最大并发数）
+    multithreading_changed = pyqtSignal(bool)
+    max_concurrent_changed = pyqtSignal(int)
 
     # (module_key, 标题, 说明, 文件名)
     CONFIG_TYPES: list[tuple[str, str, str, str]] = [
@@ -100,11 +103,12 @@ class SettingsPage(QWidget):
         root.addWidget(self._build_hero())
 
         # 卡片网格：参考 Home 选项卡，使用 QGridLayout 排列独立圆角卡片
-        # 现包含三张卡片：外观、配置文件、高级（运行时配置）。
-        # 始终单列竖直堆叠——三张卡片宽度一致，避免出现 2x2 错位或被压缩。
+        # 现包含四张卡片：外观、配置文件、高级（运行时配置）、性能（多线程）。
+        # 始终单列竖直堆叠——四张卡片宽度一致，避免出现 2x2 错位或被压缩。
         self._appearance_card = self._build_theme_card()
         self._config_card = self._build_config_card()
         self._advanced_card = self._build_advanced_card()
+        self._performance_card = self._build_performance_card()
         self._cards_grid = QGridLayout()
         self._cards_grid.setSpacing(24)
         self._cards_grid.setColumnStretch(0, 1)
@@ -116,6 +120,7 @@ class SettingsPage(QWidget):
         self._cards_grid.addWidget(self._appearance_card, 0, 0)
         self._cards_grid.addWidget(self._config_card, 1, 0)
         self._cards_grid.addWidget(self._advanced_card, 2, 0)
+        self._cards_grid.addWidget(self._performance_card, 3, 0)
 
     def _build_hero(self) -> QWidget:
         """Hero 区域：大标题 + 描述（与 Home 一致；不放置按钮，遵循
@@ -314,13 +319,79 @@ class SettingsPage(QWidget):
         card.add_layout(layout)
         return card
 
+    def _build_performance_card(self) -> MaterialCard:
+        """性能配置卡片：多线程开关 + 最大并发数
+
+        多线程开关启用后，批量处理将按 ``max_concurrent`` 上限并发派发
+        PipelineWorker；关闭时保持完全串行（默认，避免 MAA 资源争用）。
+        这两个控件由 SettingsPage 创建并通过公开信号/方法暴露，MainWindow
+        连接到 ConfigProxy 写回，不在 Home 页持有，避免双源状态不同步。
+        """
+        card = MaterialCard("性能")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # 多线程开关行：左侧标题+说明，右侧 MaterialSwitch
+        mt_row = QHBoxLayout()
+        mt_row.setSpacing(16)
+        mt_row.setContentsMargins(0, 4, 0, 4)
+        mt_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._mt_label = QLabel("多线程批量处理")
+        self._mt_label.setFont(self._typo.title_medium)
+        self._mt_label.setStyleSheet("border: none; background: transparent;")
+        text_box.addWidget(self._mt_label)
+
+        self._mt_desc = QLabel(
+            "启用后并行处理多个视频，提高整体效率。"
+            "关闭时保持串行（默认，避免 MAA 资源争用）。"
+        )
+        self._mt_desc.setFont(self._typo.body_medium)
+        self._mt_desc.setWordWrap(True)
+        self._dim_labels.append(self._mt_desc)
+        text_box.addWidget(self._mt_desc)
+        mt_row.addLayout(text_box, 1)
+
+        self._mt_switch = MaterialSwitch(checked=False, colors=self._colors)
+        self._mt_switch.toggled.connect(self._on_multithreading_toggled)
+        mt_row.addWidget(self._mt_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(mt_row)
+
+        # 最大并发数行：标签 + QSpinBox，与 Log level 行节奏一致
+        # 仅在多线程启用时可编辑；关闭时置灰，避免用户误以为串行模式下
+        # 该值会影响行为。
+        conc_row = QHBoxLayout()
+        conc_row.setSpacing(8)
+        conc_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._conc_label = QLabel("最大并发数")
+        self._conc_label.setStyleSheet(
+            "border: none; background: transparent;"
+            " font-weight: 500; font-size: 13px;"
+        )
+        conc_row.addWidget(self._conc_label)
+        self._conc_spin = QSpinBox()
+        self._conc_spin.setRange(1, 16)
+        self._conc_spin.setValue(1)
+        self._conc_spin.setSingleStep(1)
+        self._conc_spin.setEnabled(False)
+        self._conc_spin.valueChanged.connect(self._on_max_concurrent_changed)
+        conc_row.addWidget(self._conc_spin, 1)
+        layout.addLayout(conc_row)
+
+        card.add_layout(layout)
+        return card
+
     def _apply_grid_layout(self, two_column: bool = False) -> None:
-        """卡片网格布局：始终保持单列竖直堆叠（外观/配置/高级），
+        """卡片网格布局：始终保持单列竖直堆叠（外观/配置/高级/性能），
         保留 two_column 参数签名以兼容历史调用点（忽略其值）。
 
-        单列布局避免 2x2 错位，并让三张卡片保持等宽，与 Hero 标题对齐。
+        单列布局避免 2x2 错位，并让四张卡片保持等宽，与 Hero 标题对齐。
         """
-        # 参数兼容：历史断点会传 True，但视觉上 3 张卡片单列更协调，故忽略
+        # 参数兼容：历史断点会传 True，但视觉上卡片单列更协调，故忽略
         for i in reversed(range(self._cards_grid.count())):
             item = self._cards_grid.itemAt(i)
             if item and item.widget():
@@ -328,9 +399,10 @@ class SettingsPage(QWidget):
 
         self._cards_grid.setColumnStretch(0, 1)
         self._cards_grid.setColumnStretch(1, 0)
-        # 三个卡片单列竖直堆叠；任一卡片为 None 时跳过
+        # 四个卡片单列竖直堆叠；任一卡片为 None 时跳过
         for row, card in enumerate(
-            (self._appearance_card, self._config_card, self._advanced_card)
+            (self._appearance_card, self._config_card,
+             self._advanced_card, self._performance_card)
         ):
             if card is not None:
                 self._cards_grid.addWidget(card, row, 0)
@@ -377,6 +449,14 @@ class SettingsPage(QWidget):
     def _on_theme_toggled(self, dark: bool) -> None:
         self._is_dark = dark
         self.theme_change_requested.emit(dark)
+
+    def _on_multithreading_toggled(self, enabled: bool) -> None:
+        # 开关切换时同步并发数输入框的可用态：关闭时置灰
+        self._conc_spin.setEnabled(enabled)
+        self.multithreading_changed.emit(enabled)
+
+    def _on_max_concurrent_changed(self, value: int) -> None:
+        self.max_concurrent_changed.emit(value)
 
     def _on_select_all(self) -> None:
         for cb in self._config_checkboxes.values():
@@ -436,6 +516,7 @@ class SettingsPage(QWidget):
         """主题切换时刷新页面所有颜色相关样式"""
         self._colors = colors
         self._theme_switch.set_colors(colors)
+        self._mt_switch.set_colors(colors)
         self._apply_colors()
         # 状态文本颜色随主题刷新
         if self._config_status.text():
@@ -490,6 +571,38 @@ class SettingsPage(QWidget):
         self._output_selector.setEnabled(enabled)
         self._log_level_combo.setEnabled(enabled)
 
+    # ── 性能配置控件公开访问 ────────────────────────────────
+
+    def set_multithreading(self, enabled: bool) -> None:
+        """设置多线程开关状态（阻塞信号，避免触发 multithreading_changed 回写）
+
+        同步联动并发数输入框的可用态，与 _on_multithreading_toggled 行为一致。
+        """
+        self._mt_switch.blockSignals(True)
+        try:
+            self._mt_switch.set_checked(bool(enabled))
+        finally:
+            self._mt_switch.blockSignals(False)
+        # set_checked 不触发 toggled，需手动同步输入框可用态
+        self._conc_spin.setEnabled(bool(enabled))
+
+    def set_max_concurrent(self, value: int) -> None:
+        """设置最大并发数（阻塞信号，避免触发 max_concurrent_changed 回写）"""
+        self._conc_spin.blockSignals(True)
+        try:
+            self._conc_spin.setValue(int(value))
+        finally:
+            self._conc_spin.blockSignals(False)
+
+    def set_performance_enabled(self, enabled: bool) -> None:
+        """启用/禁用性能配置控件（多线程开关/最大并发数）
+
+        流水线运行期间调用以禁止修改并发参数（运行中改变不会影响已派发的批次）。
+        """
+        self._mt_switch.setEnabled(enabled)
+        # 并发数输入框需同时受多线程开关状态约束：仅当开关启用且非运行态时可编辑
+        self._conc_spin.setEnabled(enabled and self._mt_switch.is_checked())
+
     def _apply_colors(self) -> None:
         # 注意：不要在此调用 self.setStyleSheet()，否则会覆盖整棵 widget tree
         # 的全局 QSS，导致 MaterialCard（白底圆角）与 MaterialButton 失去样式。
@@ -531,9 +644,19 @@ class SettingsPage(QWidget):
                          getattr(self, "_output_selector", None)):
             if selector is not None:
                 selector.set_colors(self._colors)
+        # 性能卡片内"最大并发数"标签：与 Log level 标签同色
+        if getattr(self, "_conc_label", None) is not None:
+            self._conc_label.setStyleSheet(
+                f"color: {dim}; border: none; background: transparent;"
+                f" font-weight: 500; font-size: 13px;"
+            )
+        # 性能卡片内 QSpinBox：与 Log level 下拉框保持一致视觉规格
+        if getattr(self, "_conc_spin", None) is not None:
+            self._conc_spin.setStyleSheet(self._conc_spin_qss())
         # 同步刷新卡片背景色：MaterialCard 使用 paintEvent 自绘圆角背景，
         # 此处需调用 set_surface_color 更新颜色，确保暗色模式正确
-        for card in (self._appearance_card, self._config_card, self._advanced_card):
+        for card in (self._appearance_card, self._config_card,
+                     self._advanced_card, self._performance_card):
             if card is not None:
                 card.set_surface_color(self._colors.surface)
         # 同步刷新按钮配色，使其在主题切换后保持视觉一致
@@ -619,6 +742,42 @@ class SettingsPage(QWidget):
         行为一致：``valid=False`` 时显示 2px error 边框）。"""
         self._log_level_combo.setStyleSheet(
             self._log_level_combo_qss(error=not valid)
+        )
+
+    def _conc_spin_qss(self) -> str:
+        """最大并发数 QSpinBox 内联样式：与 Log level 下拉框保持一致的
+        视觉规格（surface_variant 底色、outline_variant 边框、12px 圆角、
+        聚焦 2px primary 边框）。
+
+        右侧原生上下箭头按钮已隐藏（width: 0），改由纯文本输入方式设置
+        数值；用户仍可通过键盘输入或滚轮调整，保持界面简洁。"""
+        c = self._colors
+        return (
+            "QSpinBox {"
+            f"  background-color: {c.surface_variant};"
+            f"  color: {c.on_surface};"
+            f"  border: 1px solid {c.outline_variant};"
+            f"  border-radius: 12px;"
+            f"  padding: 8px 12px;"
+            f"  min-height: 20px;"
+            "}"
+            "QSpinBox:focus {"
+            f"  border: 2px solid {c.primary};"
+            "}"
+            "QSpinBox:disabled {"
+            f"  background-color: {c.surface_variant};"
+            f"  color: {c.on_surface_variant};"
+            "}"
+            # 隐藏右侧上下箭头按钮
+            "QSpinBox::up-button, QSpinBox::down-button {"
+            "  width: 0px;"
+            "  border: none;"
+            "}"
+            "QSpinBox::up-arrow, QSpinBox::down-arrow {"
+            "  width: 0px;"
+            "  height: 0px;"
+            "  border: none;"
+            "}"
         )
 
     # ── 响应式 ────────────────────────────────────────────
