@@ -215,3 +215,196 @@ class TestApplyTitlebarThemeQt:
             MockQApp.instance.return_value = None
             result = titlebar._apply_titlebar_theme_qt(True)
         assert result is False
+
+
+# ── _apply_titlebar_theme_windows ─────────────────────────
+
+
+class TestApplyTitlebarThemeWindows:
+    """直接测试 Windows DWM 标题栏主题实现
+
+    覆盖 attr id 选择（build 18985 分界）、dark=True/False 值传递、
+    hwnd=0 / 非 S_OK / 异常等错误路径。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_win32_cache(self) -> None:
+        titlebar._user32 = None
+        titlebar._dwmapi = None
+        yield
+        titlebar._user32 = None
+        titlebar._dwmapi = None
+
+    def _setup_win32_mocks(self) -> tuple[mock.MagicMock, mock.MagicMock]:
+        fake_user32 = mock.MagicMock()
+        fake_dwmapi = mock.MagicMock()
+        fake_dwmapi.DwmSetWindowAttribute.return_value = 0  # S_OK
+        fake_dwmapi.DwmFlush.return_value = 0
+
+        def fake_windll(name: str) -> mock.MagicMock:
+            if name == "user32":
+                return fake_user32
+            if name == "dwmapi":
+                return fake_dwmapi
+            return mock.MagicMock()
+
+        self._patch_windll = mock.patch.object(ctypes, "WinDLL", side_effect=fake_windll)
+        self._patch_windll.start()
+        self._fake_user32 = fake_user32
+        self._fake_dwmapi = fake_dwmapi
+        return fake_user32, fake_dwmapi
+
+    def _teardown_win32_mocks(self) -> None:
+        self._patch_windll.stop()
+
+    @staticmethod
+    def _capture_attr_values(fake_dwmapi: mock.MagicMock) -> list[int]:
+        """从 DwmSetWindowAttribute mock 中提取传入的 value（第 3 参数指向的 int）"""
+        import ctypes as ct
+        values: list[int] = []
+
+        def capture(hwnd, attr, value_ptr, cb):
+            values.append(ct.cast(value_ptr, ct.POINTER(ct.c_int))[0])
+            return 0
+
+        fake_dwmapi.DwmSetWindowAttribute.side_effect = capture
+        return values
+
+    def test_dark_true_sets_immersive_dark_mode(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw"):
+                values = self._capture_attr_values(self._fake_dwmapi)
+                result = titlebar._apply_titlebar_theme_windows(window, True)
+            assert result is True
+            assert values == [1], f"dark=True 应传 value=1, 实际: {values}"
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_dark_false_sets_value_zero(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw"):
+                values = self._capture_attr_values(self._fake_dwmapi)
+                result = titlebar._apply_titlebar_theme_windows(window, False)
+            assert result is True
+            assert values == [0], f"dark=False 应传 value=0, 实际: {values}"
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_new_build_uses_attr_20(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            gwv = mock.Mock(build=18985)
+            attrs: list[int] = []
+
+            def capture_attr(hwnd, attr, value_ptr, cb):
+                attrs.append(attr)
+                return 0
+
+            self._fake_dwmapi.DwmSetWindowAttribute.side_effect = capture_attr
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw"):
+                titlebar._apply_titlebar_theme_windows(window, True)
+            assert titlebar._DWMWA_USE_IMMERSIVE_DARK_MODE_NEW in attrs
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_old_build_uses_attr_19(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            gwv = mock.Mock(build=17763)
+            attrs: list[int] = []
+
+            def capture_attr(hwnd, attr, value_ptr, cb):
+                attrs.append(attr)
+                return 0
+
+            self._fake_dwmapi.DwmSetWindowAttribute.side_effect = capture_attr
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw"):
+                titlebar._apply_titlebar_theme_windows(window, True)
+            assert titlebar._DWMWA_USE_IMMERSIVE_DARK_MODE_OLD in attrs
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_hwnd_zero_returns_false(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 0
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True):
+                result = titlebar._apply_titlebar_theme_windows(window, True)
+            assert result is False
+            self._fake_dwmapi.DwmSetWindowAttribute.assert_not_called()
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_nonzero_hresult_returns_false(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            self._fake_dwmapi.DwmSetWindowAttribute.return_value = -1
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw") as m_redraw:
+                result = titlebar._apply_titlebar_theme_windows(window, True)
+            assert result is False
+            m_redraw.assert_not_called()
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_calls_force_titlebar_redraw_on_success(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.return_value = 12345
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True), \
+                 mock.patch.object(titlebar, "_force_titlebar_redraw") as m_redraw:
+                titlebar._apply_titlebar_theme_windows(window, True)
+            m_redraw.assert_called_once_with(12345)
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_exception_returns_false(self) -> None:
+        self._setup_win32_mocks()
+        try:
+            window = mock.Mock()
+            window.winId.side_effect = RuntimeError("winId failed")
+            gwv = mock.Mock(build=19044)
+            with mock.patch.object(sys, "platform", "win32"), \
+                 mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True):
+                result = titlebar._apply_titlebar_theme_windows(window, True)
+            assert result is False
+        finally:
+            self._teardown_win32_mocks()
+
+    def test_unsupported_build_returns_false(self) -> None:
+        window = mock.Mock()
+        gwv = mock.Mock(build=17000)
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.object(sys, "getwindowsversion", return_value=gwv, create=True):
+            result = titlebar._apply_titlebar_theme_windows(window, True)
+        assert result is False

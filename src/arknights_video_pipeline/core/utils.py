@@ -13,9 +13,20 @@ import shutil
 import subprocess
 import sys
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
-from arknights_video_pipeline.core.exceptions import ImageValidationError, VideoValidationError
+from arknights_video_pipeline.core.exceptions import (
+    ConfigError,
+    ImageValidationError,
+    VideoValidationError,
+)
+
+try:
+    from PIL import Image as _PIL_Image
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_Image = None
+    _PIL_AVAILABLE = False
 
 
 # ── 模块级 logger ──────────────────────────────────────────
@@ -45,8 +56,8 @@ def ensure_ffmpeg_in_path() -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
             user_path = winreg.QueryValueEx(key, "Path")[0]
         os.environ["PATH"] = sys_path + ";" + user_path + ";" + machine_path
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug(f"从注册表重建 PATH 失败: {exc}")
 
 
 # ── 项目根目录 ────────────────────────────────────────────
@@ -110,7 +121,7 @@ def resolve_project_path(path: str) -> str:
 
 def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """递归深度合并字典，override 中的值覆盖 base"""
-    result = base.copy()
+    result = deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge_dict(result[key], value)
@@ -140,8 +151,11 @@ def load_config(
         深度合并在新对象上进行。
     """
     if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            user_config = json.load(f)
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                user_config = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"配置文件解析失败: {config_path} - {exc}") from exc
         config = deepcopy(default_config)
         # 先深度合并指定键，再浅合并剩余键（不修改 user_config）
         deep_merged_keys: set[str] = set()
@@ -196,6 +210,7 @@ def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
     Raises:
         VideoValidationError: ffprobe 不可用、超时、返回非零、输出无法解析
     """
+    ensure_ffmpeg_in_path()
     try:
         result = subprocess.run(
             [
@@ -334,13 +349,7 @@ def validate_image_file(image_path: str) -> dict[str, Any]:
             f"支持的格式: {supported}"
         )
 
-    try:
-        from PIL import Image
-
-        with Image.open(image_path) as img:
-            width, height = img.size
-            img.verify()
-    except ImportError:
+    if not _PIL_AVAILABLE:
         # PIL 不可用时仅做文件大小检查
         file_size = os.path.getsize(image_path)
         return {
@@ -349,6 +358,11 @@ def validate_image_file(image_path: str) -> dict[str, Any]:
             "file_path": image_path,
             "file_size": file_size,
         }
+
+    try:
+        with _PIL_Image.open(image_path) as img:
+            width, height = img.size
+            img.verify()
     except Exception as exc:
         raise ImageValidationError(
             f"背景板图片文件损坏或无法解析: {image_path} ({exc})"
@@ -466,7 +480,7 @@ def resolve_font_path(font_value: str, font_dir: str) -> str:
 def _load_text_from_json(
     input_json_path: str,
     config_path: str,
-    convert_fn,
+    convert_fn: Callable[[Any, dict[str, Any]], str],
 ) -> str:
     """从 input.json 与配置文件加载并转换文本的公共实现
 

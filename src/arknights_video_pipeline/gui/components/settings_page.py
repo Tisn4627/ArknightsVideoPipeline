@@ -427,9 +427,13 @@ class SettingsPage(QWidget):
             (self._action_buttons_layout,
              (self._generate_btn, self._config_status)),
         ):
-            # 解除现有方向
-            for w in widgets:
-                layout.removeWidget(w)
+            # 清空布局中所有 item（含 widget 和 spacer/stretch），
+            # 避免多次切换后 stretch 累积导致布局异常
+            while layout.count():
+                item = layout.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.setParent(None)
             if vertical:
                 layout.setDirection(QBoxLayout.Direction.TopToBottom)
                 for w in widgets:

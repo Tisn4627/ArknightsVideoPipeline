@@ -101,8 +101,10 @@ class ConfigProxy(QObject):
         config_path = self._config_mgr.resolve_video_compose_config(style)
         if not os.path.exists(config_path):
             raise ValueError(f"风格配置文件不存在: {config_path}")
-        self.set("video_compose_style", style)
-        self.set("video_compose_config", f"config/video_compose/{style}.json")
+        # 直接修改内部配置，避免两次 set() 发射两次 config_changed 信号
+        self._config_mgr.pipeline["video_compose_style"] = style
+        self._config_mgr.pipeline["video_compose_config"] = f"config/video_compose/{style}.json"
+        self.config_changed.emit("video_compose_style", style)
 
     def log_level(self) -> str:
         return self.get("log_level", "INFO")
@@ -142,13 +144,13 @@ class ConfigProxy(QObject):
             n = int(value)
         except (TypeError, ValueError):
             return 1
-        return max(1, min(n, self.MAX_CONCURRENT_LIMIT))
+        return max(1, min(n, ConfigProxy.MAX_CONCURRENT_LIMIT))
 
     def set_max_concurrent(self, n: int) -> None:
         if n < 1:
             n = 1
-        elif n > self.MAX_CONCURRENT_LIMIT:
-            n = self.MAX_CONCURRENT_LIMIT
+        elif n > ConfigProxy.MAX_CONCURRENT_LIMIT:
+            n = ConfigProxy.MAX_CONCURRENT_LIMIT
         self.set("max_concurrent", int(n))
 
     # ── 构建运行参数 ──────────────────────────────────────
@@ -168,11 +170,10 @@ class ConfigProxy(QObject):
 
         多线程场景下多个 PipelineWorker 并行运行，若共享同一个
         ConfigManager 实例，其 ``pipeline`` 字典的读写将产生数据竞争。
-        本方法在调用方（GUI 主线程）执行一次深拷贝 + overrides 合并，
+        本方法在调用方（GUI 主线程）执行一次深拷贝，
         返回完全独立的 ConfigManager，worker 线程对其的任何访问都不会
         影响其他 worker 或共享的 ConfigProxy 状态。
         """
         snapshot = ConfigManager(self._project_dir)
         snapshot.pipeline = deepcopy(self._config_mgr.pipeline)
-        snapshot.merge_cli_overrides(self.build_overrides())
         return snapshot

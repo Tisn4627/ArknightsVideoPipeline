@@ -57,7 +57,7 @@ def _get_win32_apis():
     后续调用直接返回缓存值，避免每次主题切换都重复配置。
     """
     global _user32, _dwmapi
-    if _user32 is not None:
+    if _user32 is not None and _dwmapi is not None:
         return _user32, _dwmapi
 
     import ctypes
@@ -136,6 +136,8 @@ def _force_titlebar_redraw(hwnd: int) -> None:
         logger.debug("RedrawWindow[FRAME|INVALIDATE|UPDATENOW] 失败 (hwnd=%s)", hwnd)
 
     # 步骤 2：DWM 侧合成表面重建（cloak → decloak → 单次 flush）
+    # cloak 使窗口不可见，decloak 恢复可见。若 decloak 失败窗口将永久不可见，
+    # 因此重试多次并提升日志级别为 warning 以便发现。
     cloak_val = ctypes.c_int(1)
     result = dwmapi.DwmSetWindowAttribute(
         hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
@@ -143,11 +145,16 @@ def _force_titlebar_redraw(hwnd: int) -> None:
     if result != 0:
         logger.debug("DwmSetWindowAttribute[cloak] 失败: 0x%08X", result & 0xFFFFFFFF)
     cloak_val = ctypes.c_int(0)
-    result = dwmapi.DwmSetWindowAttribute(
-        hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
-    )
-    if result != 0:
-        logger.debug("DwmSetWindowAttribute[decloak] 失败: 0x%08X", result & 0xFFFFFFFF)
+    for attempt in range(3):
+        result = dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_CLOAK, ctypes.byref(cloak_val), ctypes.sizeof(cloak_val)
+        )
+        if result == 0:
+            break
+        logger.warning(
+            "DwmSetWindowAttribute[decloak] 失败 (attempt %d): 0x%08X",
+            attempt + 1, result & 0xFFFFFFFF,
+        )
     result = dwmapi.DwmFlush()
     if result != 0:
         logger.debug("DwmFlush 失败: 0x%08X", result & 0xFFFFFFFF)

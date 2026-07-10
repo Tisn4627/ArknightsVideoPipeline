@@ -353,8 +353,9 @@ def compose_video(config):
         duration=video.duration
     )
     writer.add_clips(clips)
-    run_writer(writer, video_quality, video)
+    run_writer(writer, video_quality, *clips)
     logger.info("视频合成完成!")
+    return output_path
 
 
 def main():

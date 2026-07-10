@@ -262,6 +262,9 @@ def compose_video(config):
     # 文本叠加
     text_config = config.get("text_overlay", {})
     if text_config.get("enabled", True):
+        # 浅拷贝避免字幕自适应修改 font_size/font_scale 时污染传入的 config 字典
+        # （批量处理多个视频时，第二个视频会复用第一个视频修改后的 font_size）
+        text_config = dict(text_config)
         logger.info("--- 动态文本叠加 ---")
 
         inputs = load_text_overlay_inputs(text_config, video_basename)
@@ -326,6 +329,8 @@ def compose_video(config):
             )
 
             # 覆盖 font_size 配置，font_scale 保持为 1
+            # 浅拷贝避免污染传入的 config 字典（批量处理时影响后续视频）
+            text_config = dict(text_config)
             text_config["font_size"] = auto_font_size
             text_config["font_scale"] = 1
 
@@ -375,8 +380,11 @@ def compose_video(config):
         duration=video.duration
     )
     writer.add_clips(clips)
-    run_writer(writer, video_quality, background, video)
+    # 将所有 clip（含 TextClip：formation_clip / actions_clip）传递给 run_writer，
+    # 确保异常时所有 clip 资源（不仅限于 background 和 video）均被释放
+    run_writer(writer, video_quality, *clips)
     logger.info("视频合成完成!")
+    return output_path
 
 
 def main():

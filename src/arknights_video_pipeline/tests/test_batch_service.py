@@ -43,6 +43,8 @@ def _make_config_proxy(style: str = "style2", bg: str = "", maa: str = "") -> mo
     proxy.background_image.return_value = bg
     proxy.maa_path.return_value = maa
     proxy.skip_steps.return_value = set()
+    proxy.multithreading.return_value = False
+    proxy.max_concurrent.return_value = 1
     return proxy
 
 

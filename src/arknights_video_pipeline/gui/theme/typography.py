@@ -92,9 +92,13 @@ class MaterialTypography:
 
     @property
     def mono(self) -> QFont:
-        font = QFont("Roboto Mono, Consolas, SF Mono, Sarasa Mono SC, monospace")
+        font = QFont()
+        font.setFamilies(["Roboto Mono", "Consolas", "SF Mono", "Sarasa Mono SC", "monospace"])
         font.setPointSize(12)
         return font
 
     def font_for(self, role: str) -> QFont:
-        return getattr(self, role, self.body_medium)
+        value = getattr(self, role, None)
+        if not isinstance(value, QFont):
+            raise AttributeError(f"未知字体角色: {role}")
+        return value

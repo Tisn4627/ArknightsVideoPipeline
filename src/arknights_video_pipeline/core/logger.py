@@ -41,12 +41,32 @@ def setup_logger(
 
     # 避免重复添加 handler，但仍更新日志级别以反映最新配置
     if logger.handlers:
-        for handler in logger.handlers:
-            # 仅更新控制台 handler 的级别，文件 handler 保持 DEBUG 以记录全量日志
-            if isinstance(handler, logging.StreamHandler) and not isinstance(
-                handler, RotatingFileHandler
-            ):
+        has_file_handler = False
+        for handler in list(logger.handlers):
+            if isinstance(handler, RotatingFileHandler):
+                has_file_handler = True
+                if not (log_to_file and log_dir):
+                    logger.removeHandler(handler)
+                    handler.close()
+            elif isinstance(handler, logging.StreamHandler):
                 handler.setLevel(log_level)
+        if log_to_file and log_dir and not has_file_handler:
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "pipeline.log")
+            file_handler = RotatingFileHandler(
+                log_path,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
+            )
+            logger.addHandler(file_handler)
         return logger
 
     # ── 控制台 handler ──────────────────────────────────

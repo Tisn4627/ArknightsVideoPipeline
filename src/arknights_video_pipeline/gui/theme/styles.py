@@ -350,7 +350,7 @@ class MaterialStyle:
             color: {c.on_surface_variant};
         }}
         """
-        MaterialStyle._qss_cache[self.colors] = qss
+        MaterialStyle._qss_cache[cache_key] = qss
         return qss
 
     def apply(self, app: QApplication) -> None:

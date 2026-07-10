@@ -46,7 +46,6 @@ from arknights_video_pipeline.core.utils import (
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
     ensure_dir,
-    ensure_ffmpeg_in_path,
     format_duration,
     format_file_size,
     load_config,
@@ -57,9 +56,6 @@ from arknights_video_pipeline.core.utils import (
     write_json_file,
     write_text_file,
 )
-
-# ── PATH 修复（确保 ffmpeg/ffprobe 可用）──────────────────
-ensure_ffmpeg_in_path()
 
 
 # ══════════════════════════════════════════════════════════
@@ -176,6 +172,10 @@ class Pipeline:
 
             # 带重试机制的MAA识别
             max_retries = self.config.get_maa_max_retries()
+            if max_retries < 1:
+                raise MAARecognitionError(
+                    f"maa_max_retries 必须大于 0，当前值: {max_retries}"
+                )
             timeout = self.config.get_maa_timeout()
 
             for attempt in range(1, max_retries + 1):
@@ -187,7 +187,7 @@ class Pipeline:
                     json_path = video_to_copilot(self.video_path, sub_config, timeout=timeout)
                     self.copilot_json_path = json_path
                     break
-                except Exception as exc:
+                except (RuntimeError, TimeoutError, OSError) as exc:
                     if attempt < max_retries:
                         self.logger.warning(
                             f"MAA识别第{attempt}次尝试失败: {exc}，正在重试..."
@@ -212,8 +212,8 @@ class Pipeline:
             ) from exc
         finally:
             result.elapsed = round(time.time() - start, 2)
+            self.report.steps.append(result)
 
-        self.report.steps.append(result)
         return result
 
     # ── 步骤2：编队配置转文本 ─────────────────────────────
@@ -267,8 +267,8 @@ class Pipeline:
             ) from exc
         finally:
             result.elapsed = round(time.time() - start, 2)
+            self.report.steps.append(result)
 
-        self.report.steps.append(result)
         return result
 
     # ── 步骤3：操作指令转文本 ─────────────────────────────
@@ -322,8 +322,8 @@ class Pipeline:
             ) from exc
         finally:
             result.elapsed = round(time.time() - start, 2)
+            self.report.steps.append(result)
 
-        self.report.steps.append(result)
         return result
 
     # ── 步骤4：识别开始按钮时间戳 ─────────────────────────
@@ -391,8 +391,8 @@ class Pipeline:
             ) from exc
         finally:
             result.elapsed = round(time.time() - start, 2)
+            self.report.steps.append(result)
 
-        self.report.steps.append(result)
         return result
 
     # ── 步骤5：视频合成 ──────────────────────────────────
@@ -483,14 +483,7 @@ class Pipeline:
                 f"底板图片: {compose_config.get('background_image', 'N/A')}"
             )
 
-            compose_video(compose_config)
-
-            video_basename = self.video_name
-            # 输出路径与 compose_video 内部 prepare_output_path 保持一致：
-            # 使用 pipeline 注入的 output_dir，避免硬编码 PROJECT_ROOT/output（修复 M7）
-            self.output_video_path = os.path.join(
-                self.output_dir, f"output_{video_basename}.mp4"
-            )
+            self.output_video_path = compose_video(compose_config)
 
             # 验证输出视频完整性
             if os.path.exists(self.output_video_path):
@@ -512,8 +505,8 @@ class Pipeline:
             ) from exc
         finally:
             result.elapsed = round(time.time() - start, 2)
+            self.report.steps.append(result)
 
-        self.report.steps.append(result)
         return result
 
     # ── 执行流水线 ────────────────────────────────────────

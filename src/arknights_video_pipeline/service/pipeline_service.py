@@ -213,24 +213,35 @@ class PipelineService(QObject):
             self._contributions[idx] = 0
             self._file_percents[idx] = 0
 
+            # 先创建 worker，成功后再发射信号；创建失败时跳过该文件，
+            # 避免 worker 不入 _workers 却已通知 UI "处理中" 导致批次卡死。
+            try:
+                worker_config = self._config.build_worker_config()
+                worker = PipelineWorker(
+                    video_path=video_path,
+                    config_manager=worker_config,
+                    background_image_path=self._config.background_image(),
+                    skip_steps=self._config.skip_steps(),
+                    parent=self,
+                )
+            except Exception as exc:
+                self.log_emitted.emit(
+                    "ERROR",
+                    f"[{idx + 1}/{len(self._queue)}] 创建工作线程失败: {exc}",
+                )
+                self.file_started.emit(idx, video_path)
+                self.file_progress.emit(idx, 0, "处理失败")
+                self.file_finished.emit(idx, False, {"error": str(exc)})
+                self._contributions[idx] = 100
+                continue
+
+            self._workers[idx] = worker
             self.file_started.emit(idx, video_path)
             self.file_progress.emit(idx, 0, "处理中")
             self.log_emitted.emit(
                 "INFO",
                 f"[{idx + 1}/{len(self._queue)}] 开始处理: {video_path}",
             )
-
-            # 为每个 worker 构建独立的 ConfigManager 快照，避免多线程
-            # 并发读写共享 ConfigProxy 产生数据竞争。
-            worker_config = self._config.build_worker_config()
-            worker = PipelineWorker(
-                video_path=video_path,
-                config_manager=worker_config,
-                background_image_path=self._config.background_image(),
-                skip_steps=self._config.skip_steps(),
-                parent=self,
-            )
-            self._workers[idx] = worker
 
             # 连接 worker 信号到带文件索引的服务信号
             worker.step_started.connect(
@@ -251,6 +262,9 @@ class PipelineService(QObject):
             worker.start()
 
         self._emit_overall()
+        # 若所有文件均创建失败（无在途 worker 且队列已耗尽），需收尾批次
+        if self._next_dispatch_index >= len(self._queue) and not self._workers:
+            self._finish_batch()
 
     def _on_step_started(self, idx: int, step_key: str, step_desc: str) -> None:
         self.step_started.emit(idx, step_key, step_desc)
@@ -267,6 +281,8 @@ class PipelineService(QObject):
         if success:
             self._success_count += 1
             self._file_percents[idx] = 100
+        else:
+            self.file_progress.emit(idx, self._file_percents[idx], "处理失败")
         # 无论成功失败，已处理完毕的文件对总体进度贡献 100
         self._contributions[idx] = 100
 

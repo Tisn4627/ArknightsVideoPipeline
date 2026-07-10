@@ -18,7 +18,7 @@ import logging
 import threading
 from typing import Any
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from arknights_video_pipeline.core.config import ConfigManager
 from arknights_video_pipeline.core.logger import setup_logger
@@ -38,7 +38,7 @@ class QtLogHandler(logging.Handler):
     因此能被正确的 handler 捕获。
     """
 
-    def __init__(self, signal: pyqtSignal, thread_ident: int) -> None:
+    def __init__(self, signal: Any, thread_ident: int) -> None:
         super().__init__()
         self._signal = signal
         self._thread_ident = thread_ident
@@ -72,36 +72,37 @@ class PipelineWorker(QThread):
         config_manager: ConfigManager,
         background_image_path: str | None = None,
         skip_steps: set[str] | None = None,
-        parent=None,
+        parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._video_path = video_path
         self._config_manager = config_manager
         self._background_image_path = background_image_path
         self._skip_steps = skip_steps or set()
-        self._cancelled = False
+        self._cancel_event = threading.Event()
         self._log_handler: QtLogHandler | None = None
 
     def cancel(self) -> None:
-        self._cancelled = True
+        self._cancel_event.set()
         self.log_emitted.emit("INFO", "用户请求取消，将在当前步骤结束后停止")
 
     def run(self) -> None:
         report_dict: dict[str, Any] = {}
         success = False
         pipeline: Pipeline | None = None
-
-        # 安装日志桥接：捕获本 worker 线程的日志记录。
-        # thread_ident 必须在 run() 内（即 worker 线程已启动后）获取，
-        # QThread.run 运行在 worker 线程上下文中，此时 threading.get_ident()
-        # 返回 worker 线程 id。
-        worker_thread_ident = threading.get_ident()
-        logger = setup_logger("pipeline")
-        self._log_handler = QtLogHandler(self.log_emitted, worker_thread_ident)
-        self._log_handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(self._log_handler)
+        logger: logging.Logger | None = None
 
         try:
+            # 安装日志桥接：捕获本 worker 线程的日志记录。
+            # thread_ident 必须在 run() 内（即 worker 线程已启动后）获取，
+            # QThread.run 运行在 worker 线程上下文中，此时 threading.get_ident()
+            # 返回 worker 线程 id。
+            worker_thread_ident = threading.get_ident()
+            logger = setup_logger("pipeline")
+            self._log_handler = QtLogHandler(self.log_emitted, worker_thread_ident)
+            self._log_handler.setFormatter(logging.Formatter("%(message)s"))
+            logger.addHandler(self._log_handler)
+
             # config_manager 已由 ConfigProxy.build_worker_config 在主线程
             # 完成深拷贝与 overrides 合并，此处直接使用，避免子线程写共享状态。
             pipeline = Pipeline(
@@ -113,7 +114,7 @@ class PipelineWorker(QThread):
                 # 通过回调钩子注入步骤事件（替代 monkey-patch，修复 M17）
                 on_step_start=self._on_step_start,
                 on_step_finish=self._on_step_finish,
-                is_cancelled=lambda: self._cancelled,
+                is_cancelled=lambda: self._cancel_event.is_set(),
             )
 
             self.log_emitted.emit("INFO", "开始运行流水线...")
@@ -121,18 +122,19 @@ class PipelineWorker(QThread):
             report_dict = pipeline.report.to_dict()
 
         except Exception as exc:
-            logger.error(f"流水线异常: {exc}")
+            if logger is not None:
+                logger.error(f"流水线异常: {exc}")
             try:
                 report_dict = pipeline.report.to_dict() if pipeline else {}
             except Exception:
                 report_dict = {}
             success = False
         finally:
-            if self._log_handler is not None:
+            if logger is not None and self._log_handler is not None:
                 logger.removeHandler(self._log_handler)
                 self._log_handler = None
             # 确保完成信号一定发射，避免 UI 卡在"运行中"状态
-            self.pipeline_finished.emit(success, report_dict, self._cancelled)
+            self.pipeline_finished.emit(success, report_dict, self._cancel_event.is_set())
 
     # ── Pipeline 回调实现 ──────────────────────────────────
     # 这些方法由 Pipeline.run 在步骤开始/结束时调用，
@@ -146,7 +148,7 @@ class PipelineWorker(QThread):
         self.progress_updated.emit(percent, f"正在执行：{step_desc}")
 
     def _on_step_finish(
-        self, step_key: str, success: bool, elapsed: float, warnings: list
+        self, step_key: str, success: bool, elapsed: float, warnings: list[str]
     ) -> None:
         """步骤结束回调：发射 step_finished 信号"""
         self.step_finished.emit(step_key, success, elapsed, warnings)

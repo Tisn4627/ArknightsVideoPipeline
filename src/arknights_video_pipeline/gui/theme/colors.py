@@ -103,7 +103,10 @@ class MaterialColors:
         )
 
     def as_qcolor(self, name: str) -> QColor:
-        value = getattr(self, name, "#000000")
+        valid_names = {f.name for f in fields(self)}
+        if name not in valid_names:
+            raise AttributeError(f"{name} 不是有效的颜色字段")
+        value = getattr(self, name)
         return QColor(value)
 
     def to_dict(self) -> dict[str, str]:

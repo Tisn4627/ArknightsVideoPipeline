@@ -37,9 +37,11 @@ class GuiConfig(QObject):
 
     Signals:
         theme_changed(theme: str): 主题变更信号（"light" 或 "dark"）
+        config_changed(): 通用配置变更信号（set() 写入非受保护键时发出）
     """
 
     theme_changed = pyqtSignal(str)
+    config_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -63,7 +65,7 @@ class GuiConfig(QObject):
             with open(self._config_path, "r", encoding="utf-8") as f:
                 user = json.load(f)
             if isinstance(user, dict):
-                # 仅合并已知键，忽略未知字段
+                # 以默认值为基础，用户配置覆盖（保留未知字段供扩展）
                 merged = dict(_GUI_DEFAULTS)
                 merged.update(user)
                 self._data = merged
@@ -81,6 +83,10 @@ class GuiConfig(QObject):
                 json.dump(self._data, f, indent=4, ensure_ascii=False)
         except OSError as exc:
             logger.error("GUI 配置文件写入失败 (%s): %s", self._config_path, exc)
+
+    def _trigger_save(self) -> None:
+        """触发配置持久化（当前为同步写入，可扩展为防抖）"""
+        self.save()
 
     # ── 主题 ───────────────────────────────────────────────
 
@@ -114,4 +120,8 @@ class GuiConfig(QObject):
         return self._data.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
+        if key == "theme":
+            raise ValueError("使用 set_theme() 设置主题")
         self._data[key] = value
+        self._trigger_save()
+        self.config_changed.emit()

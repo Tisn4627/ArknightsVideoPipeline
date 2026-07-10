@@ -152,6 +152,11 @@ class LogViewer(QPlainTextEdit):
         color = self._level_colors.get(level, self._level_colors["INFO"])
         text = f"[{level}] {message}\n"
 
+        # 先记录追加前滚动条是否位于底部，再追加文本；追加后仅当原本
+        # 处于底部时才自动滚动，避免打断用户向上翻阅历史日志。
+        sb = self.verticalScrollBar()
+        was_at_bottom = sb.value() >= sb.maximum() - 4 if self._auto_scroll else False
+
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
 
@@ -159,8 +164,8 @@ class LogViewer(QPlainTextEdit):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text, fmt)
 
-        if self._auto_scroll:
-            self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        if self._auto_scroll and was_at_bottom:
+            sb.setValue(sb.maximum())
 
     def clear_logs(self) -> None:
         self.clear()

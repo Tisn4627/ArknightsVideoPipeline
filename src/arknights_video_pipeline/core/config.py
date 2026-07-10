@@ -81,7 +81,9 @@ class ConfigManager:
 
     def _save_json(self, path: str, data: dict[str, Any]) -> None:
         abs_path = self.resolve_path(path)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        dir_path = os.path.dirname(abs_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
 

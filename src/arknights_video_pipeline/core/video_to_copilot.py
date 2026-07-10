@@ -4,6 +4,7 @@
 """
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -18,9 +19,6 @@ from arknights_video_pipeline.core.utils import (
     save_default_config,
     validate_video_file,
 )
-
-# 修复PATH
-ensure_ffmpeg_in_path()
 
 # 模块级 logger（不在模块导入时调用 basicConfig，避免干扰全局日志配置；
 # 由 pipeline.py 的 setup_logger 统一配置 root logger）
@@ -194,8 +192,9 @@ def build_copilot_json(combat_data):
         combat_data: MAA 识别结果原始数据
     """
     # 如果识别数据已经是完整格式，直接使用
+    # 使用 deepcopy 避免后续修改（doc/actions/opers）影响传入的 combat_data
     if combat_data and "stage_name" in combat_data:
-        result = combat_data.copy()
+        result = copy.deepcopy(combat_data)
     else:
         # 构建基础结构
         result = {}
@@ -269,6 +268,10 @@ def video_to_copilot(video_path, config, timeout=None):
         config: 配置字典
         timeout: MAA 识别超时时间（秒），None 表示不限制
     """
+    # 确保 ffmpeg/ffprobe 在 PATH 中（避免模块导入时产生全局副作用，
+    # 仅在真正需要执行视频验证与 MAA 识别时才调用）
+    ensure_ffmpeg_in_path()
+
     # 1. 验证视频文件（复用 utils.validate_video_file 统一验证逻辑）
     logger.info(f"验证视频文件: {video_path}")
     video_info = validate_video_file(video_path)

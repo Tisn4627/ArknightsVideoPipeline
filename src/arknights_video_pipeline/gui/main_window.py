@@ -421,7 +421,7 @@ class MainWindow(QMainWindow):
         # 加载期间阻塞 MainWindow 自有控件信号，避免 setChecked/setText
         # 触发回写配置。SettingsPage 的控件由其公开方法内部自行阻塞信号。
         controls = [
-            self._bg_selector._edit,
+            self._bg_selector,
             self._style_combo,
         ]
         controls.extend(cb for cb in self._skip_checkboxes.values())
@@ -549,7 +549,8 @@ class MainWindow(QMainWindow):
         self._progress_card.reset()
         self._log_viewer.clear_logs()
         self._set_running_ui(True)
-        self._service.run_pipeline(paths)
+        if not self._service.run_pipeline(paths):
+            self._set_running_ui(False)
 
     def _on_cancel(self) -> None:
         self._service.cancel_pipeline()
@@ -645,9 +646,10 @@ class MainWindow(QMainWindow):
         # 后者在我们的 Material 主题下 OK 按钮的样式被裁切/遮挡。
         from arknights_video_pipeline.gui.components.about_dialog import AboutDialog
         dlg = AboutDialog(colors=self._settings_page.colors, parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
 
-    def showEvent(self, event) -> None:
+    def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         # 首次 show 后窗口句柄（HWND）才稳定可用，此时应用标题栏主题
         if not self._titlebar_applied:
@@ -721,7 +723,7 @@ class MainWindow(QMainWindow):
             if confirmed:
                 self._service.cancel_pipeline()
                 # 等待 worker 线程退出，避免 QThread 被销毁时仍在运行
-                self._service.wait_for_shutdown(timeout_ms=3000)
+                self._service.wait_for_shutdown(timeout_ms=5000)
                 self._gui_config.save()
                 self._config.save()
                 event.accept()
@@ -737,16 +739,19 @@ class MainWindow(QMainWindow):
     def _show_info(self, title: str, text: str) -> None:
         from arknights_video_pipeline.gui.components.message_dialog import InfoDialog
         dlg = InfoDialog(title, text, colors=self._settings_page.colors, parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
 
     def _show_warning(self, title: str, text: str) -> None:
         from arknights_video_pipeline.gui.components.message_dialog import WarningDialog
         dlg = WarningDialog(title, text, colors=self._settings_page.colors, parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
 
     def _show_critical(self, title: str, text: str) -> None:
         from arknights_video_pipeline.gui.components.message_dialog import CriticalDialog
         dlg = CriticalDialog(title, text, colors=self._settings_page.colors, parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
 
     def _show_confirm(self, title: str, text: str, confirm_text: str = "Confirm") -> bool:
@@ -755,6 +760,7 @@ class MainWindow(QMainWindow):
             title, text, confirm_text=confirm_text, cancel_text="Cancel",
             colors=self._settings_page.colors, parent=self,
         )
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         return dlg.exec() == ConfirmDialog.CONFIRMED
 
 

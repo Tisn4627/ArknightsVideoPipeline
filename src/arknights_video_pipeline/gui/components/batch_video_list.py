@@ -408,9 +408,10 @@ class BatchVideoList(QWidget):
 
     def _on_add_clicked(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
+        exts = ' '.join(f'*{e}' for e in sorted(SUPPORTED_VIDEO_EXTENSIONS))
+        filter_str = f'Video files ({exts});;All files (*.*)'
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择视频文件", "",
-            "Video files (*.mp4 *.avi *.mkv *.mov *.flv *.wmv);;All files (*.*)",
+            self, "选择视频文件", "", filter_str,
         )
         if paths:
             self.add_paths(paths)
