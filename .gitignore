@@ -197,6 +197,7 @@ bg.png
 *.tmp
 *.bak
 /site
+report.md
 
 # ================================
 # Configuration files
