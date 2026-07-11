@@ -19,6 +19,8 @@ gui.components.settings_page - 设置页面
 
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QLabel,
@@ -54,6 +56,9 @@ class SettingsPage(QWidget):
     # 性能配置变更信号（多线程开关 + 最大并发数）
     multithreading_changed = pyqtSignal(bool)
     max_concurrent_changed = pyqtSignal(int)
+    # FFmpeg 路径配置变更信号（仅 Windows）
+    ffmpeg_custom_changed = pyqtSignal(bool)
+    ffmpeg_path_changed = pyqtSignal(str)
 
     # (module_key, 标题, 说明, 文件名)
     CONFIG_TYPES: list[tuple[str, str, str, str]] = [
@@ -109,6 +114,7 @@ class SettingsPage(QWidget):
         self._config_card = self._build_config_card()
         self._advanced_card = self._build_advanced_card()
         self._performance_card = self._build_performance_card()
+        self._ffmpeg_card = self._build_ffmpeg_card()  # 非 Windows 返回 None
         self._cards_grid = QGridLayout()
         self._cards_grid.setSpacing(24)
         self._cards_grid.setColumnStretch(0, 1)
@@ -121,6 +127,8 @@ class SettingsPage(QWidget):
         self._cards_grid.addWidget(self._config_card, 1, 0)
         self._cards_grid.addWidget(self._advanced_card, 2, 0)
         self._cards_grid.addWidget(self._performance_card, 3, 0)
+        if self._ffmpeg_card is not None:
+            self._cards_grid.addWidget(self._ffmpeg_card, 4, 0)
 
     def _build_hero(self) -> QWidget:
         """Hero 区域：大标题 + 描述（与 Home 一致；不放置按钮，遵循
@@ -220,9 +228,10 @@ class SettingsPage(QWidget):
         self._clear_btn.setStyleSheet(self._outlined_button_qss())
         self._select_all_btn.clicked.connect(self._on_select_all)
         self._clear_btn.clicked.connect(self._on_clear_all)
+        # stretch 在前，将按钮推到右侧
+        self._sel_buttons_layout.addStretch()
         self._sel_buttons_layout.addWidget(self._select_all_btn)
         self._sel_buttons_layout.addWidget(self._clear_btn)
-        self._sel_buttons_layout.addStretch()
         layout.addWidget(self._sel_buttons_container)
 
         # 生成按钮 + 状态文本（同样使用包装容器支持窄屏重排）
@@ -385,6 +394,72 @@ class SettingsPage(QWidget):
         card.add_layout(layout)
         return card
 
+    def _build_ffmpeg_card(self) -> MaterialCard | None:
+        """FFmpeg 路径配置卡片（仅 Windows）
+
+        非 Windows 平台返回 None，不构建卡片。包含：
+        - 启用自定义路径开关
+        - FFmpeg 可执行文件所在目录选择器
+        - "此功能仅支持 Windows 系统" 提示
+        """
+        if sys.platform != "win32":
+            return None
+
+        card = MaterialCard("FFmpeg")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # 描述 + Windows-only 提示
+        self._ffmpeg_desc = QLabel(
+            "指定 FFmpeg 可执行文件所在目录（含 ffmpeg.exe 与 ffprobe.exe）。"
+            "关闭时使用系统 PATH 中的 FFmpeg。"
+        )
+        self._ffmpeg_desc.setFont(self._typo.body_medium)
+        self._ffmpeg_desc.setWordWrap(True)
+        self._dim_labels.append(self._ffmpeg_desc)
+        layout.addWidget(self._ffmpeg_desc)
+
+        self._ffmpeg_platform_hint = QLabel("此功能仅支持 Windows 系统")
+        self._ffmpeg_platform_hint.setFont(self._typo.body_small)
+        self._ffmpeg_platform_hint.setWordWrap(True)
+        self._dim_labels.append(self._ffmpeg_platform_hint)
+        layout.addWidget(self._ffmpeg_platform_hint)
+
+        # 启用开关行：左侧标题+说明，右侧 MaterialSwitch
+        enable_row = QHBoxLayout()
+        enable_row.setSpacing(16)
+        enable_row.setContentsMargins(0, 4, 0, 4)
+        enable_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._ffmpeg_enable_label = QLabel("自定义 FFmpeg 路径")
+        self._ffmpeg_enable_label.setFont(self._typo.title_medium)
+        self._ffmpeg_enable_label.setStyleSheet("border: none; background: transparent;")
+        text_box.addWidget(self._ffmpeg_enable_label)
+        enable_row.addLayout(text_box, 1)
+
+        self._ffmpeg_switch = MaterialSwitch(checked=False, colors=self._colors)
+        self._ffmpeg_switch.toggled.connect(self._on_ffmpeg_custom_toggled)
+        enable_row.addWidget(self._ffmpeg_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(enable_row)
+
+        # 路径选择器（目录模式，选择 ffmpeg.exe 所在目录）
+        self._ffmpeg_selector = FileSelector(
+            mode=FileSelector.MODE_DIRECTORY,
+            label="FFmpeg",
+            placeholder="ffmpeg.exe 所在目录（如 resource/ffmpeg/bin）",
+        )
+        self._ffmpeg_selector.path_changed.connect(self._on_ffmpeg_path_changed)
+        # 开关默认关闭时路径选择器禁用
+        self._ffmpeg_selector.setEnabled(False)
+        layout.addWidget(self._ffmpeg_selector)
+
+        card.add_layout(layout)
+        return card
+
     def _apply_grid_layout(self, two_column: bool = False) -> None:
         """卡片网格布局：始终保持单列竖直堆叠（外观/配置/高级/性能），
         保留 two_column 参数签名以兼容历史调用点（忽略其值）。
@@ -399,10 +474,11 @@ class SettingsPage(QWidget):
 
         self._cards_grid.setColumnStretch(0, 1)
         self._cards_grid.setColumnStretch(1, 0)
-        # 四个卡片单列竖直堆叠；任一卡片为 None 时跳过
+        # 卡片单列竖直堆叠；任一卡片为 None 时跳过（FFmpeg 卡片在非 Windows 上为 None）
         for row, card in enumerate(
             (self._appearance_card, self._config_card,
-             self._advanced_card, self._performance_card)
+             self._advanced_card, self._performance_card,
+             self._ffmpeg_card)
         ):
             if card is not None:
                 self._cards_grid.addWidget(card, row, 0)
@@ -434,16 +510,22 @@ class SettingsPage(QWidget):
                 w = item.widget()
                 if w is not None:
                     w.setParent(None)
+            is_sel_row = widgets == (self._select_all_btn, self._clear_btn)
             if vertical:
                 layout.setDirection(QBoxLayout.Direction.TopToBottom)
                 for w in widgets:
-                    layout.addWidget(w)
+                    if is_sel_row:
+                        # 全选/清空按钮靠右对齐
+                        layout.addWidget(w, alignment=Qt.AlignmentFlag.AlignRight)
+                    else:
+                        layout.addWidget(w)
             else:
                 layout.setDirection(QBoxLayout.Direction.LeftToRight)
-                if widgets == (self._select_all_btn, self._clear_btn):
+                if is_sel_row:
+                    # stretch 在前，将全选/清空按钮推到右侧
+                    layout.addStretch()
                     layout.addWidget(self._select_all_btn)
                     layout.addWidget(self._clear_btn)
-                    layout.addStretch()
                 else:
                     layout.addWidget(self._generate_btn)
                     layout.addWidget(self._config_status, 1)
@@ -461,6 +543,15 @@ class SettingsPage(QWidget):
 
     def _on_max_concurrent_changed(self, value: int) -> None:
         self.max_concurrent_changed.emit(value)
+
+    def _on_ffmpeg_custom_toggled(self, enabled: bool) -> None:
+        # 开关切换时同步路径选择器可用态
+        if getattr(self, "_ffmpeg_selector", None) is not None:
+            self._ffmpeg_selector.setEnabled(enabled)
+        self.ffmpeg_custom_changed.emit(enabled)
+
+    def _on_ffmpeg_path_changed(self, path: str) -> None:
+        self.ffmpeg_path_changed.emit(path)
 
     def _on_select_all(self) -> None:
         for cb in self._config_checkboxes.values():
@@ -521,6 +612,8 @@ class SettingsPage(QWidget):
         self._colors = colors
         self._theme_switch.set_colors(colors)
         self._mt_switch.set_colors(colors)
+        if getattr(self, "_ffmpeg_switch", None) is not None:
+            self._ffmpeg_switch.set_colors(colors)
         self._apply_colors()
         # 状态文本颜色随主题刷新
         if self._config_status.text():
@@ -607,6 +700,41 @@ class SettingsPage(QWidget):
         # 并发数输入框需同时受多线程开关状态约束：仅当开关启用且非运行态时可编辑
         self._conc_spin.setEnabled(enabled and self._mt_switch.is_checked())
 
+    # ── FFmpeg 配置控件公开访问 ──────────────────────────
+
+    def set_ffmpeg_custom(self, enabled: bool) -> None:
+        """设置 FFmpeg 自定义开关状态（阻塞信号，避免触发回写）"""
+        if getattr(self, "_ffmpeg_switch", None) is None:
+            return  # 非 Windows 无此控件
+        self._ffmpeg_switch.blockSignals(True)
+        try:
+            self._ffmpeg_switch.set_checked(bool(enabled))
+        finally:
+            self._ffmpeg_switch.blockSignals(False)
+        # set_checked 不触发 toggled，需手动同步路径选择器可用态
+        if getattr(self, "_ffmpeg_selector", None) is not None:
+            self._ffmpeg_selector.setEnabled(bool(enabled))
+
+    def set_ffmpeg_path(self, path: str) -> None:
+        """设置 FFmpeg 路径（阻塞信号，避免触发回写）"""
+        if getattr(self, "_ffmpeg_selector", None) is None:
+            return
+        self._ffmpeg_selector.blockSignals(True)
+        try:
+            self._ffmpeg_selector.set_path(path)
+        finally:
+            self._ffmpeg_selector.blockSignals(False)
+
+    def set_ffmpeg_enabled(self, enabled: bool) -> None:
+        """启用/禁用 FFmpeg 配置控件（流水线运行期间调用）"""
+        if getattr(self, "_ffmpeg_switch", None) is None:
+            return
+        self._ffmpeg_switch.setEnabled(enabled)
+        if getattr(self, "_ffmpeg_selector", None) is not None:
+            self._ffmpeg_selector.setEnabled(
+                enabled and self._ffmpeg_switch.is_checked()
+            )
+
     def _apply_colors(self) -> None:
         # 注意：不要在此调用 self.setStyleSheet()，否则会覆盖整棵 widget tree
         # 的全局 QSS，导致 MaterialCard（白底圆角）与 MaterialButton 失去样式。
@@ -648,6 +776,9 @@ class SettingsPage(QWidget):
                          getattr(self, "_output_selector", None)):
             if selector is not None:
                 selector.set_colors(self._colors)
+        # FFmpeg 卡片内文件选择器：同步主题色
+        if getattr(self, "_ffmpeg_selector", None) is not None:
+            self._ffmpeg_selector.set_colors(self._colors)
         # 性能卡片内"最大并发数"标签：与 Log level 标签同色
         if getattr(self, "_conc_label", None) is not None:
             self._conc_label.setStyleSheet(
@@ -660,7 +791,8 @@ class SettingsPage(QWidget):
         # 同步刷新卡片背景色：MaterialCard 使用 paintEvent 自绘圆角背景，
         # 此处需调用 set_surface_color 更新颜色，确保暗色模式正确
         for card in (self._appearance_card, self._config_card,
-                     self._advanced_card, self._performance_card):
+                     self._advanced_card, self._performance_card,
+                     self._ffmpeg_card):
             if card is not None:
                 card.set_surface_color(self._colors.surface)
         # 同步刷新按钮配色，使其在主题切换后保持视觉一致

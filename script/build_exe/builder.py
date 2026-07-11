@@ -77,6 +77,19 @@ _ALWAYS_EXCLUDE: list[str] = [
     "sphinx",
 ]
 
+# 始终排除的测试模块/子包（确保打包产物不含测试代码）
+_TEST_EXCLUDES: list[str] = [
+    "arknights_video_pipeline.tests",
+    "arknights_video_pipeline.tests.test_batch_service",
+    "arknights_video_pipeline.tests.test_batch_cli",
+    "arknights_video_pipeline.tests.test_batch_video_list",
+    "arknights_video_pipeline.tests.test_filename_encoding",
+    "arknights_video_pipeline.tests.test_titlebar",
+    "tests",
+    "test",
+    "unittest",
+]
+
 
 # ── 配置数据类 ────────────────────────────────────────────
 
@@ -332,6 +345,7 @@ class BuildManager:
         # 合并排除列表
         excludes: list[str] = []
         excludes.extend(_ALWAYS_EXCLUDE)
+        excludes.extend(_TEST_EXCLUDES)
         excludes.extend(result.unused_packages)
         if self.config.clean_stdlib:
             excludes.extend(result.stdlib_excludes)

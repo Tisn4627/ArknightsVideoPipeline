@@ -50,6 +50,7 @@ from arknights_video_pipeline.core.utils import (
     format_file_size,
     load_config,
     resolve_path,
+    set_ffmpeg_config,
     validate_image_file,
     validate_output_video,
     validate_video_file,
@@ -868,6 +869,12 @@ def main() -> None:
     cli_overrides["video_compose_style"] = style
     cli_overrides["video_compose_config"] = f"config/video_compose/{style}.json"
     config_mgr.merge_cli_overrides(cli_overrides)
+
+    # 同步 FFmpeg 路径配置到 utils 模块全局（CLI 路径，不经过 ConfigProxy）
+    set_ffmpeg_config(
+        bool(config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
+        config_mgr.pipeline.get("ffmpeg_path", ""),
+    )
 
     # ── 初始化日志 ────────────────────────────────────────
     # 单文件：日志写入该视频输出目录（保持向后兼容）；

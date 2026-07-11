@@ -179,10 +179,31 @@ class DependencyAnalyzer:
 
     # ── AST 解析 ──────────────────────────────────────────
 
+    def _is_test_file(self, filepath: str, filename: str) -> bool:
+        """判断文件是否为测试文件
+
+        测试文件的导入不应参与依赖分析，否则 pytest/unittest.mock 等
+        测试专用依赖会被误判为"已使用"而无法排除。
+
+        Args:
+            filepath: 文件完整路径
+            filename: 文件名
+
+        Returns:
+            True 表示是测试文件
+        """
+        # 文件名匹配 test_*.py / *_test.py
+        if filename.startswith("test_") or filename.endswith("_test.py"):
+            return True
+        # 路径中包含 tests/ 或 test/ 目录段
+        parts = filepath.replace("\\", "/").split("/")
+        return "tests" in parts or "test" in parts
+
     def _parse_imports(self) -> list[ImportInfo]:
         """解析源码目录中所有 .py 文件的 import 语句
 
         使用 ast 模块进行语法分析，比正则表达式更准确。
+        跳过测试文件，避免测试专用导入污染依赖分析结果。
 
         Returns:
             所有导入信息的列表
@@ -190,14 +211,20 @@ class DependencyAnalyzer:
         imports: list[ImportInfo] = []
 
         for root, dirs, files in os.walk(self.source_dir):
-            # 跳过 __pycache__ 等目录
-            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            # 跳过 __pycache__ 和测试目录
+            dirs[:] = [
+                d for d in dirs
+                if d != "__pycache__" and d not in ("tests", "test")
+            ]
 
             for filename in files:
                 if not filename.endswith(".py"):
                     continue
 
                 filepath = os.path.join(root, filename)
+                if self._is_test_file(filepath, filename):
+                    continue
+
                 file_imports = self._parse_file(filepath)
                 imports.extend(file_imports)
 

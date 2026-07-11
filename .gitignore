@@ -193,11 +193,6 @@ desktop.ini
 material-design-icons-master
 MAA-*/
 output/
-bg.png
-*.tmp
-*.bak
-/site
-report.md
 
 # ================================
 # Configuration files

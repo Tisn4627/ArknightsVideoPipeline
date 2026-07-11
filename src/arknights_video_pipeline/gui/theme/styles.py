@@ -16,9 +16,9 @@ from arknights_video_pipeline.gui.theme.typography import MaterialTypography
 class MaterialStyle:
     """Material Design 3 样式生成器"""
 
-    # QSS 字符串按 colors 缓存：MaterialColors 是 frozen dataclass（可哈希），
+    # QSS 字符串按 (colors, family) 缓存：MaterialColors 是 frozen dataclass（可哈希），
     # light/dark 各只生成一次，后续切换直接复用，省去 ~60ms 的 f-string 构建。
-    _qss_cache: dict[MaterialColors, str] = {}
+    _qss_cache: dict[tuple[MaterialColors, str], str] = {}
 
     def __init__(self, colors: MaterialColors | None = None,
                  typography: MaterialTypography | None = None) -> None:
@@ -26,7 +26,8 @@ class MaterialStyle:
         self.typography = typography or MaterialTypography()
 
     def generate_qss(self) -> str:
-        cached = MaterialStyle._qss_cache.get(self.colors)
+        cache_key = (self.colors, self.typography.family)
+        cached = MaterialStyle._qss_cache.get(cache_key)
         if cached is not None:
             return cached
         c = self.colors

@@ -40,6 +40,10 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     # 启用后由 max_concurrent 限制同时运行的合成任务数。
     "multithreading": False,
     "max_concurrent": 1,
+    # FFmpeg 自定义路径（仅 Windows）：启用后使用 ffmpeg_path 指定的目录
+    # （含 ffmpeg.exe/ffprobe.exe）；关闭时使用系统 PATH 中的 FFmpeg。
+    "ffmpeg_custom_enabled": False,
+    "ffmpeg_path": "resource/ffmpeg/bin",
 }
 
 

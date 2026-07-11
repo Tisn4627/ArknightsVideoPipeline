@@ -9,7 +9,6 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 
 **注意**：Maa目前已经取消对视频自动识别的维护与支持，因此本项目可能随时会停止维护。
 
-<br />
 
 ## 核心功能
 
@@ -31,12 +30,6 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 | [GUI 使用说明](docs/gui_guide.md) | 图形界面使用说明     |
 
 ## 贡献指南
-
-1. Fork 本仓库
-2. 创建功能分支：`git checkout -b feature/your-feature`
-3. 提交更改：`git commit -m "Add your feature"`
-4. 推送分支：`git push origin feature/your-feature`
-5. 提交 Pull Request
 
 代码规范：
 

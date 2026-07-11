@@ -30,6 +30,12 @@ class ConfigProxy(QObject):
         self._project_dir = project_dir
         self._config_mgr = ConfigManager(project_dir)
         self._config_mgr.load_pipeline_config()
+        # 同步 FFmpeg 路径配置到 utils 模块全局（GUI 启动时）
+        from arknights_video_pipeline.core.utils import set_ffmpeg_config
+        set_ffmpeg_config(
+            bool(self._config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
+            self._config_mgr.pipeline.get("ffmpeg_path", ""),
+        )
 
     # ── 基础读写 ──────────────────────────────────────────
 
@@ -153,13 +159,35 @@ class ConfigProxy(QObject):
             n = ConfigProxy.MAX_CONCURRENT_LIMIT
         self.set("max_concurrent", int(n))
 
+    # ── FFmpeg 路径配置（仅 Windows）─────────────────────────
+
+    def ffmpeg_custom_enabled(self) -> bool:
+        """是否启用自定义 FFmpeg 路径"""
+        return bool(self.get("ffmpeg_custom_enabled", False))
+
+    def set_ffmpeg_custom_enabled(self, enabled: bool) -> None:
+        self.set("ffmpeg_custom_enabled", bool(enabled))
+        # 同步到 utils 模块全局，使下次 ensure_ffmpeg_in_path() 生效
+        from arknights_video_pipeline.core.utils import set_ffmpeg_config
+        set_ffmpeg_config(bool(enabled), self.get("ffmpeg_path", ""))
+
+    def ffmpeg_path(self) -> str:
+        return self.get("ffmpeg_path", "")
+
+    def set_ffmpeg_path(self, path: str) -> None:
+        self.set("ffmpeg_path", path or "")
+        # 同步到 utils 模块全局
+        from arknights_video_pipeline.core.utils import set_ffmpeg_config
+        set_ffmpeg_config(self.get("ffmpeg_custom_enabled", False), path or "")
+
     # ── 构建运行参数 ──────────────────────────────────────
 
     def build_overrides(self) -> dict[str, Any]:
         """构建用于合并到 ConfigManager 的 CLI/GUI 覆盖项"""
         overrides: dict[str, Any] = {}
         for key in ["maa_path", "output_dir", "log_level", "log_to_file",
-                    "video_compose_style", "video_compose_config"]:
+                    "video_compose_style", "video_compose_config",
+                    "ffmpeg_custom_enabled", "ffmpeg_path"]:
             value = self.get(key)
             if value is not None:
                 overrides[key] = value

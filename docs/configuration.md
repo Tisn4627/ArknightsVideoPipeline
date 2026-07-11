@@ -54,6 +54,8 @@ python main.py --init-config compose
 | `video_path` | string | `""` | 单个视频文件路径（旧字段，**已弃用**，保留以向后兼容）。批量场景请使用 `video_paths`；GUI 与 CLI 现均通过 `video_paths` / 位置参数处理视频列表，不再写入此字段 |
 | `multithreading` | boolean | `false` | 多线程批量处理开关。`false`（默认）时批量任务严格串行执行，一次仅运行一个合成任务，避免 MAA 资源争用；`true` 时按 `max_concurrent` 上限并发派发多个 PipelineWorker。仅在 GUI 批量处理时生效，CLI 不受此字段影响 |
 | `max_concurrent` | integer | `1` | 最大并发视频合成任务数（正整数，范围 1~16）。仅当 `multithreading=true` 时生效；`multithreading=false` 或该值为 1 时退化为完全串行。每个并发任务会拉起独立的 Pipeline 实例及 MAA/ffmpeg 子进程，设置过大可能耗尽 CPU/内存/IO 资源 |
+| `ffmpeg_custom_enabled` | boolean | `false` | FFmpeg 自定义路径开关（**仅 Windows**）。`true` 时将 `ffmpeg_path` 指定的目录加入 PATH 最前面，使该目录中的 ffmpeg.exe / ffprobe.exe 优先于系统已安装的版本；`false`（默认）时使用系统 PATH 中的 FFmpeg。非 Windows 平台忽略此项 |
+| `ffmpeg_path` | string | `"resource/ffmpeg/bin"` | FFmpeg 可执行文件**所在目录**（**仅 Windows**）。仅当 `ffmpeg_custom_enabled=true` 时生效。该目录须同时包含 ffmpeg.exe 与 ffprobe.exe。支持相对路径（以项目根目录为基准）或绝对路径。示例：`"C:/tools/ffmpeg/bin"` |
 
 ### 配置示例
 
@@ -75,13 +77,17 @@ python main.py --init-config compose
     "video_paths": [],
     "video_path": "",
     "multithreading": false,
-    "max_concurrent": 1
+    "max_concurrent": 1,
+    "ffmpeg_custom_enabled": false,
+    "ffmpeg_path": "resource/ffmpeg/bin"
 }
 ```
 
 > **`video_paths` 与 `video_path` 说明**：`video_paths`（复数）是批量视频处理引入的新字段，GUI 用于持久化 **Video files** 卡片中的文件列表与顺序，下次启动时自动恢复。`video_path`（单数）为旧字段，保留仅为向后兼容，新版本不再写入；批量场景请统一使用 `video_paths`。CLI 不读取这两个字段，而是通过 `video` 位置参数接收视频列表。
 
 > **多线程说明与风险提示**：`multithreading` 默认关闭，保持串行执行以避免 MAA 资源争用（多个 MAA 实例可能共享同一 ADB 连接或资源目录，并发运行可能互相干扰）。启用前请确认你的任务之间不存在共享资源冲突。每个并发 worker 会获得独立的 `ConfigManager` 快照与独立输出目录（按视频名分目录），不存在中间文件冲突；日志按线程过滤后分别回传到 GUI，不会重复显示。任务失败互不影响——单个 worker 的异常会被捕获并标记为 failed，其余并行任务继续执行。
+
+> **FFmpeg 路径自定义说明**：此功能仅适用于 Windows 系统。默认情况下（`ffmpeg_custom_enabled=false`），程序使用系统 PATH 中的 FFmpeg。启用自定义路径后，程序将 `ffmpeg_path` 指定的目录加入 PATH 最前面，使该目录中的 FFmpeg 优先于系统已安装的版本。`ffmpeg_path` 应为 ffmpeg.exe **所在目录**（非 exe 文件本身），且该目录须同时包含 ffprobe.exe。支持相对路径（以项目根目录为基准，默认值 `resource/ffmpeg/bin`）或绝对路径。非 Windows 平台上，GUI 设置页不显示此配置卡片，配置项即使存在也会被忽略。
 
 ---
 

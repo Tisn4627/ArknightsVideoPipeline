@@ -395,6 +395,9 @@ class MainWindow(QMainWindow):
         # 性能配置（多线程开关 / 最大并发数）
         sp.multithreading_changed.connect(self._config.set_multithreading)
         sp.max_concurrent_changed.connect(self._config.set_max_concurrent)
+        # FFmpeg 路径配置（仅 Windows）
+        sp.ffmpeg_custom_changed.connect(self._config.set_ffmpeg_custom_enabled)
+        sp.ffmpeg_path_changed.connect(self._config.set_ffmpeg_path)
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
         for key, cb in self._skip_checkboxes.items():
@@ -457,6 +460,9 @@ class MainWindow(QMainWindow):
         # 性能配置：从 pipeline.json 恢复多线程开关与最大并发数
         sp.set_multithreading(self._config.multithreading())
         sp.set_max_concurrent(self._config.max_concurrent())
+        # FFmpeg 路径配置：从 pipeline.json 恢复自定义开关与路径
+        sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
+        sp.set_ffmpeg_path(self._config.ffmpeg_path())
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -576,6 +582,8 @@ class MainWindow(QMainWindow):
         self._settings_page.set_advanced_enabled(not running)
         # 性能配置（多线程开关 / 最大并发数）运行期间禁止修改
         self._settings_page.set_performance_enabled(not running)
+        # FFmpeg 路径配置运行期间禁止修改
+        self._settings_page.set_ffmpeg_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
 

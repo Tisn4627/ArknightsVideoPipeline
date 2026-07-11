@@ -36,13 +36,66 @@ logger = logging.getLogger(__name__)
 
 # ── PATH 修复（Windows）────────────────────────────────────
 
+# FFmpeg 路径配置 —— 由 set_ffmpeg_config() 在启动/配置变更时设置。
+# ensure_ffmpeg_in_path() 读取这些全局决定将哪个目录加入 PATH。
+_FFMPEG_CUSTOM_ENABLED: bool = False
+_FFMPEG_CUSTOM_PATH: str = ""
+# 标记配置的 FFmpeg 目录是否已加入 PATH，避免重复追加导致 PATH 增长。
+# set_ffmpeg_config() 重置为 False，使下次 ensure_ffmpeg_in_path() 重新应用。
+_FFMPEG_PATH_APPLIED: bool = False
+
+
+def set_ffmpeg_config(custom_enabled: bool, custom_path: str) -> None:
+    """配置 FFmpeg 路径（启动时和配置变更时调用）
+
+    Windows 专属功能。custom_enabled=True 时将 custom_path 指定的目录
+    （含 ffmpeg.exe/ffprobe.exe）加入 PATH 最前面；False 时使用系统 PATH。
+    设置后重置 _FFMPEG_PATH_APPLIED 标志，使下次 ensure_ffmpeg_in_path()
+    重新应用新配置。
+    """
+    global _FFMPEG_CUSTOM_ENABLED, _FFMPEG_CUSTOM_PATH, _FFMPEG_PATH_APPLIED
+    _FFMPEG_CUSTOM_ENABLED = bool(custom_enabled)
+    _FFMPEG_CUSTOM_PATH = custom_path or ""
+    _FFMPEG_PATH_APPLIED = False
+
+
+def _get_effective_ffmpeg_dir() -> str | None:
+    """返回应加入 PATH 的 FFmpeg 目录（None 表示使用系统 PATH）
+
+    custom_enabled=True 时返回 custom_path 指向的目录（相对路径以
+    PROJECT_ROOT 为基准解析）；custom_enabled=False 时返回 None。
+    """
+    if _FFMPEG_CUSTOM_ENABLED and _FFMPEG_CUSTOM_PATH:
+        path = _FFMPEG_CUSTOM_PATH
+        if not os.path.isabs(path):
+            path = os.path.join(PROJECT_ROOT, path)
+        return os.path.normpath(path) if path else None
+    return None
+
 
 def ensure_ffmpeg_in_path() -> None:
     """确保 ffmpeg/ffprobe 在 PATH 中（Windows 注册表回退）
 
+    优先级：
+    1. 用户自定义路径（ffmpeg_custom_enabled=True 时，ffmpeg_path 指定目录加入 PATH 最前）
+    2. 系统 PATH（custom_enabled=False 时）
+    3. Windows 注册表 PATH 重建（ffmpeg 仍找不到时的回退）
+
     若 shutil.which 找不到 ffmpeg 或 ffprobe，则尝试从 Windows 注册表
     重建 PATH 环境变量。非 Windows 环境或注册表读取失败时静默跳过。
     """
+    global _FFMPEG_PATH_APPLIED
+
+    # 应用配置的 FFmpeg 目录（仅执行一次，配置变更时由 set_ffmpeg_config 重置标志）
+    if not _FFMPEG_PATH_APPLIED:
+        ffmpeg_dir = _get_effective_ffmpeg_dir()
+        if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
+            current = os.environ.get("PATH", "")
+            parts = current.split(os.pathsep)
+            if ffmpeg_dir not in parts:
+                os.environ["PATH"] = ffmpeg_dir + os.pathsep + current
+        _FFMPEG_PATH_APPLIED = True
+
     if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return
     machine_path = os.environ.get("PATH", "")
