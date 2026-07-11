@@ -7,11 +7,12 @@ gui.components.about_dialog - About 对话框
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QWidget,
 )
 
+from arknights_video_pipeline.gui.assets.app_icon import load_app_icon
 from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.theme import (
@@ -46,6 +47,18 @@ class AboutDialog(QDialog):
         card_layout.setContentsMargins(28, 28, 28, 28)
         card_layout.setSpacing(12)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # 应用官方图标：居中显示在标题上方
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setStyleSheet("background: transparent; border: none;")
+        icon_pixmap = load_app_icon().pixmap(QSize(96, 96))
+        if not icon_pixmap.isNull():
+            icon_label.setPixmap(icon_pixmap)
+        else:
+            icon_label.setVisible(False)
+        card_layout.addWidget(icon_label)
+        self._icon_label = icon_label
 
         # 标题
         title = QLabel("ArknightsVideoPipeline")

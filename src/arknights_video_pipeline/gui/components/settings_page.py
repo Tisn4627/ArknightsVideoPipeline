@@ -20,6 +20,7 @@ gui.components.settings_page - 设置页面
 from __future__ import annotations
 
 import sys
+from typing import Any, Callable, TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -33,6 +34,12 @@ from arknights_video_pipeline.gui.components.material_checkbox import MaterialCh
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
 from arknights_video_pipeline.gui.components.material_switch import MaterialSwitch
+from arknights_video_pipeline.gui.components.settings_row_builders import (
+    FieldRow,
+    build_switch_row, build_int_row, build_float_row,
+    build_combo_row, build_path_row, build_string_row,
+    build_color_row, build_range_row, build_nullable_int_row,
+)
 from arknights_video_pipeline.gui.theme import (
     MaterialColors, MaterialTypography,
     filled_button_qss as _build_filled_button_qss,
@@ -59,6 +66,20 @@ class SettingsPage(QWidget):
     # FFmpeg 路径配置变更信号（仅 Windows）
     ffmpeg_custom_changed = pyqtSignal(bool)
     ffmpeg_path_changed = pyqtSignal(str)
+    # 新增 pipeline.json 字段变更信号
+    log_to_file_changed = pyqtSignal(bool)
+    log_max_bytes_changed = pyqtSignal(int)
+    log_backup_count_changed = pyqtSignal(int)
+    maa_timeout_changed = pyqtSignal(int)
+    maa_max_retries_changed = pyqtSignal(int)
+    formation_path_changed = pyqtSignal(str)
+    actions_path_changed = pyqtSignal(str)
+    track_path_changed = pyqtSignal(str)
+    # 子配置变更信号：(config_name, field_path, value)
+    # config_name 为 "formation"/"actions"/"track"/"style1"/"style2"
+    sub_config_changed = pyqtSignal(str, str, object)
+    # 高级分区折叠状态变更信号（持久化到 gui.json）
+    advanced_expanded_changed = pyqtSignal(bool)
 
     # (module_key, 标题, 说明, 文件名)
     CONFIG_TYPES: list[tuple[str, str, str, str]] = [
@@ -92,6 +113,10 @@ class SettingsPage(QWidget):
 
         # 记录所有需要随主题刷新的辅助文本控件，便于统一更新颜色
         self._dim_labels: list[QLabel] = []
+        # 子配置 FieldRow 注册表：(config_name, field_path) -> FieldRow
+        self._sub_field_rows: dict[tuple[str, str], FieldRow] = {}
+        # pipeline.json 新增字段的 FieldRow 注册表
+        self._pipeline_field_rows: dict[str, FieldRow] = {}
 
         self._build_ui()
         self._apply_colors()
@@ -107,14 +132,38 @@ class SettingsPage(QWidget):
         # Hero 区域（参考 Home：大标题 + 副标题 + 主按钮）
         root.addWidget(self._build_hero())
 
-        # 卡片网格：参考 Home 选项卡，使用 QGridLayout 排列独立圆角卡片
-        # 现包含四张卡片：外观、配置文件、高级（运行时配置）、性能（多线程）。
-        # 始终单列竖直堆叠——四张卡片宽度一致，避免出现 2x2 错位或被压缩。
+        # 始终可见卡片
         self._appearance_card = self._build_theme_card()
         self._config_card = self._build_config_card()
         self._advanced_card = self._build_advanced_card()
-        self._performance_card = self._build_performance_card()
         self._ffmpeg_card = self._build_ffmpeg_card()  # 非 Windows 返回 None
+        self._compose_style1_main_card = self._build_compose_main_card("style1")
+        self._compose_style2_main_card = self._build_compose_main_card("style2")
+
+        # 高级选项开关卡片（控制下方高级设置项的显隐）
+        self._advanced_toggle_card = self._build_advanced_toggle_card()
+
+        # 高级设置内容容器（开关关闭时隐藏，不占用布局空间）
+        # 仅包含独立的 Track / Formation / Actions / Performance 卡片
+        # 全局设置与 VideoCompose 的高级字段已内嵌到各自卡片中
+        self._collapsible_content = QWidget()
+        self._collapsible_content.setStyleSheet("background: transparent; border: none;")
+        collapsible_layout = QVBoxLayout(self._collapsible_content)
+        collapsible_layout.setContentsMargins(0, 0, 0, 0)
+        collapsible_layout.setSpacing(24)
+        self._track_card = self._build_track_card()
+        self._formation_card = self._build_formation_card()
+        self._actions_card = self._build_actions_card()
+        self._performance_card = self._build_performance_card()
+        for card in (
+            self._track_card, self._formation_card, self._actions_card,
+            self._performance_card,
+        ):
+            if card is not None:
+                collapsible_layout.addWidget(card)
+        self._collapsible_content.setVisible(False)  # 默认收起
+
+        # 卡片网格：单列竖直堆叠
         self._cards_grid = QGridLayout()
         self._cards_grid.setSpacing(24)
         self._cards_grid.setColumnStretch(0, 1)
@@ -122,13 +171,21 @@ class SettingsPage(QWidget):
         self._cards_container.setStyleSheet("background: transparent; border: none;")
         self._cards_container.setLayout(self._cards_grid)
         root.addWidget(self._cards_container)
-        # 单列竖直堆叠（保持 hero -> cards 视觉节奏）
-        self._cards_grid.addWidget(self._appearance_card, 0, 0)
-        self._cards_grid.addWidget(self._config_card, 1, 0)
-        self._cards_grid.addWidget(self._advanced_card, 2, 0)
-        self._cards_grid.addWidget(self._performance_card, 3, 0)
-        if self._ffmpeg_card is not None:
-            self._cards_grid.addWidget(self._ffmpeg_card, 4, 0)
+        # 始终可见卡片
+        row = 0
+        for card in (
+            self._appearance_card,
+            self._advanced_card, self._ffmpeg_card,
+            self._compose_style1_main_card, self._compose_style2_main_card,
+            self._config_card,
+        ):
+            if card is not None:
+                self._cards_grid.addWidget(card, row, 0)
+                row += 1
+        # 高级开关卡片 + 内容容器（内容 setVisible 控制显隐）
+        self._cards_grid.addWidget(self._advanced_toggle_card, row, 0)
+        row += 1
+        self._cards_grid.addWidget(self._collapsible_content, row, 0)
 
     def _build_hero(self) -> QWidget:
         """Hero 区域：大标题 + 描述（与 Home 一致；不放置按钮，遵循
@@ -253,21 +310,59 @@ class SettingsPage(QWidget):
         card.add_layout(layout)
         return card
 
-    def _build_advanced_card(self) -> MaterialCard:
-        """高级配置卡片：MAA 路径 / Output 路径 / 日志级别，
-        全部使用 QVBoxLayout 竖直排列，不做 2x2 网格。
-        这三个控件由 SettingsPage 创建并通过公开信号/方法暴露
-        （``maa_path_changed`` / ``set_maa_path`` 等），MainWindow
-        不直接访问私有成员，避免双源状态不同步。"""
+    def _build_advanced_toggle_card(self) -> MaterialCard:
+        """高级选项开关卡片：MaterialSwitch 控制高级设置项的显隐。
+
+        开关打开时，``_collapsible_content`` 容器内的所有高级卡片立即显示；
+        关闭时立即隐藏且不占用布局空间。开关状态持久化到 ``gui.json``。
+        """
         card = MaterialCard("高级")
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.setContentsMargins(0, 4, 0, 4)
+        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._advanced_toggle_label = QLabel("显示高级设置")
+        self._advanced_toggle_label.setFont(self._typo.title_medium)
+        self._advanced_toggle_label.setStyleSheet(
+            "border: none; background: transparent;"
+        )
+        text_box.addWidget(self._advanced_toggle_label)
+
+        self._advanced_toggle_desc = QLabel(
+            "展开日志级别、子配置路径、Track/Formation/Actions、"
+            "性能与 VideoCompose 高级字段。"
+        )
+        self._advanced_toggle_desc.setFont(self._typo.body_medium)
+        self._advanced_toggle_desc.setWordWrap(True)
+        self._dim_labels.append(self._advanced_toggle_desc)
+        text_box.addWidget(self._advanced_toggle_desc)
+        row.addLayout(text_box, 1)
+
+        self._advanced_switch = MaterialSwitch(
+            checked=False, colors=self._colors
+        )
+        self._advanced_switch.toggled.connect(self._on_advanced_toggled)
+        row.addWidget(self._advanced_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        card.add_layout(row)
+        return card
+
+    def _build_advanced_card(self) -> MaterialCard:
+        """全局设置卡片：MAA 路径 / Output 路径 / MAA 超时 / MAA 重试（始终可见）
+        + 日志级别 / 日志文件 / 子配置文件路径（高级开关打开后可见）。"""
+        card = MaterialCard("全局设置")
         layout = QVBoxLayout()
         layout.setSpacing(16)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # 描述文本
         self._advanced_desc = QLabel(
-            "MAA、Output 与日志级别的运行时配置。修改后立即生效，"
-            "无需重新启动；流水线运行期间会暂时禁用编辑。"
+            "MAA 路径、Output 输出目录与 MAA 超时/重试的运行时配置。"
+            "修改后立即生效，无需重新启动；流水线运行期间会暂时禁用编辑。"
         )
         self._advanced_desc.setFont(self._typo.body_medium)
         self._advanced_desc.setWordWrap(True)
@@ -290,13 +385,42 @@ class SettingsPage(QWidget):
         )
         layout.addWidget(self._output_selector)
 
-        # 日志级别：标签 + 组合框，横向布局与 FileSelector 内部节奏一致
-        # （spacing=8，标签不固定宽度以匹配 Video 路径输入框的 "Video" 标签
-        # 行为）。组合框内联 QSS 已在 _log_level_combo_qss 中与 FileSelector
-        # 内 QLineEdit 完全对齐：surface_variant 底色、outline_variant 边框、
-        # 12px 圆角、聚焦时 2px primary 边框，支持 set_log_level_valid 错误态。
-        # 组合框右侧叠加一个 unicode "▾" 字符（独立 QLabel），补全下拉箭头
-        # —— setStyleSheet 后 PyQt 默认 ::down-arrow 不可见。
+        # 将内部控件信号转发为公开信号，供 MainWindow 连接
+        self._maa_selector.path_changed.connect(self.maa_path_changed)
+        self._output_selector.path_changed.connect(self.output_dir_changed)
+
+        # MAA 超时（秒）
+        row = build_int_row(
+            "MAA 超时 (秒)", default=600,
+            minimum=10, maximum=7200, step=10,
+            colors=self._colors,
+            on_changed=self.maa_timeout_changed.emit,
+        )
+        layout.addWidget(row.widget)
+        self._pipeline_field_rows["maa_timeout_seconds"] = row
+
+        # MAA 最大重试次数
+        row = build_int_row(
+            "MAA 最大重试", default=2,
+            minimum=0, maximum=10, step=1,
+            colors=self._colors,
+            on_changed=self.maa_max_retries_changed.emit,
+        )
+        layout.addWidget(row.widget)
+        self._pipeline_field_rows["maa_max_retries"] = row
+
+        card.add_layout(layout)
+
+        # ── 高级字段容器（开关关闭时隐藏，不占用布局空间）──
+        self._global_advanced_container = QWidget()
+        self._global_advanced_container.setStyleSheet(
+            "background: transparent; border: none;"
+        )
+        adv_layout = QVBoxLayout(self._global_advanced_container)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(16)
+
+        # 日志级别：标签 + 组合框
         log_row = QHBoxLayout()
         log_row.setSpacing(8)
         log_row.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -318,14 +442,71 @@ class SettingsPage(QWidget):
             "border: none; background: transparent; font-size: 14px;"
         )
         log_row.addWidget(self._log_level_arrow)
-        layout.addLayout(log_row)
+        adv_layout.addLayout(log_row)
 
-        # 将内部控件信号转发为公开信号，供 MainWindow 连接
-        self._maa_selector.path_changed.connect(self.maa_path_changed)
-        self._output_selector.path_changed.connect(self.output_dir_changed)
         self._log_level_combo.currentTextChanged.connect(self.log_level_changed)
 
-        card.add_layout(layout)
+        # 日志文件开关
+        row = build_switch_row(
+            "日志写入文件", "关闭后仅输出到控制台",
+            default=True, colors=self._colors,
+            on_changed=self.log_to_file_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["log_to_file"] = row
+
+        # 日志文件最大字节数
+        row = build_int_row(
+            "日志文件最大字节", default=10485760,
+            minimum=1024, maximum=1073741824, step=1024,
+            colors=self._colors,
+            on_changed=self.log_max_bytes_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["log_max_bytes"] = row
+
+        # 日志备份数
+        row = build_int_row(
+            "日志备份数", default=3,
+            minimum=0, maximum=100, step=1,
+            colors=self._colors,
+            on_changed=self.log_backup_count_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["log_backup_count"] = row
+
+        # Formation 配置文件路径
+        row = build_path_row(
+            "Formation 配置", mode=FileSelector.MODE_OPEN_FILE,
+            colors=self._colors,
+            on_changed=self.formation_path_changed.emit,
+        )
+        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["formation"] = row
+
+        # Actions 配置文件路径
+        row = build_path_row(
+            "Actions 配置", mode=FileSelector.MODE_OPEN_FILE,
+            colors=self._colors,
+            on_changed=self.actions_path_changed.emit,
+        )
+        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["actions"] = row
+
+        # Track 配置文件路径
+        row = build_path_row(
+            "Track 配置", mode=FileSelector.MODE_OPEN_FILE,
+            colors=self._colors,
+            on_changed=self.track_path_changed.emit,
+        )
+        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["track"] = row
+
+        self._global_advanced_container.setVisible(False)
+        card.add_widget(self._global_advanced_container)
         return card
 
     def _build_performance_card(self) -> MaterialCard:
@@ -460,11 +641,319 @@ class SettingsPage(QWidget):
         card.add_layout(layout)
         return card
 
+    # ── 子配置卡片构建 ────────────────────────────────────
+
+    def _emit_sub(self, config_name: str, field_path: str) -> Callable:
+        """创建子配置变更回调，发射 sub_config_changed 信号"""
+        def _emit(value: Any) -> None:
+            self.sub_config_changed.emit(config_name, field_path, value)
+        return _emit
+
+    def _register_sub_row(self, config_name: str, field_path: str,
+                          row: FieldRow) -> FieldRow:
+        """注册子配置 FieldRow 到注册表，返回 row 以便链式调用"""
+        self._sub_field_rows[(config_name, field_path)] = row
+        return row
+
+    def _build_track_card(self) -> MaterialCard:
+        """Track 配置卡片：开始按钮识别相关参数（17 个字段）"""
+        card = MaterialCard("Track")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        desc = QLabel("开始按钮模板匹配参数。修改后下次流水线运行时生效。")
+        desc.setFont(self._typo.body_medium)
+        desc.setWordWrap(True)
+        self._dim_labels.append(desc)
+        layout.addWidget(desc)
+
+        cn = "track"
+        c = self._colors
+
+        def add(field_path: str, row: FieldRow) -> None:
+            layout.addWidget(row.widget)
+            self._register_sub_row(cn, field_path, row)
+
+        add("resource_dir", build_path_row(
+            "资源目录", mode=FileSelector.MODE_DIRECTORY, colors=c,
+            on_changed=self._emit_sub(cn, "resource_dir")))
+        add("match_threshold", build_float_row(
+            "匹配阈值", default=0.75, minimum=0.0, maximum=1.0,
+            step=0.01, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, "match_threshold")))
+        add("scale_range", build_range_row(
+            "缩放范围", default_min=0.5, default_max=1.5,
+            minimum=0.1, maximum=5.0, step=0.1, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, "scale_range")))
+        add("scale_steps", build_int_row(
+            "缩放步数", default=9, minimum=1, maximum=50, colors=c,
+            on_changed=self._emit_sub(cn, "scale_steps")))
+        add("detection_fps", build_int_row(
+            "检测 FPS", default=2, minimum=1, maximum=30, colors=c,
+            on_changed=self._emit_sub(cn, "detection_fps")))
+        add("detection_time_limit", build_int_row(
+            "检测时限 (秒)", default=30, minimum=1, maximum=600, colors=c,
+            on_changed=self._emit_sub(cn, "detection_time_limit")))
+        add("auto_downscale", build_switch_row(
+            "自动降分辨率", default=True, colors=c,
+            on_changed=self._emit_sub(cn, "auto_downscale")))
+        add("downscale_target_height", build_int_row(
+            "降分辨率目标高度", default=720, minimum=240, maximum=2160, colors=c,
+            on_changed=self._emit_sub(cn, "downscale_target_height")))
+        add("min_consecutive_frames", build_int_row(
+            "最小连续帧数", default=2, minimum=1, maximum=10, colors=c,
+            on_changed=self._emit_sub(cn, "min_consecutive_frames")))
+        add("use_grayscale", build_switch_row(
+            "使用灰度匹配", default=True, colors=c,
+            on_changed=self._emit_sub(cn, "use_grayscale")))
+        add("use_roi", build_switch_row(
+            "使用 ROI 区域", default=True, colors=c,
+            on_changed=self._emit_sub(cn, "use_roi")))
+        add("roi_padding", build_int_row(
+            "ROI 填充", default=50, minimum=0, maximum=500, colors=c,
+            on_changed=self._emit_sub(cn, "roi_padding")))
+        add("roi_search_expand", build_float_row(
+            "ROI 搜索扩展", default=1.5, minimum=1.0, maximum=5.0,
+            step=0.1, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, "roi_search_expand")))
+        add("early_stop_threshold", build_float_row(
+            "早停阈值", default=0.92, minimum=0.0, maximum=1.0,
+            step=0.01, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, "early_stop_threshold")))
+        add("max_workers", build_int_row(
+            "最大工作线程", default=4, minimum=1, maximum=32, colors=c,
+            on_changed=self._emit_sub(cn, "max_workers")))
+        add("debug_mode", build_switch_row(
+            "调试模式", default=True, colors=c,
+            on_changed=self._emit_sub(cn, "debug_mode")))
+        add("output_result", build_switch_row(
+            "输出结果", default=True, colors=c,
+            on_changed=self._emit_sub(cn, "output_result")))
+
+        card.add_layout(layout)
+        return card
+
+    def _build_formation_card(self) -> MaterialCard:
+        """Formation 配置卡片：编队文本显示选项（3 个布尔字段）"""
+        card = MaterialCard("Formation")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        desc = QLabel("编队文本显示选项。控制编队信息中各部分的显隐。")
+        desc.setFont(self._typo.body_medium)
+        desc.setWordWrap(True)
+        self._dim_labels.append(desc)
+        layout.addWidget(desc)
+
+        cn = "formation"
+        c = self._colors
+        for field, label in [
+            ("show_skill", "显示技能"),
+            ("show_requirements", "显示练度"),
+            ("show_module", "显示模组"),
+        ]:
+            row = build_switch_row(
+                label, default=False, colors=c,
+                on_changed=self._emit_sub(cn, field))
+            layout.addWidget(row.widget)
+            self._register_sub_row(cn, field, row)
+
+        card.add_layout(layout)
+        return card
+
+    def _build_actions_card(self) -> MaterialCard:
+        """Actions 配置卡片：操作指令文本显示选项（8 个布尔字段）"""
+        card = MaterialCard("Actions")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        desc = QLabel("操作指令文本显示选项。控制操作信息中各部分的显隐。")
+        desc.setFont(self._typo.body_medium)
+        desc.setWordWrap(True)
+        self._dim_labels.append(desc)
+        layout.addWidget(desc)
+
+        cn = "actions"
+        c = self._colors
+        for field, label, default in [
+            ("show_skill", "显示技能", False),
+            ("show_requirements", "显示练度", False),
+            ("show_module", "显示模组", False),
+            ("show_location", "显示位置", False),
+            ("show_direction", "显示方向", True),
+            ("show_delay", "显示延时", False),
+            ("show_conditions", "显示条件", False),
+            ("show_doc", "显示描述", False),
+        ]:
+            row = build_switch_row(
+                label, default=default, colors=c,
+                on_changed=self._emit_sub(cn, field))
+            layout.addWidget(row.widget)
+            self._register_sub_row(cn, field, row)
+
+        card.add_layout(layout)
+        return card
+
+    def _build_compose_main_card(self, style: str) -> MaterialCard:
+        """Video Compose 主卡片：基础字段（始终可见）
+        + 高级字段（字体/阴影/颜色等，开关打开后可见）。"""
+        card = MaterialCard(f"Video Compose · {style}")
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        desc = QLabel(f"视频合成参数（{style}）。修改后下次合成时生效。")
+        desc.setFont(self._typo.body_medium)
+        desc.setWordWrap(True)
+        self._dim_labels.append(desc)
+        layout.addWidget(desc)
+
+        cn = style
+        c = self._colors
+
+        def add(field_path: str, row: FieldRow) -> None:
+            layout.addWidget(row.widget)
+            self._register_sub_row(cn, field_path, row)
+
+        # 顶层字段
+        add("output_width", build_int_row(
+            "输出宽度", default=1920, minimum=480, maximum=3840, colors=c,
+            on_changed=self._emit_sub(cn, "output_width")))
+        add("output_height", build_int_row(
+            "输出高度", default=1080, minimum=270, maximum=2160, colors=c,
+            on_changed=self._emit_sub(cn, "output_height")))
+
+        if style == "style1":
+            add("video_scale", build_float_row(
+                "视频缩放比例", default=0.8, minimum=0.1, maximum=2.0,
+                step=0.01, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, "video_scale")))
+            add("video_x", build_int_row(
+                "视频 X 坐标", default=320, minimum=-1920, maximum=3840, colors=c,
+                on_changed=self._emit_sub(cn, "video_x")))
+            add("video_y", build_int_row(
+                "视频 Y 坐标", default=72, minimum=-1080, maximum=2160, colors=c,
+                on_changed=self._emit_sub(cn, "video_y")))
+
+        add("video_quality", build_combo_row(
+            "视频质量", items=["low", "middle", "high"], default="middle", colors=c,
+            on_changed=self._emit_sub(cn, "video_quality")))
+
+        # 文字叠加（text_overlay）子区域标题
+        overlay_title = QLabel("文字叠加 (text_overlay)")
+        overlay_title.setStyleSheet(
+            f"color: {c.on_surface_variant}; border: none;"
+            f" background: transparent; font-weight: 500; font-size: 13px;"
+            f" letter-spacing: 0.5px; margin-top: 8px;"
+        )
+        layout.addWidget(overlay_title)
+        self._dim_labels.append(overlay_title)
+
+        tp = "text_overlay"
+        add(f"{tp}.enabled", build_switch_row(
+            "启用文字叠加", default=True, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.enabled")))
+        add(f"{tp}.font_size", build_int_row(
+            "字体大小", default=45 if style == "style1" else 75,
+            minimum=8, maximum=300, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.font_size")))
+        add(f"{tp}.shadow_enabled", build_switch_row(
+            "启用阴影", default=True, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.shadow_enabled")))
+
+        if style == "style1":
+            add(f"{tp}.text_x", build_int_row(
+                "文字 X 坐标", default=0, minimum=-1920, maximum=3840, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.text_x")))
+            add(f"{tp}.text_y", build_int_row(
+                "文字 Y 坐标", default=65, minimum=-1080, maximum=2160, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.text_y")))
+            add(f"{tp}.subtitle_auto_fit", build_switch_row(
+                "字幕自适应", default=False, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.subtitle_auto_fit")))
+            add(f"{tp}.auto_fit_min_font_size", build_int_row(
+                "自适应最小字号", default=10, minimum=1, maximum=100, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_min_font_size")))
+            add(f"{tp}.auto_fit_max_font_size", build_int_row(
+                "自适应最大字号", default=200, minimum=10, maximum=500, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_max_font_size")))
+
+        card.add_layout(layout)
+
+        # ── 高级字段容器（开关关闭时隐藏，不占用布局空间）──
+        adv_container = QWidget()
+        adv_container.setStyleSheet("background: transparent; border: none;")
+        adv_layout = QVBoxLayout(adv_container)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(16)
+
+        def add_adv(field_path: str, row: FieldRow) -> None:
+            adv_layout.addWidget(row.widget)
+            self._register_sub_row(cn, field_path, row)
+
+        add_adv(f"{tp}.font", build_string_row(
+            "字体文件名", default="SOURCEHANSANSCN-HEAVY.OTF", colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.font")))
+        add_adv(f"{tp}.font_dir", build_path_row(
+            "字体目录", mode=FileSelector.MODE_DIRECTORY, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.font_dir")))
+        add_adv(f"{tp}.font_scale", build_float_row(
+            "字体缩放", default=1.0, minimum=0.1, maximum=5.0,
+            step=0.1, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.font_scale")))
+        add_adv(f"{tp}.fade_duration", build_float_row(
+            "淡入淡出时长", default=0.5, minimum=0.0, maximum=5.0,
+            step=0.1, decimals=2, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.fade_duration")))
+        add_adv(f"{tp}.shadow_offset_x", build_int_row(
+            "阴影 X 偏移", default=2, minimum=-50, maximum=50, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.shadow_offset_x")))
+        add_adv(f"{tp}.shadow_offset_y", build_int_row(
+            "阴影 Y 偏移", default=2, minimum=-50, maximum=50, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.shadow_offset_y")))
+        add_adv(f"{tp}.shadow_blur", build_int_row(
+            "阴影模糊", default=4, minimum=0, maximum=50, colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.shadow_blur")))
+        add_adv(f"{tp}.shadow_color", build_color_row(
+            "阴影颜色", default="#000000", colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.shadow_color")))
+        add_adv(f"{tp}.text_color", build_color_row(
+            "文字颜色", default="#FFFFFF", colors=c,
+            on_changed=self._emit_sub(cn, f"{tp}.text_color")))
+
+        if style == "style1":
+            add_adv(f"{tp}.auto_fit_available_width", build_nullable_int_row(
+                "自适应可用宽度 (None=自动)", default=None,
+                minimum=1, maximum=3840, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_available_width")))
+        else:
+            add_adv(f"{tp}.max_chars_per_line", build_int_row(
+                "每行最大字符数", default=20, minimum=1, maximum=200, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.max_chars_per_line")))
+            add_adv(f"{tp}.line_height", build_float_row(
+                "行高", default=1.5, minimum=0.5, maximum=5.0,
+                step=0.1, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.line_height")))
+            add_adv(f"{tp}.bottom_margin", build_int_row(
+                "底部边距", default=60, minimum=0, maximum=500, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.bottom_margin")))
+
+        adv_container.setVisible(False)
+        card.add_widget(adv_container)
+        if style == "style1":
+            self._compose_style1_advanced_container = adv_container
+        else:
+            self._compose_style2_advanced_container = adv_container
+        return card
+
     def _apply_grid_layout(self, two_column: bool = False) -> None:
-        """卡片网格布局：始终保持单列竖直堆叠（外观/配置/高级/性能），
+        """卡片网格布局：始终保持单列竖直堆叠，
         保留 two_column 参数签名以兼容历史调用点（忽略其值）。
 
-        单列布局避免 2x2 错位，并让四张卡片保持等宽，与 Hero 标题对齐。
+        单列布局避免 2x2 错位，并让卡片保持等宽，与 Hero 标题对齐。
         """
         # 参数兼容：历史断点会传 True，但视觉上卡片单列更协调，故忽略
         for i in reversed(range(self._cards_grid.count())):
@@ -474,14 +963,21 @@ class SettingsPage(QWidget):
 
         self._cards_grid.setColumnStretch(0, 1)
         self._cards_grid.setColumnStretch(1, 0)
-        # 卡片单列竖直堆叠；任一卡片为 None 时跳过（FFmpeg 卡片在非 Windows 上为 None）
-        for row, card in enumerate(
-            (self._appearance_card, self._config_card,
-             self._advanced_card, self._performance_card,
-             self._ffmpeg_card)
+        # 始终可见卡片单列竖直堆叠；任一卡片为 None 时跳过（FFmpeg 卡片在非 Windows 上为 None）
+        r = 0
+        for card in (
+            self._appearance_card,
+            self._advanced_card, self._ffmpeg_card,
+            self._compose_style1_main_card, self._compose_style2_main_card,
+            self._config_card,
         ):
             if card is not None:
-                self._cards_grid.addWidget(card, row, 0)
+                self._cards_grid.addWidget(card, r, 0)
+                r += 1
+        # 高级开关卡片 + 内容容器（内容 setVisible 控制显隐）
+        self._cards_grid.addWidget(self._advanced_toggle_card, r, 0)
+        r += 1
+        self._cards_grid.addWidget(self._collapsible_content, r, 0)
 
     def _reflow_checkbox_grid(self, two_col: bool) -> None:
         """根据可用宽度决定复选框网格是 1 列还是 2 列"""
@@ -535,6 +1031,30 @@ class SettingsPage(QWidget):
     def _on_theme_toggled(self, dark: bool) -> None:
         self._is_dark = dark
         self.theme_change_requested.emit(dark)
+
+    def _on_advanced_toggled(self, enabled: bool) -> None:
+        # 开关切换时立即显示/隐藏所有高级设置容器：
+        # 1. 全局设置卡片内的高级字段（日志/子配置路径）
+        # 2. VideoCompose style1/style2 卡片内的高级字段（字体/阴影/颜色）
+        # 3. 独立的 Track/Formation/Actions/Performance 卡片
+        self._global_advanced_container.setVisible(enabled)
+        self._compose_style1_advanced_container.setVisible(enabled)
+        self._compose_style2_advanced_container.setVisible(enabled)
+        self._collapsible_content.setVisible(enabled)
+        self.advanced_expanded_changed.emit(enabled)
+
+    def set_advanced_expanded(self, expanded: bool) -> None:
+        """程序化设置开关状态（阻塞信号，避免触发 advanced_expanded_changed 回写）"""
+        self._advanced_switch.blockSignals(True)
+        try:
+            self._advanced_switch.set_checked(expanded)
+        finally:
+            self._advanced_switch.blockSignals(False)
+        # set_checked 不触发 toggled，需手动同步所有高级容器显隐
+        self._global_advanced_container.setVisible(expanded)
+        self._compose_style1_advanced_container.setVisible(expanded)
+        self._compose_style2_advanced_container.setVisible(expanded)
+        self._collapsible_content.setVisible(expanded)
 
     def _on_multithreading_toggled(self, enabled: bool) -> None:
         # 开关切换时同步并发数输入框的可用态：关闭时置灰
@@ -611,9 +1131,15 @@ class SettingsPage(QWidget):
         """主题切换时刷新页面所有颜色相关样式"""
         self._colors = colors
         self._theme_switch.set_colors(colors)
+        self._advanced_switch.set_colors(colors)
         self._mt_switch.set_colors(colors)
         if getattr(self, "_ffmpeg_switch", None) is not None:
             self._ffmpeg_switch.set_colors(colors)
+        # 刷新所有子配置 FieldRow 的颜色
+        for row in self._sub_field_rows.values():
+            row.set_colors(colors)
+        for row in self._pipeline_field_rows.values():
+            row.set_colors(colors)
         self._apply_colors()
         # 状态文本颜色随主题刷新
         if self._config_status.text():
@@ -663,10 +1189,67 @@ class SettingsPage(QWidget):
             self._log_level_combo.blockSignals(False)
 
     def set_advanced_enabled(self, enabled: bool) -> None:
-        """启用/禁用所有高级配置控件（MAA/Output/Log level）"""
+        """启用/禁用所有高级配置控件（MAA/Output/Log level + 新增字段）"""
         self._maa_selector.setEnabled(enabled)
         self._output_selector.setEnabled(enabled)
         self._log_level_combo.setEnabled(enabled)
+        for row in self._pipeline_field_rows.values():
+            row.set_enabled(enabled)
+
+    # ── 新增 pipeline.json 字段公开访问 ────────────────────
+
+    def set_log_to_file(self, enabled: bool) -> None:
+        row = self._pipeline_field_rows.get("log_to_file")
+        if row:
+            row.set_value(bool(enabled), block_signal=True)
+
+    def set_log_max_bytes(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("log_max_bytes")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_log_backup_count(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("log_backup_count")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_maa_timeout(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("maa_timeout_seconds")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_maa_max_retries(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("maa_max_retries")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_formation_path(self, path: str) -> None:
+        row = self._pipeline_field_rows.get("formation")
+        if row:
+            row.set_value(path or "", block_signal=True)
+
+    def set_actions_path(self, path: str) -> None:
+        row = self._pipeline_field_rows.get("actions")
+        if row:
+            row.set_value(path or "", block_signal=True)
+
+    def set_track_path(self, path: str) -> None:
+        row = self._pipeline_field_rows.get("track")
+        if row:
+            row.set_value(path or "", block_signal=True)
+
+    # ── 子配置控件公开访问 ────────────────────────────────
+
+    def load_sub_config_values(self, config_proxy: Any) -> None:
+        """从 ConfigProxy 加载所有子配置值到 UI 控件（阻塞信号避免回写）"""
+        for (config_name, field_path), row in self._sub_field_rows.items():
+            value = config_proxy.get_sub(config_name, field_path)
+            row.set_value(value, block_signal=True)
+
+    def set_sub_config_enabled(self, enabled: bool) -> None:
+        """启用/禁用所有子配置控件（流水线运行期间调用）"""
+        for row in self._sub_field_rows.values():
+            row.set_enabled(enabled)
 
     # ── 性能配置控件公开访问 ────────────────────────────────
 
@@ -790,9 +1373,15 @@ class SettingsPage(QWidget):
             self._conc_spin.setStyleSheet(self._conc_spin_qss())
         # 同步刷新卡片背景色：MaterialCard 使用 paintEvent 自绘圆角背景，
         # 此处需调用 set_surface_color 更新颜色，确保暗色模式正确
-        for card in (self._appearance_card, self._config_card,
-                     self._advanced_card, self._performance_card,
-                     self._ffmpeg_card):
+        all_cards = [
+            self._appearance_card, self._config_card, self._advanced_card,
+            self._ffmpeg_card,
+            self._compose_style1_main_card, self._compose_style2_main_card,
+            self._advanced_toggle_card,
+            self._track_card, self._formation_card, self._actions_card,
+            self._performance_card,
+        ]
+        for card in all_cards:
             if card is not None:
                 card.set_surface_color(self._colors.surface)
         # 同步刷新按钮配色，使其在主题切换后保持视觉一致

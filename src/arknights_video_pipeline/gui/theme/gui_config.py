@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # 默认 GUI 配置（config/gui.json 缺失时使用）
 _GUI_DEFAULTS: dict[str, Any] = {
     "theme": "light",
+    "advanced_expanded": False,
 }
 
 
@@ -113,6 +114,18 @@ class GuiConfig(QObject):
     def is_dark_theme(self) -> bool:
         """便捷方法：当前主题是否为深色"""
         return self.theme() == "dark"
+
+    # ── 高级分区折叠状态 ─────────────────────────────────
+
+    def is_advanced_expanded(self) -> bool:
+        """高级分区是否展开"""
+        return bool(self._data.get("advanced_expanded", False))
+
+    def set_advanced_expanded(self, expanded: bool) -> None:
+        """设置高级分区展开/收起状态并持久化"""
+        self._data["advanced_expanded"] = bool(expanded)
+        self._trigger_save()
+        self.config_changed.emit()
 
     # ── 通用访问（供后续扩展用，如窗口位置）───────────────
 

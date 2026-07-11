@@ -91,6 +91,21 @@ class ConfigManager:
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
 
+    def load_json_file(self, path: str) -> dict[str, Any] | None:
+        """公开方法：加载指定路径的 JSON 配置文件
+
+        封装 ``_load_json`` 供外部（如 ConfigProxy）直接按路径加载
+        子配置文件，无需通过 pipeline 中的键名间接读取。
+        """
+        return self._load_json(path)
+
+    def save_sub_config(self, config_path: str, data: dict[str, Any]) -> None:
+        """保存子配置字典到指定的 JSON 文件路径
+
+        用于将 track/formation/actions/video_compose 等子配置写回磁盘。
+        """
+        self._save_json(config_path, data)
+
     # ── 全局配置 ──────────────────────────────────────────
 
     def load_pipeline_config(self, path: str | None = None) -> dict[str, Any]:

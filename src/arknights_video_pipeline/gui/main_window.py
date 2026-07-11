@@ -398,6 +398,20 @@ class MainWindow(QMainWindow):
         # FFmpeg 路径配置（仅 Windows）
         sp.ffmpeg_custom_changed.connect(self._config.set_ffmpeg_custom_enabled)
         sp.ffmpeg_path_changed.connect(self._config.set_ffmpeg_path)
+        # 新增 pipeline.json 字段信号
+        sp.log_to_file_changed.connect(self._config.set_log_to_file)
+        sp.log_max_bytes_changed.connect(self._config.set_log_max_bytes)
+        sp.log_backup_count_changed.connect(self._config.set_log_backup_count)
+        sp.maa_timeout_changed.connect(self._config.set_maa_timeout)
+        sp.maa_max_retries_changed.connect(self._config.set_maa_max_retries)
+        sp.formation_path_changed.connect(self._config.set_formation_path)
+        sp.actions_path_changed.connect(self._config.set_actions_path)
+        sp.track_path_changed.connect(self._config.set_track_path)
+        # 子配置字段变更（track/formation/actions/video_compose style1+style2）
+        sp.sub_config_changed.connect(self._config.set_sub)
+        # 高级分区折叠状态：从 gui.json 加载初始值 + 连接变更信号
+        sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
+        sp.advanced_expanded_changed.connect(self._gui_config.set_advanced_expanded)
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
         for key, cb in self._skip_checkboxes.items():
@@ -463,6 +477,17 @@ class MainWindow(QMainWindow):
         # FFmpeg 路径配置：从 pipeline.json 恢复自定义开关与路径
         sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
         sp.set_ffmpeg_path(self._config.ffmpeg_path())
+        # 新增 pipeline.json 字段：日志/MAA 超时/重试/子配置路径
+        sp.set_log_to_file(self._config.log_to_file())
+        sp.set_log_max_bytes(self._config.log_max_bytes())
+        sp.set_log_backup_count(self._config.log_backup_count())
+        sp.set_maa_timeout(self._config.maa_timeout())
+        sp.set_maa_max_retries(self._config.maa_max_retries())
+        sp.set_formation_path(self._config.formation_path())
+        sp.set_actions_path(self._config.actions_path())
+        sp.set_track_path(self._config.track_path())
+        # 子配置字段（track/formation/actions/video_compose style1+style2）
+        sp.load_sub_config_values(self._config)
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -479,7 +504,7 @@ class MainWindow(QMainWindow):
 
         1. 重新加载磁盘上的 pipeline.json，使内存中的 ConfigProxy
            与重置后的文件保持一致（否则在 ``closeEvent`` 中调用
-           ``self._config.save()`` 会把重置前的旧值写回文件）。
+           ``self._config.save_all()`` 会把重置前的旧值写回文件）。
         2. 刷新共享控件（MAA/Output 路径、Log level、Style）的显示，
            阻塞控件信号以避免刷新过程触发回写配置。
         3. 不修改与重置无关的字段（如 video_paths、skip_steps），
@@ -510,6 +535,20 @@ class MainWindow(QMainWindow):
         # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
         sp.set_multithreading(self._config.multithreading())
         sp.set_max_concurrent(self._config.max_concurrent())
+        # FFmpeg 路径配置同步刷新
+        sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
+        sp.set_ffmpeg_path(self._config.ffmpeg_path())
+        # 新增 pipeline.json 字段同步刷新
+        sp.set_log_to_file(self._config.log_to_file())
+        sp.set_log_max_bytes(self._config.log_max_bytes())
+        sp.set_log_backup_count(self._config.log_backup_count())
+        sp.set_maa_timeout(self._config.maa_timeout())
+        sp.set_maa_max_retries(self._config.maa_max_retries())
+        sp.set_formation_path(self._config.formation_path())
+        sp.set_actions_path(self._config.actions_path())
+        sp.set_track_path(self._config.track_path())
+        # 子配置字段刷新（重置后恢复默认值）
+        sp.load_sub_config_values(self._config)
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
@@ -584,6 +623,8 @@ class MainWindow(QMainWindow):
         self._settings_page.set_performance_enabled(not running)
         # FFmpeg 路径配置运行期间禁止修改
         self._settings_page.set_ffmpeg_enabled(not running)
+        # 子配置字段（track/formation/actions/video_compose）运行期间禁止修改
+        self._settings_page.set_sub_config_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
 
@@ -733,13 +774,13 @@ class MainWindow(QMainWindow):
                 # 等待 worker 线程退出，避免 QThread 被销毁时仍在运行
                 self._service.wait_for_shutdown(timeout_ms=5000)
                 self._gui_config.save()
-                self._config.save()
+                self._config.save_all()
                 event.accept()
             else:
                 event.ignore()
         else:
             self._gui_config.save()
-            self._config.save()
+            self._config.save_all()
             event.accept()
 
     # ── Material 消息对话框快捷方法 ─────────────────────

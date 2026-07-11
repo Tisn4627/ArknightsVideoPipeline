@@ -24,6 +24,21 @@ class ConfigProxy(QObject):
     """配置代理，连接 GUI 控件与 ConfigManager"""
 
     config_changed = pyqtSignal(str, object)
+    # 子配置变更信号：(config_name, field_path, value)
+    # config_name 为 "formation"/"actions"/"track"/"style1"/"style2"，
+    # field_path 支持点号分隔的嵌套路径如 "text_overlay.enabled"
+    sub_config_changed = pyqtSignal(str, str, object)
+
+    # 子配置路径解析映射：config_name -> (pipeline_key_or_None, fixed_path_or_None)
+    # pipeline_key 不为 None 时从 pipeline[pipeline_key] 读取路径（如 formation/actions/track）；
+    # fixed_path 不为 None 时使用固定路径（如 video_compose 的两个风格文件）。
+    _SUB_CONFIG_PATHS: dict[str, tuple[str | None, str | None]] = {
+        "formation": ("formation", None),
+        "actions":   ("actions", None),
+        "track":     ("track", None),
+        "style1":    (None, "config/video_compose/style1.json"),
+        "style2":    (None, "config/video_compose/style2.json"),
+    }
 
     def __init__(self, project_dir: str = PROJECT_ROOT, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -36,6 +51,10 @@ class ConfigProxy(QObject):
             bool(self._config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
             self._config_mgr.pipeline.get("ffmpeg_path", ""),
         )
+        # 加载所有子配置到内存（track/formation/actions/video_compose style1+style2）
+        self._sub_configs: dict[str, dict[str, Any]] = {}
+        for name in self._SUB_CONFIG_PATHS:
+            self._load_sub_config_into_memory(name)
 
     # ── 基础读写 ──────────────────────────────────────────
 
@@ -51,11 +70,88 @@ class ConfigProxy(QObject):
         self.config_changed.emit(key, value)
 
     def save(self) -> None:
-        """保存当前流水线配置到 config/pipeline.json"""
+        """保存当前流水线配置到 config/pipeline.json
+
+        .. deprecated::
+            新代码应使用 ``save_all()`` 同时保存 pipeline.json 与所有子配置文件。
+            保留此方法以兼容仅需要保存 pipeline.json 的调用点。
+        """
         self._config_mgr.save_pipeline_config()
 
     def load(self, path: str | None = None) -> None:
         self._config_mgr.load_pipeline_config(path)
+        # 重新加载子配置（pipeline.json 中的路径可能已变更）
+        for name in self._SUB_CONFIG_PATHS:
+            self._load_sub_config_into_memory(name)
+
+    # ── 子配置管理（track/formation/actions/video_compose） ────
+
+    def _load_sub_config_into_memory(self, name: str) -> None:
+        """从磁盘加载指定子配置到内存
+
+        对于 formation/actions/track，路径来自 pipeline.json 中对应的键；
+        对于 video_compose 的 style1/style2，使用固定路径。
+        """
+        pipeline_key, fixed_path = self._SUB_CONFIG_PATHS[name]
+        if pipeline_key:
+            data = self._config_mgr.load_sub_config(pipeline_key)
+        else:
+            data = self._config_mgr.load_json_file(fixed_path) or {}
+        self._sub_configs[name] = dict(data) if data else {}
+
+    def get_sub(self, config_name: str, field_path: str,
+                default: Any = None) -> Any:
+        """读取子配置字段值，支持点号分隔的嵌套路径
+
+        Args:
+            config_name: 子配置名称（"formation"/"actions"/"track"/"style1"/"style2"）
+            field_path: 字段路径，如 "match_threshold" 或 "text_overlay.enabled"
+            default: 字段不存在时返回的默认值
+
+        Returns:
+            字段值，或 ``default``
+        """
+        data: Any = self._sub_configs.get(config_name, {})
+        for part in field_path.split("."):
+            if isinstance(data, dict) and part in data:
+                data = data[part]
+            else:
+                return default
+        return data
+
+    def set_sub(self, config_name: str, field_path: str,
+                value: Any) -> None:
+        """设置子配置字段值，支持点号分隔的嵌套路径
+
+        中间层字典不存在时自动创建。设置后发射 ``sub_config_changed`` 信号。
+        """
+        data = self._sub_configs.setdefault(config_name, {})
+        parts = field_path.split(".")
+        for part in parts[:-1]:
+            data = data.setdefault(part, {})
+        data[parts[-1]] = value
+        self.sub_config_changed.emit(config_name, field_path, value)
+
+    def save_all(self) -> None:
+        """保存 pipeline.json + 所有子配置文件到磁盘"""
+        self._config_mgr.save_pipeline_config()
+        for name, (pipeline_key, fixed_path) in self._SUB_CONFIG_PATHS.items():
+            if name not in self._sub_configs:
+                continue
+            if pipeline_key:
+                path = self._config_mgr.pipeline.get(pipeline_key)
+            else:
+                path = fixed_path
+            if path:
+                self._config_mgr.save_sub_config(path, self._sub_configs[name])
+
+    def reload_sub_config(self, name: str) -> None:
+        """从磁盘重新加载指定子配置
+
+        当用户在 GUI 中修改了 formation/actions/track 的路径后，
+        需要调用此方法刷新内存中对应的子配置数据。
+        """
+        self._load_sub_config_into_memory(name)
 
     # ── 业务字段便捷访问 ──────────────────────────────────
 
@@ -180,12 +276,84 @@ class ConfigProxy(QObject):
         from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(self.get("ffmpeg_custom_enabled", False), path or "")
 
+    # ── 日志配置 ────────────────────────────────────────
+
+    def log_to_file(self) -> bool:
+        return bool(self.get("log_to_file", True))
+
+    def set_log_to_file(self, enabled: bool) -> None:
+        self.set("log_to_file", bool(enabled))
+
+    def log_max_bytes(self) -> int:
+        try:
+            return int(self.get("log_max_bytes", 10 * 1024 * 1024))
+        except (TypeError, ValueError):
+            return 10 * 1024 * 1024
+
+    def set_log_max_bytes(self, n: int) -> None:
+        self.set("log_max_bytes", int(n))
+
+    def log_backup_count(self) -> int:
+        try:
+            return int(self.get("log_backup_count", 3))
+        except (TypeError, ValueError):
+            return 3
+
+    def set_log_backup_count(self, n: int) -> None:
+        self.set("log_backup_count", int(n))
+
+    # ── MAA 超时与重试 ────────────────────────────────────
+
+    def maa_timeout(self) -> int:
+        try:
+            return int(self.get("maa_timeout_seconds", 600))
+        except (TypeError, ValueError):
+            return 600
+
+    def set_maa_timeout(self, seconds: int) -> None:
+        self.set("maa_timeout_seconds", int(seconds))
+
+    def maa_max_retries(self) -> int:
+        try:
+            return int(self.get("maa_max_retries", 2))
+        except (TypeError, ValueError):
+            return 2
+
+    def set_maa_max_retries(self, n: int) -> None:
+        self.set("maa_max_retries", int(n))
+
+    # ── 子配置文件路径（formation/actions/track） ──────────
+
+    def formation_path(self) -> str:
+        return self.get("formation", "config/formation.json")
+
+    def set_formation_path(self, path: str) -> None:
+        self.set("formation", path or "config/formation.json")
+        self.reload_sub_config("formation")
+
+    def actions_path(self) -> str:
+        return self.get("actions", "config/actions.json")
+
+    def set_actions_path(self, path: str) -> None:
+        self.set("actions", path or "config/actions.json")
+        self.reload_sub_config("actions")
+
+    def track_path(self) -> str:
+        return self.get("track", "config/track.json")
+
+    def set_track_path(self, path: str) -> None:
+        self.set("track", path or "config/track.json")
+        self.reload_sub_config("track")
+
     # ── 构建运行参数 ──────────────────────────────────────
 
     def build_overrides(self) -> dict[str, Any]:
         """构建用于合并到 ConfigManager 的 CLI/GUI 覆盖项"""
         overrides: dict[str, Any] = {}
         for key in ["maa_path", "output_dir", "log_level", "log_to_file",
+                    "log_max_bytes", "log_backup_count",
+                    "maa_timeout_seconds", "maa_max_retries",
+                    "formation", "actions", "track",
                     "video_compose_style", "video_compose_config",
                     "ffmpeg_custom_enabled", "ffmpeg_path"]:
             value = self.get(key)
