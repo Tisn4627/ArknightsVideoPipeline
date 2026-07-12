@@ -14,7 +14,7 @@ import os
 
 from movielite import VideoClip, ImageClip, TextClip, VideoWriter
 from movielite.vfx import FadeIn, FadeOut
-from pictex import Canvas, Shadow
+from pictex import Canvas
 
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config,
@@ -33,18 +33,18 @@ from arknights_video_pipeline.core.video_compose_common import (
 DEFAULT_CONFIG = {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.8,
-    "video_x": 320,
-    "video_y": 72,
+    "video_scale": 0.85,
+    "video_x": 272,
+    "video_y": 47,
     "video_quality": "middle",
     "text_overlay": {
         "enabled": True,
         "font": "SOURCEHANSANSCN-HEAVY.OTF",
         "font_dir": "resource/font",
-        "font_size": 45,
+        "font_size": 25,
         "font_scale": 1,
-        "text_x": 0,
-        "text_y": 65,
+        "text_x": 50,
+        "text_y": 240,
         "fade_duration": 0.5,
         "shadow_enabled": True,
         "shadow_offset_x": 2,
@@ -98,7 +98,7 @@ def compute_auto_fit_font_size(texts, font_path, available_width, text_config, a
                     all_lines.append(line)
 
     if not all_lines:
-        return text_config.get("font_size", 45)
+        return text_config.get("font_size", 25)
 
     # 预构建 Canvas 模板，二分查找中仅复用 font_size 变化（L5 优化：避免重复创建）
     # 注意：pictex Canvas 是链式 API，font_size() 返回新实例，
@@ -168,7 +168,7 @@ def create_text_clip(text, start, duration, text_config, project_root):
         os.path.join(project_root, text_config.get("font_dir", "resource/font"))
     )
 
-    font_size = text_config.get("font_size", 45)
+    font_size = text_config.get("font_size", 25)
     font_scale = text_config.get("font_scale", 1)
     effective_size = font_size * font_scale
     fade_duration = text_config.get("fade_duration", 0.5)
@@ -179,21 +179,20 @@ def create_text_clip(text, start, duration, text_config, project_root):
 
     # 阴影效果
     if text_config.get("shadow_enabled", True):
-        shadow = Shadow(
-            color=text_config.get("shadow_color", "#000000"),
+        canvas = canvas.add_shadow(
             offset=(text_config.get("shadow_offset_x", 2), text_config.get("shadow_offset_y", 2)),
             blur_radius=text_config.get("shadow_blur", 4),
+            color=text_config.get("shadow_color", "#000000"),
         )
-        canvas = canvas.text_shadows(shadow)
 
     canvas = canvas.background_color("transparent").padding(10)
 
     # 创建TextClip
     clip = TextClip(text, start=start, duration=duration, canvas=canvas)
 
-    # 设置位置（默认值与 DEFAULT_CONFIG 中的 text_x=0、text_y=65 保持一致）
-    text_x = text_config.get("text_x", 0)
-    text_y = text_config.get("text_y", 65)
+    # 设置位置（默认值与 DEFAULT_CONFIG 中的 text_x=50、text_y=240 保持一致）
+    text_x = text_config.get("text_x", 50)
+    text_y = text_config.get("text_y", 240)
     clip.set_position((text_x, text_y))
 
     # 淡入淡出效果
@@ -295,7 +294,7 @@ def compose_video(config):
             if available_width is None:
                 # 自动计算：根据视频区域和字幕位置推断可用宽度
                 video_width = int(output_size[0] * config["video_scale"])
-                text_x = text_config.get("text_x", 0)
+                text_x = text_config.get("text_x", 50)
 
                 if text_x < config["video_x"]:
                     # 字幕在视频左侧区域

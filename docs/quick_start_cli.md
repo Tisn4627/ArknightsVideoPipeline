@@ -77,6 +77,7 @@ config/
 ├── formation.json         # 编队转文本配置
 ├── actions.json           # 操作转文本配置
 ├── track.json             # 开始按钮识别配置
+├── gui.json               # GUI 配置（主题等）
 └── video_compose/         # 视频合成风格配置
     ├── style1.json        # style1 风格（默认，底板+视频叠加）
     └── style2.json        # style2 风格（全屏视频+底部字幕）

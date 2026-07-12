@@ -95,7 +95,7 @@ pip install -r requirements.txt
 ### 2. 安装 PyInstaller
 
 ```bash
-pip install pyinstaller>=6.0
+pip install "pyinstaller>=6.0"
 ```
 
 ### 3. 验证安装
@@ -106,6 +106,8 @@ python -m PyInstaller --version
 
 # 验证项目可正常导入
 python -c "import arknights_video_pipeline; print('OK')"
+
+#若未安装 arknights_video_pipeline,请确保能够正常运行主程序
 ```
 
 ### 4. 验证打包工具
@@ -261,7 +263,7 @@ python script/build_exe --analyze-only --clean-stdlib
 **解决方案：**
 
 ```bash
-pip install pyinstaller>=6.0
+pip install "pyinstaller>=6.0"
 ```
 
 ### 2. 打包后 exe 无法找到 config/resource/MAA
@@ -280,6 +282,7 @@ output_dir/
 │   ├── formation.json
 │   ├── actions.json
 │   ├── track.json
+│   ├── gui.json
 │   └── video_compose/
 │       ├── style1.json
 │       └── style2.json
@@ -295,12 +298,12 @@ output_dir/
 # CLI 模式
 ArknightsVideoPipeline-cli.exe --init-config
 
-# GUI 模式（通过 -- 传递参数）
-ArknightsVideoPipeline-gui.exe -- --init-config
-
 # 合并模式
 ArknightsVideoPipeline-combined.exe --init-config
 ```
+
+> **GUI 模式**不支持通过命令行生成配置文件。启动 GUI 后，进入 **Settings** 页面，
+> 在"配置文件"卡片中选择需要生成的配置并点击"生成"按钮即可。
 
 ### 3. 打包后 GUI 无法启动，提示 PyQt6 缺失
 
@@ -449,6 +452,7 @@ dist/
 │   ├── formation.json                   # 编队转文本配置
 │   ├── actions.json                     # 操作转文本配置
 │   ├── track.json                       # 开始按钮识别配置
+│   ├── gui.json                         # GUI 偏好配置（主题、折叠状态）
 │   └── video_compose/                   # 视频合成风格配置
 │       ├── style1.json
 │       └── style2.json

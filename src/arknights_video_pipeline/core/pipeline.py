@@ -733,7 +733,7 @@ def build_argparser() -> argparse.ArgumentParser:
         nargs="?",
         const="all",
         default=None,
-        help="生成默认配置文件并退出。可指定模块名: pipeline, formation, actions, track, compose, compose_style2；不指定则生成全部",
+        help="生成默认配置文件并退出。可指定模块名: pipeline, formation, actions, track, compose, compose_style2, gui；不指定则生成全部",
     )
     parser.add_argument(
         "--style", "-s",
@@ -761,14 +761,20 @@ _MODULE_CONFIGS: dict[str, tuple[str, str, str]] = {
     "track": ("track.json", "arknights_video_pipeline.core.track_startbutton", "DEFAULT_CONFIG"),
     "compose": ("video_compose/style1.json", "arknights_video_pipeline.core.video_compose", "DEFAULT_CONFIG"),
     "compose_style2": ("video_compose/style2.json", "arknights_video_pipeline.core.video_compose_style2", "DEFAULT_CONFIG"),
+    # gui.json 默认值来自 gui_config._GUI_DEFAULTS；动态导入在无 PyQt6 环境
+    # （CLI-only）会失败，_init_config 内部已有 ImportError 容错处理。
+    "gui": ("gui.json", "arknights_video_pipeline.gui.theme.gui_config", "_GUI_DEFAULTS"),
 }
 
 
-def _init_config(module: str) -> None:
+def _init_config(module: str) -> list[str]:
     """生成默认配置文件
 
     Args:
         module: 模块名 ("all" 生成全部, 或指定单个模块)
+
+    Returns:
+        成功生成的文件绝对路径列表（导入失败或未知模块时对应条目被跳过）
     """
     config_dir = os.path.join(PROJECT_ROOT, "config")
     os.makedirs(config_dir, exist_ok=True)
@@ -799,6 +805,11 @@ def _init_config(module: str) -> None:
         # 移除 _comment 等元数据键
         clean_config = {k: v for k, v in default_config.items() if not k.startswith("_")}
 
+        # 确保子目录存在（如 video_compose/）
+        file_dir = os.path.dirname(filepath)
+        if file_dir:
+            os.makedirs(file_dir, exist_ok=True)
+
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(clean_config, f, indent=4, ensure_ascii=False)
 
@@ -809,6 +820,75 @@ def _init_config(module: str) -> None:
         print(f"\n共生成 {len(generated)} 个配置文件")
     else:
         print("未生成任何配置文件")
+    return generated
+
+
+def ensure_default_configs() -> list[str]:
+    """确保默认配置文件存在，仅生成缺失的文件（不覆盖已有用户配置）
+
+    用于打包环境首次启动时自动生成必要的配置文件，避免因 config/ 目录
+    不存在导致 GUI 启动失败。与 ``_init_config`` 的区别：
+    ``_init_config`` 强制覆盖所有文件（用于 ``--init-config`` 重置），
+    本函数跳过已存在的文件（保护用户自定义配置）。
+
+    Returns:
+        本次新生成的文件绝对路径列表（已存在的文件不计入）
+    """
+    # 静态导入默认配置源模块——PyInstaller 静态分析能检测到 from...import，
+    # 从而确保这些模块被打包。importlib.import_module(variable) 无法被检测。
+    from arknights_video_pipeline.core.config import PIPELINE_DEFAULTS
+    from arknights_video_pipeline.core.formation_to_text import (
+        DEFAULT_CONFIG as _FORMATION_DEFAULTS,
+    )
+    from arknights_video_pipeline.core.actions_to_text import (
+        DEFAULT_CONFIG as _ACTIONS_DEFAULTS,
+    )
+    from arknights_video_pipeline.core.track_startbutton import (
+        DEFAULT_CONFIG as _TRACK_DEFAULTS,
+    )
+    from arknights_video_pipeline.core.video_compose import (
+        DEFAULT_CONFIG as _STYLE1_DEFAULTS,
+    )
+    from arknights_video_pipeline.core.video_compose_style2 import (
+        DEFAULT_CONFIG as _STYLE2_DEFAULTS,
+    )
+
+    _defaults_map: dict[str, dict] = {
+        "pipeline.json": PIPELINE_DEFAULTS,
+        "formation.json": _FORMATION_DEFAULTS,
+        "actions.json": _ACTIONS_DEFAULTS,
+        "track.json": _TRACK_DEFAULTS,
+        "video_compose/style1.json": _STYLE1_DEFAULTS,
+        "video_compose/style2.json": _STYLE2_DEFAULTS,
+    }
+
+    # gui_config 需要 PyQt6，CLI 模式下可能不可用
+    try:
+        from arknights_video_pipeline.gui.theme.gui_config import _GUI_DEFAULTS
+        _defaults_map["gui.json"] = _GUI_DEFAULTS
+    except ImportError:
+        pass
+
+    config_dir = os.path.join(PROJECT_ROOT, "config")
+
+    generated: list[str] = []
+    for filename, default_config in _defaults_map.items():
+        filepath = os.path.join(config_dir, filename)
+        if os.path.exists(filepath):
+            continue
+
+        clean_config = {k: v for k, v in default_config.items() if not k.startswith("_")}
+
+        file_dir = os.path.dirname(filepath)
+        if file_dir:
+            os.makedirs(file_dir, exist_ok=True)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(clean_config, f, indent=4, ensure_ascii=False)
+
+        generated.append(filepath)
+
+    return generated
 
 
 # ══════════════════════════════════════════════════════════

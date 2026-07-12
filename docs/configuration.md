@@ -204,9 +204,9 @@ python main.py --init-config compose
 |--------|------|--------|------|
 | `output_width` | integer | `1920` | 输出视频宽度（像素） |
 | `output_height` | integer | `1080` | 输出视频高度（像素） |
-| `video_scale` | float | `0.8` | 视频缩放比例（相对于输出尺寸） |
-| `video_x` | integer | `320` | 视频在底板上的 X 坐标偏移 |
-| `video_y` | integer | `72` | 视频在底板上的 Y 坐标偏移 |
+| `video_scale` | float | `0.85` | 视频缩放比例（相对于输出尺寸） |
+| `video_x` | integer | `272` | 视频在底板上的 X 坐标偏移 |
+| `video_y` | integer | `47` | 视频在底板上的 Y 坐标偏移 |
 | `video_quality` | string | `"middle"` | 输出视频质量，可选值：`low`、`middle`、`high`、`very_high` |
 
 ### style2 配置
@@ -234,10 +234,10 @@ python main.py --init-config compose
 | `enabled` | boolean | `true` | 是否启用文本叠加 |
 | `font` | string | `"SOURCEHANSANSCN-HEAVY.OTF"` | 字体文件名 |
 | `font_dir` | string | `"resource/font"` | 字体文件目录 |
-| `font_size` | integer | `45` | 字体大小（`subtitle_auto_fit` 启用时此值被自动覆盖） |
+| `font_size` | integer | `25` | 字体大小（`subtitle_auto_fit` 启用时此值被自动覆盖） |
 | `font_scale` | float | `1` | 字体缩放比例（`subtitle_auto_fit` 启用时自动设为 1） |
-| `text_x` | integer | `0` | 文本 X 坐标偏移 |
-| `text_y` | integer | `65` | 文本 Y 坐标偏移 |
+| `text_x` | integer | `50` | 文本 X 坐标偏移 |
+| `text_y` | integer | `240` | 文本 Y 坐标偏移 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
 | `shadow_offset_x` | integer | `2` | 阴影 X 偏移 |
@@ -267,7 +267,7 @@ python main.py --init-config compose
 | `enabled` | boolean | `true` | 是否启用文本叠加 |
 | `font` | string | `"SOURCEHANSANSCN-HEAVY.OTF"` | 字体文件名 |
 | `font_dir` | string | `"resource/font"` | 字体文件目录 |
-| `font_size` | integer | `75` | 字体大小 |
+| `font_size` | integer | `45` | 字体大小 |
 | `font_scale` | float | `1` | 字体缩放比例 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
@@ -290,9 +290,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.8,
-    "video_x": 320,
-    "video_y": 72,
+    "video_scale": 0.85,
+    "video_x": 272,
+    "video_y": 47,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
@@ -309,9 +309,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.8,
-    "video_x": 320,
-    "video_y": 72,
+    "video_scale": 0.85,
+    "video_x": 272,
+    "video_y": 47,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
@@ -330,9 +330,9 @@ python main.py --init-config compose
 {
     "output_width": 1920,
     "output_height": 1080,
-    "video_scale": 0.8,
-    "video_x": 320,
-    "video_y": 72,
+    "video_scale": 0.85,
+    "video_x": 272,
+    "video_y": 47,
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
@@ -353,7 +353,7 @@ python main.py --init-config compose
     "video_quality": "high",
     "text_overlay": {
         "enabled": true,
-        "font_size": 75,
+        "font_size": 45,
         "text_color": "#FFFFFF",
         "max_chars_per_line": 20,
         "bottom_margin": 60
@@ -373,6 +373,7 @@ python main.py --init-config compose
 | track.json | `config/track.json` | `core/track_startbutton.py` | `track` |
 | style1.json | `config/video_compose/style1.json` | `core/video_compose.py` | `compose` |
 | style2.json | `config/video_compose/style2.json` | `core/video_compose_style2.py` | `compose_style2` |
+| gui.json | `config/gui.json` | `gui/theme/gui_config.py` | `gui` |
 
 > **注意**：视频合成风格配置文件位于 `config/video_compose/` 目录下，每个风格对应一个 JSON 文件。默认风格为 `style1`，可通过 `--style` 参数指定其他风格。
 

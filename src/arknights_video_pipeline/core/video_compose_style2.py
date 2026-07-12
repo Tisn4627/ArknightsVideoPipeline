@@ -19,7 +19,7 @@ import unicodedata
 
 from movielite import VideoClip, TextClip, VideoWriter
 from movielite.vfx import FadeIn, FadeOut
-from pictex import Canvas, Shadow
+from pictex import Canvas
 
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config,
@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "font": "SOURCEHANSANSCN-HEAVY.OTF",
         "font_dir": "resource/font",
-        "font_size": 75,
+        "font_size": 45,
         "font_scale": 1,
         "fade_duration": 0.5,
         "shadow_enabled": True,
@@ -204,7 +204,7 @@ def create_subtitle_clip(text, start, duration, text_config, project_root, outpu
         os.path.join(project_root, text_config.get("font_dir", "resource/font"))
     )
 
-    font_size = text_config.get("font_size", 75)
+    font_size = text_config.get("font_size", 45)
     font_scale = text_config.get("font_scale", 1)
     effective_size = font_size * font_scale
     fade_duration = text_config.get("fade_duration", 0.5)
@@ -224,12 +224,11 @@ def create_subtitle_clip(text, start, duration, text_config, project_root, outpu
 
     # 阴影效果
     if text_config.get("shadow_enabled", True):
-        shadow = Shadow(
-            color=text_config.get("shadow_color", "#000000"),
+        canvas = canvas.add_shadow(
             offset=(text_config.get("shadow_offset_x", 2), text_config.get("shadow_offset_y", 2)),
             blur_radius=text_config.get("shadow_blur", 4),
+            color=text_config.get("shadow_color", "#000000"),
         )
-        canvas = canvas.text_shadows(shadow)
 
     canvas = (
         canvas

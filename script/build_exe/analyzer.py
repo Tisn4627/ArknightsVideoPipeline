@@ -167,6 +167,23 @@ class DependencyAnalyzer:
         "tqdm",
     }
 
+    # 隐藏导入（movielite/pictex 等）的运行时传递依赖
+    # 分析器仅扫描 src/ 源码的 import，无法感知隐藏导入自身的依赖；
+    # 若这些依赖被 --clean-stdlib 或未使用包分析加入排除列表，
+    # 打包产物会在运行时报 ModuleNotFoundError。
+    # 已知传递依赖：
+    #   movielite → numba → llvmlite
+    #   movielite → multiprocess → _multiprocess
+    #   pictex    → skia (PyPI: skia-python)
+    HIDDEN_IMPORT_DEPS: set[str] = {
+        "numba",
+        "llvmlite",
+        "multiprocess",
+        "_multiprocess",
+        "skia",
+        "skia_python",
+    }
+
     def __init__(self, source_dir: str) -> None:
         """初始化分析器
 
@@ -416,6 +433,10 @@ class DependencyAnalyzer:
                 continue
             # 跳过必需包
             if pkg_name in self.REQUIRED_PACKAGES:
+                continue
+            # 跳过隐藏导入的传递依赖（import_name 和 pkg_name 都要检查，
+            # 因为 skia 的导入名是 "skia"，PyPI 包名是 "skia-python"）
+            if import_name in self.HIDDEN_IMPORT_DEPS or pkg_name in self.HIDDEN_IMPORT_DEPS:
                 continue
             # 跳过 PyInstaller 自身及其依赖
             if pkg_name.lower() in ("pyinstaller", "altgraph", "pyinstaller-hooks-contrib"):

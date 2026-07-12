@@ -33,6 +33,16 @@ from arknights_video_pipeline.service import ConfigProxy, PipelineService
 class MainWindow(QMainWindow):
     """主窗口"""
 
+    # SettingsPage.CONFIG_TYPES key → ConfigProxy 子配置名称
+    # 用于 _on_config_reset 时按 key 重新加载对应子配置
+    _KEY_TO_SUB_CONFIG: dict[str, str] = {
+        "formation": "formation",
+        "actions": "actions",
+        "track": "track",
+        "compose": "style1",
+        "compose_style2": "style2",
+    }
+
     def __init__(self, config_proxy: ConfigProxy, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config_proxy
@@ -499,56 +509,73 @@ class MainWindow(QMainWindow):
     def _on_config_reset(self, generated: list) -> None:
         """配置文件重置完成后的同步处理
 
-        当用户在 Settings 页点击"生成默认配置"且 pipeline 配置生成成功时，
-        ``SettingsPage`` 会发出 ``config_reset`` 信号。本方法负责：
+        根据生成的配置文件类型，重新加载对应的磁盘配置并刷新 UI：
 
-        1. 重新加载磁盘上的 pipeline.json，使内存中的 ConfigProxy
-           与重置后的文件保持一致（否则在 ``closeEvent`` 中调用
-           ``self._config.save_all()`` 会把重置前的旧值写回文件）。
-        2. 刷新共享控件（MAA/Output 路径、Log level、Style）的显示，
-           阻塞控件信号以避免刷新过程触发回写配置。
-        3. 不修改与重置无关的字段（如 video_paths、skip_steps），
-           保证其他路径设置功能正常使用。
+        - ``pipeline``: 重新加载 pipeline.json（``load()`` 会同时刷新所有
+          子配置路径），刷新共享控件（MAA/Output/Log level/Style 等）。
+        - ``formation``/``actions``/``track``/``compose``/``compose_style2``:
+          重新加载对应子配置，刷新 SettingsPage 子配置字段行。
+        - ``gui``: 重新加载 gui.json，刷新主题开关与高级折叠状态。
+
+        若不刷新内存状态，``closeEvent`` 中的 ``save_all()`` 会将重置前
+        的旧值写回磁盘，撤销重置操作。
         """
-        if "pipeline" not in generated:
-            return
-
-        # 1. 重新从磁盘加载配置，让内存 pipeline 与刚写入的默认文件一致
-        self._config.load()
-
-        # 2. 刷新 Style（MainWindow 自有控件，需阻塞信号）
-        self._style_combo.blockSignals(True)
-        try:
-            style = self._config.style()
-            index = self._style_combo.findText(style)
-            if index >= 0:
-                self._style_combo.setCurrentIndex(index)
-            self._on_style_changed(style)
-        finally:
-            self._style_combo.blockSignals(False)
-
-        # 3. 刷新 SettingsPage 控件（公开方法内部阻塞信号避免回写）
         sp = self._settings_page
-        sp.set_maa_path(self._config.maa_path())
-        sp.set_output_dir(self._config.output_dir())
-        sp.set_log_level(self._config.log_level())
-        # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
-        sp.set_multithreading(self._config.multithreading())
-        sp.set_max_concurrent(self._config.max_concurrent())
-        # FFmpeg 路径配置同步刷新
-        sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
-        sp.set_ffmpeg_path(self._config.ffmpeg_path())
-        # 新增 pipeline.json 字段同步刷新
-        sp.set_log_to_file(self._config.log_to_file())
-        sp.set_log_max_bytes(self._config.log_max_bytes())
-        sp.set_log_backup_count(self._config.log_backup_count())
-        sp.set_maa_timeout(self._config.maa_timeout())
-        sp.set_maa_max_retries(self._config.maa_max_retries())
-        sp.set_formation_path(self._config.formation_path())
-        sp.set_actions_path(self._config.actions_path())
-        sp.set_track_path(self._config.track_path())
-        # 子配置字段刷新（重置后恢复默认值）
-        sp.load_sub_config_values(self._config)
+
+        # 1. 重新加载磁盘配置到内存
+        if "pipeline" in generated:
+            # pipeline.json 已重置 → load() 同时刷新 pipeline + 所有子配置
+            self._config.load()
+        else:
+            # 仅重置了子配置 → 逐个重新加载（不影响其他子配置的内存状态）
+            for key in generated:
+                sub_name = self._KEY_TO_SUB_CONFIG.get(key)
+                if sub_name:
+                    self._config.reload_sub_config(sub_name)
+
+        # 2. 刷新 pipeline 相关共享控件
+        if "pipeline" in generated:
+            self._style_combo.blockSignals(True)
+            try:
+                style = self._config.style()
+                index = self._style_combo.findText(style)
+                if index >= 0:
+                    self._style_combo.setCurrentIndex(index)
+                self._on_style_changed(style)
+            finally:
+                self._style_combo.blockSignals(False)
+
+            sp.set_maa_path(self._config.maa_path())
+            sp.set_output_dir(self._config.output_dir())
+            sp.set_log_level(self._config.log_level())
+            # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
+            sp.set_multithreading(self._config.multithreading())
+            sp.set_max_concurrent(self._config.max_concurrent())
+            # FFmpeg 路径配置同步刷新
+            sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
+            sp.set_ffmpeg_path(self._config.ffmpeg_path())
+            # 新增 pipeline.json 字段同步刷新
+            sp.set_log_to_file(self._config.log_to_file())
+            sp.set_log_max_bytes(self._config.log_max_bytes())
+            sp.set_log_backup_count(self._config.log_backup_count())
+            sp.set_maa_timeout(self._config.maa_timeout())
+            sp.set_maa_max_retries(self._config.maa_max_retries())
+            sp.set_formation_path(self._config.formation_path())
+            sp.set_actions_path(self._config.actions_path())
+            sp.set_track_path(self._config.track_path())
+
+        # 3. 刷新子配置字段行（任何子配置或 pipeline 被重置都需要刷新）
+        sub_keys = {"formation", "actions", "track", "compose", "compose_style2"}
+        if set(generated) & sub_keys or "pipeline" in generated:
+            sp.load_sub_config_values(self._config)
+
+        # 4. 刷新 GUI 偏好（主题 + 高级折叠状态）
+        if "gui" in generated:
+            self._gui_config.reload()
+            dark = self._gui_config.is_dark_theme()
+            if dark != self._is_dark:
+                self._on_theme_change_requested(dark)
+            sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}

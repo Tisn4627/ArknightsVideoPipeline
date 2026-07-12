@@ -57,6 +57,15 @@ _HIDDEN_IMPORTS: list[str] = [
     "tqdm",
 ]
 
+# 项目内部通过 importlib.import_module() 动态导入的模块
+# PyInstaller 静态分析无法检测变量参数的 import_module 调用，
+# 这些模块在 _STYLE_MODULES / _MODULE_CONFIGS 字典中以字符串形式
+# 引用，运行时才通过 importlib.import_module(module_name) 加载。
+_PROJECT_HIDDEN_IMPORTS: list[str] = [
+    "arknights_video_pipeline.core.video_compose",
+    "arknights_video_pipeline.core.video_compose_style2",
+]
+
 # GUI 模式额外的隐藏导入
 _GUI_HIDDEN_IMPORTS: list[str] = [
     "PyQt6.QtSvg",
@@ -470,6 +479,7 @@ class BuildManager:
 
         # 隐藏导入
         hidden_imports = list(_HIDDEN_IMPORTS)
+        hidden_imports.extend(_PROJECT_HIDDEN_IMPORTS)
         if self.config.mode in ("gui", "combined"):
             hidden_imports.extend(_GUI_HIDDEN_IMPORTS)
         hidden_imports.extend(self.config.extra_hidden_imports)
@@ -597,15 +607,17 @@ class BuildManager:
             "请将以下目录/文件放置在本程序所在目录:",
             "",
             "  1. config/        - 配置文件目录",
-            "     生成方式: 在命令行执行:",
+            "     首次启动时自动生成默认配置文件，无需手动操作。",
+            "     如需重置为默认值，删除对应文件后重新启动即可，",
+            "     或在命令行执行:",
         ]
 
         if self.config.mode == "gui":
-            lines.append(f"       {self.config.name}.exe -- --init-config")
+            lines.append(f"       {self.config.name}.exe -- --init-config all")
         elif self.config.mode == "cli":
-            lines.append(f"       {self.config.name}.exe --init-config")
+            lines.append(f"       {self.config.name}.exe --init-config all")
         else:
-            lines.append(f"       {self.config.name}.exe --init-config")
+            lines.append(f"       {self.config.name}.exe --init-config all")
 
         lines.extend([
             "",
@@ -632,15 +644,15 @@ class BuildManager:
             lines.extend([
                 "  双击运行 .exe 文件即可启动图形界面。",
                 "",
-                "  首次运行前请先执行以下命令生成配置文件:",
-                f"    {self.config.name}.exe -- --init-config",
+                "  首次启动时会自动在 exe 同级目录生成 config/ 默认配置。",
             ])
         elif self.config.mode == "cli":
             lines.extend([
                 "  命令行运行:",
                 "",
-                "  生成配置文件:",
-                f"    {self.config.name}.exe --init-config",
+                "  首次运行会自动生成 config/ 默认配置文件。",
+                "  如需手动重置配置:",
+                f"    {self.config.name}.exe --init-config all",
                 "",
                 "  处理视频:",
                 f"    {self.config.name}.exe video.mp4 -b bg.png",
@@ -652,8 +664,9 @@ class BuildManager:
                 "  无参数 → 启动图形界面",
                 "  有参数 → 启动命令行模式",
                 "",
-                "  生成配置文件:",
-                f"    {self.config.name}.exe --init-config",
+                "  首次运行会自动生成 config/ 默认配置文件。",
+                "  如需手动重置配置:",
+                f"    {self.config.name}.exe --init-config all",
                 "",
                 "  处理视频(CLI模式):",
                 f"    {self.config.name}.exe video.mp4 -b bg.png",
@@ -760,7 +773,7 @@ class BuildManager:
             print(f"  启动方式: {self.config.name}.exe (GUI) 或 {self.config.name}.exe <args> (CLI)")
 
         print()
-        print("  注意: 运行前请将 config/、resource/、MAA/ 放置在 exe 所在目录")
+        print("  注意: config/ 首次启动时自动生成; resource/ 和 MAA/ 需手动放置在 exe 所在目录")
         print("=" * 60)
         print()
 

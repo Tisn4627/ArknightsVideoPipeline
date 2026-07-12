@@ -195,6 +195,13 @@ MAA-*/
 output/
 
 # ================================
+# build_exe packaging artifacts
+# ================================
+# PyInstaller outputs (also covered by build/ and dist/ above)
+*.exe
+ArknightsVideoPipeline-*/
+
+# ================================
 # Configuration files
 # ================================
 config/

@@ -72,7 +72,11 @@ CLI_LAUNCHER = _HEADER + '''
 
 def main() -> None:
     """CLI 入口"""
-    from arknights_video_pipeline.core.pipeline import main as cli_main
+    from arknights_video_pipeline.core.pipeline import (
+        ensure_default_configs,
+        main as cli_main,
+    )
+    ensure_default_configs()
     cli_main()
 
 
@@ -93,7 +97,9 @@ def main() -> int:
     from arknights_video_pipeline.core.exceptions import ConfigError
 
     def _show_startup_error(title: str, text: str) -> None:
-        sys.stderr.write(f"[{title}] {text}\\n")
+        # windowed (--) 模式下 sys.stderr 为 None，需防御
+        if sys.stderr is not None:
+            sys.stderr.write(f"[{title}] {text}\\n")
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
             app = QApplication.instance() or QApplication(sys.argv)
@@ -105,6 +111,7 @@ def main() -> int:
 
     try:
         from PyQt6.QtWidgets import QApplication
+        from arknights_video_pipeline.core.pipeline import ensure_default_configs
         from arknights_video_pipeline.gui.app import create_application
         from arknights_video_pipeline.gui.main_window import MainWindow
         from arknights_video_pipeline.service import ConfigProxy
@@ -114,6 +121,8 @@ def main() -> int:
 
     try:
         app = create_application(sys.argv)
+        # 首次启动时自动生成缺失的默认配置文件（不覆盖已有用户配置）
+        ensure_default_configs()
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()
@@ -140,17 +149,23 @@ COMBINED_LAUNCHER = _HEADER + '''
 
 def _run_cli() -> int:
     """运行 CLI 模式"""
-    from arknights_video_pipeline.core.pipeline import main as cli_main
+    from arknights_video_pipeline.core.pipeline import (
+        ensure_default_configs,
+        main as cli_main,
+    )
     try:
+        ensure_default_configs()
         cli_main()
         return 0
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 1
     except KeyboardInterrupt:
-        sys.stderr.write("\\n用户中断执行\\n")
+        if sys.stderr is not None:
+            sys.stderr.write("\\n用户中断执行\\n")
         return 130
     except Exception as exc:
-        sys.stderr.write(f"程序启动失败: {exc}\\n")
+        if sys.stderr is not None:
+            sys.stderr.write(f"程序启动失败: {exc}\\n")
         return 1
 
 
@@ -159,7 +174,9 @@ def _run_gui() -> int:
     from arknights_video_pipeline.core.exceptions import ConfigError
 
     def _show_startup_error(title: str, text: str) -> None:
-        sys.stderr.write(f"[{title}] {text}\\n")
+        # windowed (--) 模式下 sys.stderr 为 None，需防御
+        if sys.stderr is not None:
+            sys.stderr.write(f"[{title}] {text}\\n")
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
             app = QApplication.instance() or QApplication(sys.argv)
@@ -171,6 +188,7 @@ def _run_gui() -> int:
 
     try:
         from PyQt6.QtWidgets import QApplication
+        from arknights_video_pipeline.core.pipeline import ensure_default_configs
         from arknights_video_pipeline.gui.app import create_application
         from arknights_video_pipeline.gui.main_window import MainWindow
         from arknights_video_pipeline.service import ConfigProxy
@@ -180,6 +198,8 @@ def _run_gui() -> int:
 
     try:
         app = create_application(sys.argv)
+        # 首次启动时自动生成缺失的默认配置文件（不覆盖已有用户配置）
+        ensure_default_configs()
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()

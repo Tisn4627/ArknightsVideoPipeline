@@ -85,6 +85,14 @@ class GuiConfig(QObject):
         except OSError as exc:
             logger.error("GUI 配置文件写入失败 (%s): %s", self._config_path, exc)
 
+    def reload(self) -> None:
+        """从磁盘重新加载配置（配置重置后同步内存状态）
+
+        不发射 ``theme_changed`` / ``config_changed`` 信号；
+        调用方需自行检查 ``theme()`` / ``is_advanced_expanded()`` 并刷新 UI。
+        """
+        self._load()
+
     def _trigger_save(self) -> None:
         """触发配置持久化（当前为同步写入，可扩展为防抖）"""
         self.save()

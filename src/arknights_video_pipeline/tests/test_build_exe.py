@@ -20,6 +20,7 @@ import pytest
 from script.build_exe.analyzer import DependencyAnalyzer
 from script.build_exe.builder import (
     _ALWAYS_EXCLUDE,
+    _PROJECT_HIDDEN_IMPORTS,
     _TEST_EXCLUDES,
     BuildConfig,
     BuildManager,
@@ -249,3 +250,109 @@ class TestBuildManagerTestExcludes:
         assert "pytest" not in result.used_packages, (
             "pytest 来自测试文件，不应被计入已使用包"
         )
+
+
+# ── BuildManager: 动态导入模块的 hidden imports ──────────────
+
+
+class TestProjectHiddenImports:
+    """验证 PyInstaller 参数包含项目内部通过 importlib.import_module()
+    动态导入的模块，这些模块无法被 PyInstaller 静态分析检测到。
+    """
+
+    @pytest.fixture
+    def project_root(self) -> str:
+        return os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                )
+            )
+        )
+
+    @pytest.fixture
+    def manager(self, project_root: str) -> BuildManager:
+        config = BuildConfig(mode="gui", project_root=project_root)
+        return BuildManager(config)
+
+    def test_project_hidden_imports_constant_has_video_compose(self) -> None:
+        """_PROJECT_HIDDEN_IMPORTS 包含 video_compose 两个风格模块"""
+        assert "arknights_video_pipeline.core.video_compose" in _PROJECT_HIDDEN_IMPORTS
+        assert "arknights_video_pipeline.core.video_compose_style2" in _PROJECT_HIDDEN_IMPORTS
+
+    def test_pyinstaller_args_include_video_compose_hidden_imports(
+        self, manager: BuildManager
+    ) -> None:
+        """PyInstaller 命令参数包含 --hidden-import video_compose 模块"""
+        excludes = manager._analyze_dependencies()
+        args = manager._build_pyinstaller_args("/tmp/launcher.py", excludes)
+
+        for mod in (
+            "arknights_video_pipeline.core.video_compose",
+            "arknights_video_pipeline.core.video_compose_style2",
+        ):
+            found = False
+            for i, arg in enumerate(args):
+                if (
+                    arg == "--hidden-import"
+                    and i + 1 < len(args)
+                    and args[i + 1] == mod
+                ):
+                    found = True
+                    break
+            assert found, f"PyInstaller 参数缺少 hidden import: {mod}"
+
+
+# ── DependencyAnalyzer: 隐藏导入的传递依赖保护 ──────────────
+
+
+class TestHiddenImportDepsNotExcluded:
+    """验证隐藏导入（movielite/pictex）的传递依赖不被排除。
+
+    分析器仅扫描 src/ 源码的 import，无法感知隐藏导入自身的依赖。
+    若 numba/skia/multiprocess 等传递依赖被 --clean-stdlib 或未使用包
+    分析加入排除列表，打包产物会在运行时报 ModuleNotFoundError。
+    """
+
+    @pytest.fixture
+    def project_root(self) -> str:
+        return os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                )
+            )
+        )
+
+    @pytest.fixture
+    def analyzer(self, project_root: str) -> DependencyAnalyzer:
+        return DependencyAnalyzer(os.path.join(project_root, "src"))
+
+    def test_hidden_import_deps_constant_has_known_deps(self) -> None:
+        """HIDDEN_IMPORT_DEPS 包含已知的隐藏导入传递依赖"""
+        expected = {"numba", "llvmlite", "multiprocess", "_multiprocess", "skia", "skia_python"}
+        assert expected.issubset(DependencyAnalyzer.HIDDEN_IMPORT_DEPS)
+
+    def test_hidden_import_deps_not_in_excludes(self, analyzer: DependencyAnalyzer) -> None:
+        """--clean-stdlib 模式下，传递依赖不出现在排除列表中"""
+        excludes = analyzer.get_exclude_modules(clean_stdlib=True)
+        for dep in ("numba", "llvmlite", "skia", "skia_python", "multiprocess", "_multiprocess"):
+            assert dep not in excludes, f"传递依赖 {dep} 不应被排除"
+
+    def test_pyinstaller_args_not_exclude_hidden_import_deps(
+        self, project_root: str
+    ) -> None:
+        """PyInstaller 命令参数不包含 --exclude-module numba/skia 等"""
+        config = BuildConfig(mode="gui", project_root=project_root, clean_stdlib=True)
+        manager = BuildManager(config)
+        excludes = manager._analyze_dependencies()
+        args = manager._build_pyinstaller_args("/tmp/launcher.py", excludes)
+
+        for dep in ("numba", "llvmlite", "skia", "skia_python", "multiprocess", "_multiprocess"):
+            for i, arg in enumerate(args):
+                if (
+                    arg == "--exclude-module"
+                    and i + 1 < len(args)
+                    and args[i + 1] == dep
+                ):
+                    pytest.fail(f"PyInstaller 参数错误地排除了传递依赖: {dep}")

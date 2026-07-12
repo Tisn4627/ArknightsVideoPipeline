@@ -192,7 +192,7 @@ python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --s
 | 类型 | 可选字符串 |
 | 必填 | 否 |
 | 默认值 | 未指定（不生成配置） |
-| 可选值 | `all`, `pipeline`, `formation`, `actions`, `track`, `compose`, `compose_style2` |
+| 可选值 | `all`, `pipeline`, `formation`, `actions`, `track`, `compose`, `compose_style2`, `gui` |
 
 生成默认配置文件并退出，不执行任何处理。不指定值时等同于 `--init-config all`，生成全部配置文件。
 
@@ -205,6 +205,7 @@ python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --s
 | `track` | `config/track.json` |
 | `compose` | `config/video_compose/style1.json` |
 | `compose_style2` | `config/video_compose/style2.json` |
+| `gui` | `config/gui.json` |
 
 ```bash
 # 生成全部默认配置文件
@@ -215,6 +216,7 @@ python main.py --init-config formation
 python main.py --init-config track
 python main.py --init-config compose
 python main.py --init-config compose_style2
+python main.py --init-config gui
 ```
 
 ### `--style`, `-s`

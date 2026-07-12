@@ -89,6 +89,7 @@ class SettingsPage(QWidget):
         ("track", "Track", "开始按钮识别配置", "track.json"),
         ("compose", "Compose · style1", "style1 视频合成配置", "video_compose/style1.json"),
         ("compose_style2", "Compose · style2", "style2 视频合成配置", "video_compose/style2.json"),
+        ("gui", "GUI", "GUI 偏好配置（主题、折叠状态）", "gui.json"),
     ]
 
     def __init__(self, colors: MaterialColors | None = None,
@@ -828,14 +829,14 @@ class SettingsPage(QWidget):
 
         if style == "style1":
             add("video_scale", build_float_row(
-                "视频缩放比例", default=0.8, minimum=0.1, maximum=2.0,
+                "视频缩放比例", default=0.85, minimum=0.1, maximum=2.0,
                 step=0.01, decimals=2, colors=c,
                 on_changed=self._emit_sub(cn, "video_scale")))
             add("video_x", build_int_row(
-                "视频 X 坐标", default=320, minimum=-1920, maximum=3840, colors=c,
+                "视频 X 坐标", default=272, minimum=-1920, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, "video_x")))
             add("video_y", build_int_row(
-                "视频 Y 坐标", default=72, minimum=-1080, maximum=2160, colors=c,
+                "视频 Y 坐标", default=47, minimum=-1080, maximum=2160, colors=c,
                 on_changed=self._emit_sub(cn, "video_y")))
 
         add("video_quality", build_combo_row(
@@ -857,7 +858,7 @@ class SettingsPage(QWidget):
             "启用文字叠加", default=True, colors=c,
             on_changed=self._emit_sub(cn, f"{tp}.enabled")))
         add(f"{tp}.font_size", build_int_row(
-            "字体大小", default=45 if style == "style1" else 75,
+            "字体大小", default=25 if style == "style1" else 45,
             minimum=8, maximum=300, colors=c,
             on_changed=self._emit_sub(cn, f"{tp}.font_size")))
         add(f"{tp}.shadow_enabled", build_switch_row(
@@ -866,10 +867,10 @@ class SettingsPage(QWidget):
 
         if style == "style1":
             add(f"{tp}.text_x", build_int_row(
-                "文字 X 坐标", default=0, minimum=-1920, maximum=3840, colors=c,
+                "文字 X 坐标", default=50, minimum=-1920, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.text_x")))
             add(f"{tp}.text_y", build_int_row(
-                "文字 Y 坐标", default=65, minimum=-1080, maximum=2160, colors=c,
+                "文字 Y 坐标", default=240, minimum=-1080, maximum=2160, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.text_y")))
             add(f"{tp}.subtitle_auto_fit", build_switch_row(
                 "字幕自适应", default=False, colors=c,
@@ -1092,8 +1093,12 @@ class SettingsPage(QWidget):
         for key in selected:
             try:
                 # _init_config 仅对未知模块 sys.exit；此处 key 均来自 CONFIG_TYPES，合法
-                _init_config(key)
-                generated.append(key)
+                # 返回值是成功生成的文件路径列表；空列表表示导入失败被跳过
+                result = _init_config(key)
+                if result:
+                    generated.append(key)
+                else:
+                    failed.append(f"{key} (无法加载默认配置)")
             except SystemExit:
                 failed.append(key)
             except Exception as exc:  # noqa: BLE001
@@ -1103,17 +1108,15 @@ class SettingsPage(QWidget):
             self._set_status(
                 f"已生成 {len(generated)} 个配置文件到 config/ 目录。", error=False
             )
-            # 通知 MainWindow：至少生成了 pipeline 配置，需要重新加载磁盘
-            # 上的默认值并刷新 MAA/Output/Log level 等共享控件，保证
-            # 关闭 GUI 时保存到配置文件的值与界面显示一致。
+            # 通知 MainWindow 重新加载磁盘配置并刷新 UI，避免 closeEvent
+            # 中 save_all() 将重置前的旧值写回磁盘（撤销重置）。
             self.config_reset.emit(generated)
         elif generated and failed:
             self._set_status(
                 f"已生成 {len(generated)} 个；失败: {', '.join(failed)}", error=True
             )
-            # 部分成功：仅当 pipeline 成功生成时才需要同步刷新。
-            if "pipeline" in generated:
-                self.config_reset.emit(generated)
+            # 部分成功：对已成功生成的配置同样需要刷新内存状态
+            self.config_reset.emit(generated)
         else:
             self._set_status(f"生成失败: {', '.join(failed)}", error=True)
 
