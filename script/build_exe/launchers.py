@@ -70,7 +70,7 @@ _PROJECT_ROOT = _fix_project_root()
 
 CLI_LAUNCHER = _HEADER + '''
 
-def main() -> None:
+def main() -> int:
     """CLI 入口"""
     from arknights_video_pipeline.core.pipeline import (
         ensure_default_configs,
@@ -78,10 +78,22 @@ def main() -> None:
     )
     ensure_default_configs()
     cli_main()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    _exit_code = 0
+    try:
+        _exit_code = main() or 0
+    except SystemExit as exc:
+        _exit_code = exc.code if isinstance(exc.code, int) else 1
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.flush()
+            except Exception:
+                pass
+    os._exit(_exit_code)
 '''
 
 
@@ -139,7 +151,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _exit_code = 0
+    try:
+        _exit_code = main() or 0
+    except SystemExit as exc:
+        _exit_code = exc.code if isinstance(exc.code, int) else 1
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.flush()
+            except Exception:
+                pass
+    os._exit(_exit_code)
 '''
 
 
@@ -237,7 +260,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _exit_code = 0
+    try:
+        _exit_code = main() or 0
+    except SystemExit as exc:
+        _exit_code = exc.code if isinstance(exc.code, int) else 1
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.flush()
+            except Exception:
+                pass
+    os._exit(_exit_code)
 '''
 
 

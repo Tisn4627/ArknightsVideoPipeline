@@ -55,6 +55,22 @@ _HIDDEN_IMPORTS: list[str] = [
     "cv2",
     # tqdm
     "tqdm",
+    # ctypes 子模块：MAA 的 asst.py 通过 sys.path.insert 运行时动态加载，
+    # PyInstaller 静态分析无法检测到 asst.py 内部的 `import ctypes.util`，
+    # 导致 ctypes.util（纯 Python 标准库子模块，非内置）未被打包，
+    # 运行时报 `No module named 'ctypes.util'`。asst.py 在 OSError 回退路径
+    # 用 ctypes.util.find_library('MaaCore') 查找 DLL。
+    "ctypes",
+    "ctypes.util",
+    "ctypes.wintypes",
+    # pictex 2.x 传递依赖：这些包不被 src/ 源码直接 import（仅 pictex 内部使用），
+    # 分析器的未使用包分析会将其加入排除列表。bidi 还是函数级导入
+    # （pictex/text/bidi_processor.py:89 `from bidi.algorithm import ...`），
+    # PyInstaller modulegraph 对函数级导入检测不可靠。
+    "uharfbuzz",
+    "bidi",
+    "regex",
+    "stretchable",
 ]
 
 # 项目内部通过 importlib.import_module() 动态导入的模块
@@ -405,6 +421,9 @@ class BuildManager:
     def _run_pyinstaller(self, launcher_path: str, excludes: list[str]) -> None:
         """调用 PyInstaller 执行打包
 
+        捕获 PyInstaller 输出用于后续的库完整性自检
+        （_verify_packaged_modules 解析缺失模块警告）。
+
         Args:
             launcher_path: 入口脚本路径
             excludes: 排除模块列表
@@ -419,28 +438,88 @@ class BuildManager:
         print(f"  {self._pyinstaller_cmd}")
         print()
 
-        # 通过子进程调用 PyInstaller（避免 in-process 的副作用）
+        # 通过 Popen 调用 PyInstaller，实时显示输出同时捕获用于自检
+        self._pyinstaller_output: list[str] = []
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 args,
                 cwd=self.config.project_root,
-                # 实时输出，不缓冲
-                stdout=None,
-                stderr=None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
             )
         except FileNotFoundError:
             raise BuildError(
                 "无法启动 PyInstaller，请确认已安装: pip install pyinstaller"
             )
 
-        if result.returncode != 0:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="")
+            self._pyinstaller_output.append(line)
+        proc.wait()
+
+        if proc.returncode != 0:
             raise BuildError(
-                f"PyInstaller 打包失败，退出码: {result.returncode}\n"
+                f"PyInstaller 打包失败，退出码: {proc.returncode}\n"
                 f"命令: {self._pyinstaller_cmd}"
             )
 
         print()
         print("  [OK] PyInstaller 打包完成")
+
+    def _verify_packaged_modules(self) -> None:
+        """打包后库完整性自检
+
+        解析 PyInstaller 输出中的缺失模块警告，并对照 _HIDDEN_IMPORTS
+        和动态发现的传递依赖进行交叉验证。发现缺失时打印警告，
+        让开发者在打包阶段就发现问题，而非等到运行时崩溃。
+
+        这是库遗漏问题的早期预警机制，配合 analyzer 的动态依赖发现
+        形成双重保障：
+          1. analyzer 动态发现 → 防止传递依赖被错误排除
+          2. 本方法 → 检测 PyInstaller 自身未找到的隐藏导入
+        """
+        if not hasattr(self, "_pyinstaller_output"):
+            return
+
+        # 收集所有声明的隐藏导入
+        declared_hidden = set(_HIDDEN_IMPORTS)
+        declared_hidden.update(_PROJECT_HIDDEN_IMPORTS)
+        if self.config.mode in ("gui", "combined"):
+            declared_hidden.update(_GUI_HIDDEN_IMPORTS)
+        declared_hidden.update(self.config.extra_hidden_imports)
+
+        # 解析 PyInstaller 输出中的缺失模块警告
+        # 典型格式: WARNING: Hidden import "foo" not found in PYZ
+        # 或:       WARNING: Hidden import "foo.bar" not found
+        missing_modules: list[str] = []
+        for line in self._pyinstaller_output:
+            stripped = line.strip()
+            if "not found" not in stripped.lower():
+                continue
+            if "hidden import" not in stripped.lower():
+                continue
+            # 提取模块名（引号内的内容）
+            import re
+            match = re.search(r'[Hh]idden import "([^"]+)"', stripped)
+            if match:
+                mod = match.group(1)
+                if mod in declared_hidden:
+                    missing_modules.append(mod)
+
+        if missing_modules:
+            print()
+            print("  [WARN] 库完整性自检发现缺失的隐藏导入:")
+            for mod in missing_modules:
+                print(f"    - {mod}")
+            print("  [WARN] 这些模块在打包环境中未安装，运行时可能报 ModuleNotFoundError")
+            print("  [WARN] 请安装缺失的依赖后重新打包")
+        else:
+            print("  [OK] 库完整性自检通过：所有隐藏导入均已打包")
 
     def _build_pyinstaller_args(
         self, launcher_path: str, excludes: list[str]
@@ -559,6 +638,9 @@ class BuildManager:
                 f"PyInstaller 可能未成功完成打包"
             )
 
+        # 库完整性自检：解析 PyInstaller 输出，检测缺失的隐藏导入
+        self._verify_packaged_modules()
+
         # 如果未通过 --add-data 打包 resource，且用户选择包含资源，
         # 则复制 resource 目录到输出位置旁边
         # （--add-data 已经处理了打包到内部，这里额外复制一份到外部方便用户替换）
@@ -571,7 +653,7 @@ class BuildManager:
                 shutil.copytree(resource_dir, dest)
                 print(f"  [OK] 已复制 resource 到: {dest}")
 
-        # 创建 README 提示文件
+        # 创建 info.txt 提示文件
         self._create_readme(output_path)
 
         # 显示输出大小
@@ -580,18 +662,18 @@ class BuildManager:
         print(f"  [OK] 输出大小: {size_str}")
 
     def _create_readme(self, output_path: str) -> None:
-        """在输出目录创建使用说明"""
-        readme_path = os.path.join(output_path, "使用说明.txt")
+        """在输出目录创建 info.txt 提示文件"""
+        readme_path = os.path.join(output_path, "info.txt")
         content = self._generate_readme_content()
         try:
             with open(readme_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            print(f"  [OK] 已生成使用说明: {readme_path}")
+            print(f"  [OK] 已生成提示文件: {readme_path}")
         except OSError:
             pass  # 非关键步骤，忽略错误
 
     def _generate_readme_content(self) -> str:
-        """生成输出目录的使用说明内容"""
+        """生成输出目录的 info.txt 内容"""
         lines = [
             "=" * 60,
             "ArknightsVideoPipeline 打包输出",

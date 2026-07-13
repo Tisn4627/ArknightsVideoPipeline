@@ -4,8 +4,9 @@ runtime_hook - PyInstaller 运行时钩子
 此文件通过 PyInstaller 的 --runtime-hook 参数注入，在主脚本执行前运行。
 
 主要功能:
-    1. 确保 ffmpeg/ffprobe 可在 PATH 中找到（Windows 注册表回退）
-    2. 设置环境变量，标记当前处于打包环境
+    1. 在 noconsole 模式下将 None 的 sys.stdout/sys.stderr 重定向到 null sink
+    2. 确保 ffmpeg/ffprobe 可在 PATH 中找到（Windows 注册表回退）
+    3. 设置环境变量，标记当前处于打包环境
 
 注意:
     PROJECT_ROOT 的修正逻辑在入口脚本(launcher)中处理，而非此处。
@@ -25,10 +26,34 @@ def _setup_environment() -> None:
     # 标记当前处于 PyInstaller 打包环境
     os.environ["ARKNIGHTS_PIPELINE_PACKAGED"] = "1"
 
+    # noconsole 模式下 sys.stdout/sys.stderr 为 None，替换为 null sink
+    _redirect_null_stdio()
+
     # 确保 ffmpeg/ffprobe 在 PATH 中
     # 复用项目 utils.ensure_ffmpeg_in_path 的逻辑，
     # 但此处不能导入项目模块（会导致 PROJECT_ROOT 在 patch 前被计算）
     _ensure_ffmpeg_in_path()
+
+
+def _redirect_null_stdio() -> None:
+    """将 None 的 sys.stdout/sys.stderr 重定向到 os.devnull
+
+    PyInstaller --noconsole 模式（GUI/combined）下，sys.stdout 和 sys.stderr
+    是 None。许多第三方库（tqdm、logging.StreamHandler 等）假设这两个流
+    总是可用的，调用 .write() 时会抛
+    ``AttributeError: 'NoneType' object has no attribute 'write'``。
+
+    替换为 os.devnull 后，写入被静默丢弃，库能正常工作。
+    launchers.py 中已有的 ``if sys.stderr is not None`` 防御检查仍有效
+    （stream 不再为 None，但写入行为一致）。
+
+    仅在流为 None 时替换，不影响 CLI 模式（终端运行时 stdout/stderr
+    连接到终端，不是 None）。
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
 
 
 def _ensure_ffmpeg_in_path() -> None:

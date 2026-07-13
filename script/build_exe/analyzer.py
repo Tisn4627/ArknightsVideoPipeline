@@ -136,6 +136,11 @@ class AnalysisResult:
     all_imports: list[ImportInfo] = field(default_factory=list)
     """所有导入的详细信息"""
 
+    protected_deps: set[str] = field(default_factory=set)
+    """受保护的传递依赖集合（动态发现 + 硬编码兜底）。
+    这些包是隐藏导入（movielite/pictex 等）的传递依赖，绝不能被排除，
+    否则打包产物运行时报 ModuleNotFoundError。"""
+
 
 # ── 核心分析逻辑 ──────────────────────────────────────────
 
@@ -167,14 +172,16 @@ class DependencyAnalyzer:
         "tqdm",
     }
 
-    # 隐藏导入（movielite/pictex 等）的运行时传递依赖
+    # 隐藏导入（movielite/pictex 等）的运行时传递依赖——兜底集
     # 分析器仅扫描 src/ 源码的 import，无法感知隐藏导入自身的依赖；
     # 若这些依赖被 --clean-stdlib 或未使用包分析加入排除列表，
     # 打包产物会在运行时报 ModuleNotFoundError。
-    # 已知传递依赖：
-    #   movielite → numba → llvmlite
-    #   movielite → multiprocess → _multiprocess
-    #   pictex    → skia (PyPI: skia-python)
+    #
+    # 注意：此集合为兜底，主要保护由 _discover_transitive_deps() 动态发现。
+    # 动态发现使用 importlib.metadata.requires() 读取包元数据的声明依赖，
+    # 能自动适应版本升级带来的新依赖（如 pictex 2.x 新增 uharfbuzz/bidi 等）。
+    # 此处的硬编码仅作为元数据缺失/不可读时的防御性补充，以及已知但
+    # 元数据未声明的函数级导入（如 pictex 内部 bidi 的函数级 import）的保护。
     HIDDEN_IMPORT_DEPS: set[str] = {
         "numba",
         "llvmlite",
@@ -182,6 +189,33 @@ class DependencyAnalyzer:
         "_multiprocess",
         "skia",
         "skia_python",
+        "uharfbuzz",
+        "bidi",
+        "python_bidi",
+        "regex",
+        "stretchable",
+    }
+
+    # 反向映射：PyPI 包名 → 顶层导入名（补充 _IMPORT_TO_PACKAGE 的反向查询）
+    # 用于将动态发现的传递依赖包名映射回导入名，确保排除检查双向匹配
+    _PACKAGE_TO_IMPORT: dict[str, str] = {
+        "opencv-python": "cv2",
+        "Pillow": "PIL",
+        "scikit-image": "skimage",
+        "scikit-learn": "sklearn",
+        "PyYAML": "yaml",
+        "beautifulsoup4": "bs4",
+        "pyserial": "serial",
+        "pyOpenSSL": "OpenSSL",
+        "pycryptodome": "Crypto",
+        "attrs": "attr",
+        "python-dateutil": "dateutil",
+        "python-dotenv": "dotenv",
+        "python-jose": "jose",
+        "python-magic": "magic",
+        "PyJWT": "jwt",
+        "python-bidi": "bidi",
+        "skia-python": "skia",
     }
 
     def __init__(self, source_dir: str) -> None:
@@ -384,6 +418,84 @@ class DependencyAnalyzer:
         module_path = os.path.join(stdlib_path, module_name)
         return os.path.exists(module_path + ".py") or os.path.isdir(module_path)
 
+    # ── 传递依赖动态发现 ──────────────────────────────────
+
+    def _discover_transitive_deps(self, root_packages: set[str]) -> set[str]:
+        """动态发现一组包的全部传递依赖（导入名 + 包名）
+
+        使用 importlib.metadata.requires() 读取包元数据声明的依赖，
+        递归展开至叶子节点。这是彻底解决库遗漏问题的关键：
+        当 movielite/pictex 等隐藏导入新增传递依赖时（如 pictex 2.x
+        新增 uharfbuzz/bidi/regex/stretchable），本方法能自动发现并保护，
+        无需手动维护硬编码列表。
+
+        Args:
+            root_packages: 起始包的 PyPI 名称集合（如 {"movielite", "pictex"}）
+
+        Returns:
+            受保护的标识符集合，包含每个传递依赖的:
+              - 规范化 PyPI 包名（- 替换为 _）
+              - 顶层导入名（通过 _PACKAGE_TO_IMPORT 映射）
+            两种形式都加入集合，确保排除检查双向匹配。
+        """
+        import re
+
+        protected: set[str] = set()
+        # 待处理的包队列（规范化为 PyPI 名，- 保留）
+        queue: list[str] = list(root_packages)
+        visited: set[str] = set()
+
+        while queue:
+            pkg = queue.pop(0)
+            # 规范化 key 用于去重（大小写不敏感、- 与 _ 等价）
+            norm_key = pkg.lower().replace("-", "_")
+            if norm_key in visited:
+                continue
+            visited.add(norm_key)
+
+            # 获取该包声明的依赖
+            try:
+                from importlib.metadata import requires as _requires
+                deps = _requires(pkg)
+            except Exception:
+                # 包未安装或元数据不可读，跳过（由 HIDDEN_IMPORT_DEPS 兜底）
+                continue
+
+            if not deps:
+                continue
+
+            for req_str in deps:
+                # 解析需求字符串，提取包名
+                # 格式示例: "numpy>=1.24", "Pillow>=10.0; extra == 'x'", "pictex"
+                # 取第一个非空格、非分号前的 token 作为包名
+                name_match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req_str)
+                if not name_match:
+                    continue
+                dep_name = name_match.group(1)
+
+                # 跳过标准库（Python 自带，无需保护）
+                if self._is_stdlib(dep_name.replace("-", "_")):
+                    continue
+
+                # 规范化：PyPI 名（- 形式）与导入名（_ 形式）
+                dep_normalized = dep_name.replace("-", "_")
+                protected.add(dep_normalized)
+                protected.add(dep_name)
+
+                # 同时加入导入名形式（如 python-bidi → bidi）
+                import_name = self._PACKAGE_TO_IMPORT.get(dep_name)
+                if import_name:
+                    protected.add(import_name)
+                # 也查 installed 字典的反向（但此处无 installed，用 _IMPORT_TO_PACKAGE 反查）
+                for imp, pkg_n in _IMPORT_TO_PACKAGE.items():
+                    if pkg_n.lower() == dep_name.lower():
+                        protected.add(imp)
+
+                # 递归：将此依赖加入队列继续展开（深度优先发现完整传递链）
+                queue.append(dep_name)
+
+        return protected
+
     # ── 主分析入口 ────────────────────────────────────────
 
     def analyze(self, clean_stdlib: bool = False) -> AnalysisResult:
@@ -425,7 +537,19 @@ class DependencyAnalyzer:
 
         print(f"  [OK] 实际使用 {len(used_packages)} 个第三方包")
 
-        # 4. 计算未使用的包
+        # 4. 动态发现隐藏导入的传递依赖，构建保护集
+        # 这一步是彻底解决库遗漏问题的关键：用 importlib.metadata.requires()
+        # 递归读取 REQUIRED_PACKAGES（movielite/pictex 等）的声明依赖，
+        # 自动适应版本升级带来的新依赖，不再依赖手动维护硬编码列表。
+        # HIDDEN_IMPORT_DEPS 作为元数据缺失时的兜底补充。
+        discovered_deps = self._discover_transitive_deps(self.REQUIRED_PACKAGES)
+        protected_deps: set[str] = discovered_deps | self.HIDDEN_IMPORT_DEPS
+        print(
+            f"  [OK] 保护 {len(protected_deps)} 个传递依赖"
+            f"（动态发现 {len(discovered_deps)}，兜底 {len(self.HIDDEN_IMPORT_DEPS)}）"
+        )
+
+        # 5. 计算未使用的包
         unused: list[str] = []
         for import_name, pkg_name in installed.items():
             # 跳过项目自身包
@@ -436,7 +560,8 @@ class DependencyAnalyzer:
                 continue
             # 跳过隐藏导入的传递依赖（import_name 和 pkg_name 都要检查，
             # 因为 skia 的导入名是 "skia"，PyPI 包名是 "skia-python"）
-            if import_name in self.HIDDEN_IMPORT_DEPS or pkg_name in self.HIDDEN_IMPORT_DEPS:
+            # 使用动态发现的保护集 + 硬编码兜底集
+            if import_name in protected_deps or pkg_name in protected_deps:
                 continue
             # 跳过 PyInstaller 自身及其依赖
             if pkg_name.lower() in ("pyinstaller", "altgraph", "pyinstaller-hooks-contrib"):
@@ -454,7 +579,7 @@ class DependencyAnalyzer:
 
         print(f"  [OK] 识别出 {len(unused)} 个未使用的包可排除")
 
-        # 5. 标准库排除列表
+        # 6. 标准库排除列表
         stdlib_excludes: list[str] = []
         if clean_stdlib:
             stdlib_excludes = list(_STDLIB_EXCLUDES)
@@ -467,6 +592,7 @@ class DependencyAnalyzer:
             unused_packages=unused,
             stdlib_excludes=stdlib_excludes,
             all_imports=all_imports,
+            protected_deps=protected_deps,
         )
 
     def get_exclude_modules(self, clean_stdlib: bool = False) -> list[str]:
