@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from arknights_video_pipeline.core.utils import SUPPORTED_VIDEO_EXTENSIONS
 from arknights_video_pipeline.gui.assets.icons.nav_icons import make_icon_pixmap
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
+from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 
 
@@ -30,12 +31,18 @@ STATUS_RUNNING = "running"
 STATUS_SUCCESS = "success"
 STATUS_FAILED = "failed"
 
-_STATUS_TEXT: dict[str, str] = {
-    STATUS_PENDING: "等待中",
-    STATUS_RUNNING: "处理中",
-    STATUS_SUCCESS: "已完成",
-    STATUS_FAILED: "失败",
+# 状态码 → 翻译 key
+_STATUS_KEYS: dict[str, str] = {
+    STATUS_PENDING: "batch.status.pending",
+    STATUS_RUNNING: "batch.status.running",
+    STATUS_SUCCESS: "batch.status.success",
+    STATUS_FAILED: "batch.status.failed",
 }
+
+
+def _status_text(status: str) -> str:
+    """状态码 → 当前语言的显示文本（缺失时回退到状态码本身）"""
+    return tr(_STATUS_KEYS.get(status, ""), default=status)
 
 
 class BatchVideoRow(QWidget):
@@ -87,7 +94,7 @@ class BatchVideoRow(QWidget):
         layout.addWidget(self._progress)
 
         # 状态文本
-        self._status_label = QLabel(_STATUS_TEXT[STATUS_PENDING])
+        self._status_label = QLabel(_status_text(STATUS_PENDING))
         self._status_label.setMinimumWidth(48)
         self._status_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -96,9 +103,9 @@ class BatchVideoRow(QWidget):
         layout.addWidget(self._status_label)
 
         # 上移 / 下移 / 删除按钮
-        self._up_btn = self._make_icon_btn("arrow_upward", "上移")
-        self._down_btn = self._make_icon_btn("arrow_downward", "下移")
-        self._del_btn = self._make_icon_btn("delete", "移除")
+        self._up_btn = self._make_icon_btn("arrow_upward", tr("batch.tooltip.up"))
+        self._down_btn = self._make_icon_btn("arrow_downward", tr("batch.tooltip.down"))
+        self._del_btn = self._make_icon_btn("delete", tr("batch.tooltip.delete"))
         layout.addWidget(self._up_btn)
         layout.addWidget(self._down_btn)
         layout.addWidget(self._del_btn)
@@ -122,7 +129,7 @@ class BatchVideoRow(QWidget):
         if percent is not None:
             self._percent = max(0, min(100, percent))
         self._progress.setValue(self._percent)
-        self._status_label.setText(_STATUS_TEXT.get(status, status))
+        self._status_label.setText(_status_text(status))
         self._status_label.setStyleSheet(self._status_text_qss())
         self._progress.setStyleSheet(self._progress_qss())
         self._refresh_status_icon()
@@ -135,10 +142,17 @@ class BatchVideoRow(QWidget):
         self._status = STATUS_PENDING
         self._percent = 0
         self._progress.setValue(0)
-        self._status_label.setText(_STATUS_TEXT[STATUS_PENDING])
+        self._status_label.setText(_status_text(STATUS_PENDING))
         self._status_label.setStyleSheet(self._status_text_qss())
         self._progress.setStyleSheet(self._progress_qss())
         self._refresh_status_icon()
+
+    def refresh_translations(self) -> None:
+        """语言切换时刷新状态文本与按钮 tooltip"""
+        self._status_label.setText(_status_text(self._status))
+        self._up_btn.setToolTip(tr("batch.tooltip.up"))
+        self._down_btn.setToolTip(tr("batch.tooltip.down"))
+        self._del_btn.setToolTip(tr("batch.tooltip.delete"))
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
@@ -258,11 +272,11 @@ class BatchVideoList(QWidget):
         # 顶部操作栏
         top_bar = QHBoxLayout()
         top_bar.setSpacing(8)
-        self._add_btn = MaterialButton("Add videos", variant=MaterialButton.VARIANT_FILLED)
+        self._add_btn = MaterialButton(tr("batch.add_videos"), variant=MaterialButton.VARIANT_FILLED)
         self._add_btn.clicked.connect(self._on_add_clicked)
-        self._clear_btn = MaterialButton("Clear", variant=MaterialButton.VARIANT_TEXT)
+        self._clear_btn = MaterialButton(tr("batch.clear"), variant=MaterialButton.VARIANT_TEXT)
         self._clear_btn.clicked.connect(self.clear)
-        self._count_label = QLabel("0 个文件")
+        self._count_label = QLabel(tr("batch.count", n=0))
         self._count_label.setStyleSheet(
             f"color: {colors.on_surface_variant}; border: none; background: transparent;"
         )
@@ -289,13 +303,25 @@ class BatchVideoList(QWidget):
         outer.addWidget(self._scroll, 1)
 
         # 空列表占位提示
-        self._placeholder = QLabel("拖放视频文件到此处，或点击「Add videos」添加")
+        self._placeholder = QLabel(tr("batch.placeholder"))
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet(
             f"color: {colors.on_surface_variant}; border: none; background: transparent;"
             " padding: 24px;"
         )
         self._list_layout.addWidget(self._placeholder)
+
+        # 语言切换时刷新所有静态文本与已有行
+        i18n().language_changed.connect(self._retranslate)
+
+    def _retranslate(self) -> None:
+        """语言切换时刷新按钮文本、计数、占位提示与所有行的状态/tooltip"""
+        self._add_btn.setText(tr("batch.add_videos"))
+        self._clear_btn.setText(tr("batch.clear"))
+        self._count_label.setText(tr("batch.count", n=len(self._rows)))
+        self._placeholder.setText(tr("batch.placeholder"))
+        for row in self._rows:
+            row.refresh_translations()
 
     # ── 公开 API ──────────────────────────────────────────
 
@@ -411,7 +437,7 @@ class BatchVideoList(QWidget):
         exts = ' '.join(f'*{e}' for e in sorted(SUPPORTED_VIDEO_EXTENSIONS))
         filter_str = f'Video files ({exts});;All files (*.*)'
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择视频文件", "", filter_str,
+            self, tr("batch.open_title"), "", filter_str,
         )
         if paths:
             self.add_paths(paths)
@@ -453,7 +479,7 @@ class BatchVideoList(QWidget):
     def _reindex(self) -> None:
         for i, row in enumerate(self._rows, start=1):
             row.set_index(i)
-        self._count_label.setText(f"{len(self._rows)} 个文件")
+        self._count_label.setText(tr("batch.count", n=len(self._rows)))
 
     def _refresh_placeholder(self) -> None:
         has_rows = bool(self._rows)

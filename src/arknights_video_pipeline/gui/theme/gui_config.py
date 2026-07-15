@@ -23,10 +23,15 @@ from arknights_video_pipeline.core.utils import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
+# 支持的语言码（与 gui.i18n.I18n.SUPPORTED_LANGUAGES 保持一致）
+_SUPPORTED_LANGUAGES = ("zh-CN", "en-US")
+_DEFAULT_LANGUAGE = "zh-CN"
+
 # 默认 GUI 配置（config/gui.json 缺失时使用）
 _GUI_DEFAULTS: dict[str, Any] = {
     "theme": "light",
     "advanced_expanded": False,
+    "language": _DEFAULT_LANGUAGE,
 }
 
 
@@ -38,10 +43,12 @@ class GuiConfig(QObject):
 
     Signals:
         theme_changed(theme: str): 主题变更信号（"light" 或 "dark"）
+        language_changed(language: str): 语言变更信号（"zh-CN" 或 "en-US"）
         config_changed(): 通用配置变更信号（set() 写入非受保护键时发出）
     """
 
     theme_changed = pyqtSignal(str)
+    language_changed = pyqtSignal(str)
     config_changed = pyqtSignal()
 
     def __init__(
@@ -123,6 +130,32 @@ class GuiConfig(QObject):
         """便捷方法：当前主题是否为深色"""
         return self.theme() == "dark"
 
+    # ── 语言 ───────────────────────────────────────────────
+
+    def language(self) -> str:
+        """获取当前语言码，返回 ``"zh-CN"`` 或 ``"en-US"``。
+
+        非法值回退到默认 ``"zh-CN"``。
+        """
+        lang = self._data.get("language", _DEFAULT_LANGUAGE)
+        return lang if lang in _SUPPORTED_LANGUAGES else _DEFAULT_LANGUAGE
+
+    def set_language(self, language: str) -> None:
+        """设置语言并持久化、发出 ``language_changed`` 信号
+
+        Args:
+            language: ``"zh-CN"`` 或 ``"en-US"``
+
+        非法值将被忽略并记录 warning（不抛异常，避免 UI 回调崩溃）。
+        """
+        if language not in _SUPPORTED_LANGUAGES:
+            logger.warning("非法的语言码: %r，仅允许 %s", language, _SUPPORTED_LANGUAGES)
+            return
+        if self._data.get("language") != language:
+            self._data["language"] = language
+            self._trigger_save()
+            self.language_changed.emit(language)
+
     # ── 高级分区折叠状态 ─────────────────────────────────
 
     def is_advanced_expanded(self) -> bool:
@@ -143,6 +176,8 @@ class GuiConfig(QObject):
     def set(self, key: str, value: Any) -> None:
         if key == "theme":
             raise ValueError("使用 set_theme() 设置主题")
+        if key == "language":
+            raise ValueError("使用 set_language() 设置语言")
         self._data[key] = value
         self._trigger_save()
         self.config_changed.emit()

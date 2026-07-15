@@ -15,7 +15,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 
-from arknights_video_pipeline.core.utils import PROJECT_ROOT, load_config, save_default_config
+from arknights_video_pipeline.core.utils import (
+    PROJECT_ROOT,
+    _no_window_kwargs,
+    load_config,
+    save_default_config,
+)
 
 # 模块级 logger（由 pipeline.py 的 setup_logger 统一配置 root logger）
 logger = logging.getLogger(__name__)
@@ -258,7 +263,16 @@ def downscale_video(video_path, target_height=720):
     ]
 
     try:
-        subprocess.run(cmd, check=True, timeout=300, capture_output=True)
+        subprocess.run(
+            cmd,
+            check=True,
+            timeout=300,
+            capture_output=True,
+            # GUI exe（--noconsole）启动 ffmpeg 时，Windows 会为子进程
+            # 分配全新 console 窗口（虽然 capture_output 已重定向输出，
+            # 窗口仍会弹出且无内容）。CREATE_NO_WINDOW 阻止分配。
+            **_no_window_kwargs(),
+        )
     except subprocess.CalledProcessError as e:
         stderr_msg = e.stderr.decode('utf-8', errors='replace') if e.stderr else ''
         logger.error(f"转码失败: {e}\nffmpeg stderr: {stderr_msg}")

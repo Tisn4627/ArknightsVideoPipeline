@@ -23,6 +23,7 @@ from arknights_video_pipeline.gui.components import (
     BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
     MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage,
 )
+from arknights_video_pipeline.gui.i18n import init_i18n, i18n, tr
 from arknights_video_pipeline.gui.theme import (
     MaterialColors, MaterialStyle, MaterialTypography, apply_titlebar_theme,
     GuiConfig,
@@ -54,7 +55,10 @@ class MainWindow(QMainWindow):
         # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
         self._titlebar_applied = False
 
-        self.setWindowTitle("ArknightsVideoPipeline")
+        # 初始化 i18n 单例（必须在构建 widget 之前，使 widget 可连接 language_changed）
+        init_i18n(language=self._gui_config.language(), parent=self)
+
+        self.setWindowTitle(tr("app.title"))
         self.setMinimumSize(720, 480)
         self.resize(900, 600)
 
@@ -65,6 +69,8 @@ class MainWindow(QMainWindow):
         self._apply_initial_theme()
         self._connect_signals()
         self._load_config_to_ui()
+        # 语言切换时刷新主页所有静态文本
+        i18n().language_changed.connect(self._retranslate)
 
     # ── 界面构建 ──────────────────────────────────────────
 
@@ -144,18 +150,18 @@ class MainWindow(QMainWindow):
         hero_layout.setSpacing(24)
         hero_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        title = QLabel("Arknights Video Pipeline")
+        self._hero_title_label = QLabel(tr("home.title"))
         # MD3 Hero 标题：使用 display_large 字体作为基线 + 内联 QSS
         # 覆盖更大的像素尺寸与字重，符合设计规范中 Hero 区域"大号"
         # display_large 标题的视觉强调。
-        title.setFont(MaterialTypography().display_large)
-        title.setStyleSheet(
+        self._hero_title_label.setFont(MaterialTypography().display_large)
+        self._hero_title_label.setStyleSheet(
             "border: none; background: transparent;"
             " font-size: 48px; font-weight: 600; line-height: 1.15;"
             " letter-spacing: -1.5px;"
         )
-        title.setWordWrap(True)
-        hero_layout.addWidget(title)
+        self._hero_title_label.setWordWrap(True)
+        hero_layout.addWidget(self._hero_title_label)
 
         self._content_layout.addWidget(hero)
 
@@ -168,10 +174,10 @@ class MainWindow(QMainWindow):
         self._config_card = self._build_config_card()
         self._steps_card = self._build_steps_card()
 
-        self._progress_card_widget = MaterialCard("Processing status")
+        self._progress_card_widget = MaterialCard(tr("home.processing_status"))
         self._progress_card_widget.add_widget(self._progress_card)
 
-        self._log_card = MaterialCard("Runtime logs")
+        self._log_card = MaterialCard(tr("home.runtime_logs"))
         # 传入当前主题 colors，避免 LogViewer 内部使用浅色默认色板导致
         # 首次进入深色模式时 [INFO] 等行文字颜色几乎与背景同色而不可见
         self._log_viewer = LogViewer(colors=self._settings_page.colors)
@@ -297,14 +303,14 @@ class MainWindow(QMainWindow):
         （``_build_advanced_card``），由 MainWindow 通过 settings_page
         共享同一组控件实例，避免双源状态不同步。
         """
-        card = MaterialCard("Input configuration")
+        card = MaterialCard(tr("home.input_config"))
         layout = QVBoxLayout()
         layout.setSpacing(16)
 
         self._bg_selector = FileSelector(
             mode=FileSelector.MODE_OPEN_FILE,
-            label="Background",
-            placeholder="Background image (style1)",
+            label=tr("home.background"),
+            placeholder=tr("home.background_placeholder"),
         )
         self._bg_selector.set_filter(
             "Image files (*.jpg *.jpeg *.png *.bmp *.webp);;All files (*.*)"
@@ -313,7 +319,14 @@ class MainWindow(QMainWindow):
 
         self._style_combo = QComboBox()
         self._style_combo.addItems(["style1", "style2"])
-        layout.addLayout(self._labeled_row("Style", self._style_combo))
+        # 内联创建 Style 行以便存储 label 引用供 _retranslate 使用
+        self._style_label = QLabelEx(tr("home.style"))
+        self._style_label.setFixedWidth(72)
+        style_row = QHBoxLayout()
+        style_row.setSpacing(12)
+        style_row.addWidget(self._style_label)
+        style_row.addWidget(self._style_combo, 1)
+        layout.addLayout(style_row)
 
         # 跳过步骤：与上方 input rows 节奏一致的 sub-section
         # 背景与标题颜色需跟随主题切换（深色模式下不能继续用白色），
@@ -324,7 +337,7 @@ class MainWindow(QMainWindow):
         skip_layout.setContentsMargins(0, 0, 0, 0)
         skip_layout.setSpacing(10)
 
-        skip_title = QLabel("Skip steps")
+        skip_title = QLabel(tr("home.skip_steps"))
         skip_title.setAttribute(
             Qt.WidgetAttribute.WA_StyledBackground, False
         )
@@ -338,18 +351,17 @@ class MainWindow(QMainWindow):
         skip_flow.setVerticalSpacing(8)
         self._skip_checkboxes: dict[str, MaterialCheckBox] = {}
         for key, label in [
-            ("copilot", "MAA"),
-            ("formation", "Formation"),
-            ("actions", "Actions"),
-            ("track", "Track"),
-            ("compose", "Compose"),
+            ("copilot", tr("home.skip.copilot")),
+            ("formation", tr("home.skip.formation")),
+            ("actions", tr("home.skip.actions")),
+            ("track", tr("home.skip.track")),
+            ("compose", tr("home.skip.compose")),
         ]:
             # MD3 复选框：使用 MaterialCheckBox（自绘 indicator + 对勾），
             # 绕开 PyQt ``QCheckBox::indicator`` 不支持 ``image: url()`` 替换
             # 内置渲染的限制；同时摆脱全局 QSS 给 ``QCheckBox::indicator``
             # 设置 ``background-color: primary`` 造成的"全是紫方块"问题。
             cb = MaterialCheckBox(label, colors=self._settings_page.colors)
-            cb.setToolTip(f"Skip {key} step")
             self._skip_checkboxes[key] = cb
             # 初始按单行排列（每列一个），_reflow_skip_checkboxes 会
             # 根据可用宽度重新调整列数，使窄屏下不至于撑出横向滚动条
@@ -361,8 +373,8 @@ class MainWindow(QMainWindow):
         # 操作按钮
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
-        self._run_btn = MaterialButton("Start", variant=MaterialButton.VARIANT_FILLED)
-        self._cancel_btn = MaterialButton("Cancel", variant=MaterialButton.VARIANT_OUTLINED)
+        self._run_btn = MaterialButton(tr("home.start"), variant=MaterialButton.VARIANT_FILLED)
+        self._cancel_btn = MaterialButton(tr("home.cancel"), variant=MaterialButton.VARIANT_OUTLINED)
         self._cancel_btn.setEnabled(False)
 
         btn_layout.addWidget(self._run_btn)
@@ -375,7 +387,7 @@ class MainWindow(QMainWindow):
 
     def _build_steps_card(self) -> MaterialCard:
         """批量视频文件列表卡片（取代原 Pipeline steps 面板）"""
-        card = MaterialCard("Video files")
+        card = MaterialCard(tr("home.video_files"))
         self._batch_list = BatchVideoList(colors=self._settings_page.colors)
         card.add_widget(self._batch_list)
         return card
@@ -422,6 +434,10 @@ class MainWindow(QMainWindow):
         # 高级分区折叠状态：从 gui.json 加载初始值 + 连接变更信号
         sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
         sp.advanced_expanded_changed.connect(self._gui_config.set_advanced_expanded)
+        # 语言切换：SettingsPage 下拉框 → i18n.set_language → language_changed → 全局 _retranslate
+        sp.language_change_requested.connect(self._on_language_change_requested)
+        # 同步当前语言到 SettingsPage 下拉框（阻塞信号避免回环）
+        sp.set_language(self._gui_config.language())
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
 
         for key, cb in self._skip_checkboxes.items():
@@ -569,13 +585,18 @@ class MainWindow(QMainWindow):
         if set(generated) & sub_keys or "pipeline" in generated:
             sp.load_sub_config_values(self._config)
 
-        # 4. 刷新 GUI 偏好（主题 + 高级折叠状态）
+        # 4. 刷新 GUI 偏好（主题 + 高级折叠状态 + 语言）
         if "gui" in generated:
             self._gui_config.reload()
             dark = self._gui_config.is_dark_theme()
             if dark != self._is_dark:
                 self._on_theme_change_requested(dark)
             sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
+            # 语言重置后恢复（gui.json 重置为默认 zh-CN）
+            lang = self._gui_config.language()
+            if lang != i18n().language():
+                i18n().set_language(lang)  # 触发 language_changed → 全局 _retranslate
+            sp.set_language(lang)  # 同步下拉框（阻塞信号）
 
     def _on_skip_changed(self) -> None:
         steps = {key for key, cb in self._skip_checkboxes.items() if cb.isChecked()}
@@ -604,17 +625,53 @@ class MainWindow(QMainWindow):
             self._nav_rail.set_selected(self._current_page)
             self._nav_rail.blockSignals(False)
 
+    # ── 语言切换 ──────────────────────────────────────────
+
+    def _on_language_change_requested(self, lang: str) -> None:
+        """SettingsPage 语言下拉框变更：切换 i18n 语言并持久化
+
+        i18n().set_language 成功时 emit language_changed，触发所有 widget
+        的 _retranslate（包括 SettingsPage 自身与 MainWindow._retranslate）。
+        """
+        if i18n().set_language(lang):
+            self._gui_config.set_language(lang)
+
+    def _retranslate(self) -> None:
+        """语言切换时刷新主页所有静态文本"""
+        self.setWindowTitle(tr("app.title"))
+        self._hero_title_label.setText(tr("home.title"))
+        self._config_card.set_title(tr("home.input_config"))
+        self._steps_card.set_title(tr("home.video_files"))
+        self._progress_card_widget.set_title(tr("home.processing_status"))
+        self._log_card.set_title(tr("home.runtime_logs"))
+        self._bg_selector.set_label(tr("home.background"))
+        self._bg_selector.set_placeholder(tr("home.background_placeholder"))
+        self._style_label.setText(tr("home.style"))
+        self._skip_title.setText(tr("home.skip_steps"))
+        # Skip 复选框标签（专有名词，两语言相同，但仍刷新以保持一致性）
+        skip_labels = {
+            "copilot": tr("home.skip.copilot"),
+            "formation": tr("home.skip.formation"),
+            "actions": tr("home.skip.actions"),
+            "track": tr("home.skip.track"),
+            "compose": tr("home.skip.compose"),
+        }
+        for key, cb in self._skip_checkboxes.items():
+            cb.setText(skip_labels.get(key, key))
+        self._run_btn.setText(tr("home.start"))
+        self._cancel_btn.setText(tr("home.cancel"))
+
     # ── 操作处理 ──────────────────────────────────────────
 
     def _on_run(self) -> None:
         paths = self._batch_list.video_paths()
         if not paths:
-            self._show_warning("No video files", "请先添加至少一个视频文件")
+            self._show_warning(tr("msg.no_video_title"), tr("msg.no_video_text"))
             return
 
         errors = self._service.validate_batch(paths)
         if errors:
-            self._show_warning("Input validation failed", "\n".join(errors))
+            self._show_warning(tr("msg.validation_failed_title"), "\n".join(errors))
             return
 
         self._batch_list.reset_states()
@@ -634,8 +691,8 @@ class MainWindow(QMainWindow):
         self._progress_card.set_batch_finished(success_count, total, cancelled)
         if not cancelled and success_count < total:
             self._show_critical(
-                "Processing completed with errors",
-                f"{total - success_count} 个文件处理失败，请查看日志。",
+                tr("msg.completed_errors_title"),
+                tr("msg.completed_errors_text", failed=total - success_count),
             )
 
     def _set_running_ui(self, running: bool) -> None:
@@ -792,14 +849,18 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self._service.is_running():
             confirmed = self._show_confirm(
-                "Confirm exit",
-                "Pipeline is running. Are you sure you want to exit?",
-                confirm_text="Exit",
+                tr("msg.confirm_exit_title"),
+                tr("msg.confirm_exit_text"),
+                confirm_text=tr("msg.confirm_exit_confirm"),
             )
             if confirmed:
                 self._service.cancel_pipeline()
                 # 等待 worker 线程退出，避免 QThread 被销毁时仍在运行
                 self._service.wait_for_shutdown(timeout_ms=5000)
+                # 长步骤（MAA/track/compose 可达数百秒）不会在 5s 内响应 cancel，
+                # 强制终止以确保进程能退出
+                if self._service.is_running():
+                    self._service.force_terminate_workers(timeout_ms=2000)
                 self._gui_config.save()
                 self._config.save_all()
                 event.accept()
@@ -830,10 +891,12 @@ class MainWindow(QMainWindow):
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
 
-    def _show_confirm(self, title: str, text: str, confirm_text: str = "Confirm") -> bool:
+    def _show_confirm(self, title: str, text: str, confirm_text: str | None = None) -> bool:
         from arknights_video_pipeline.gui.components.message_dialog import ConfirmDialog
         dlg = ConfirmDialog(
-            title, text, confirm_text=confirm_text, cancel_text="Cancel",
+            title, text,
+            confirm_text=confirm_text or tr("dialog.confirm"),
+            cancel_text=tr("dialog.cancel"),
             colors=self._settings_page.colors, parent=self,
         )
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)

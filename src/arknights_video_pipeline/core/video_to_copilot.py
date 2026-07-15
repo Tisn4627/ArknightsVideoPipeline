@@ -8,8 +8,11 @@ import copy
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import time
+import uuid
 from datetime import datetime
 
 from arknights_video_pipeline.core.utils import (
@@ -89,6 +92,77 @@ def _safe_add_to_sys_path(path: str) -> str:
     return abs_path
 
 
+def _is_ascii_path(path: str) -> bool:
+    """判断路径是否仅含 ASCII 字符"""
+    try:
+        path.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _get_short_path_name(long_path: str) -> str:
+    """将长路径转换为 Windows 8.3 短路径。
+
+    MAA C++ 的 path_to_crt_string 通过 wcstombs_s 将路径转为 CRT 多字节
+    字符串后传给 cv::VideoCapture。当路径含非 ASCII 字符时，该转换的结果
+    可能无法被 OpenCV 正确解析（导致 ``video_io open failed``）。8.3 短路径
+    是纯 ASCII，可绕过所有编码问题，且引用的是同一个文件（无需临时文件）。
+
+    Returns:
+        8.3 短路径；如果转换失败或不可用则返回原始路径
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+    GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    GetShortPathNameW.restype = wintypes.DWORD
+
+    buf_size = GetShortPathNameW(long_path, None, 0)
+    if buf_size == 0:
+        logger.debug(f"GetShortPathNameW 失败: {long_path}")
+        return long_path
+
+    buf = ctypes.create_unicode_buffer(buf_size)
+    if GetShortPathNameW(long_path, buf, buf_size) == 0:
+        logger.debug(f"GetShortPathNameW 第二次调用失败: {long_path}")
+        return long_path
+
+    short_path = buf.value
+    logger.debug(f"短路径转换: {long_path} -> {short_path}")
+    return short_path
+
+
+def _make_ascii_video_path(video_path: str):
+    """为含非 ASCII 字符的视频路径创建纯 ASCII 临时路径（回退方案）。
+
+    当 8.3 短路径不可用（卷上禁用了 8.3 短文件名生成）时，通过硬链接
+    （同卷，零拷贝）或复制（跨卷回退）创建纯 ASCII 临时文件。
+
+    Returns:
+        (ascii_path, cleanup_fn): cleanup_fn 用于识别结束后删除临时文件
+    """
+    ext = os.path.splitext(video_path)[1] or ".mp4"
+    ascii_name = f"maa_video_{uuid.uuid4().hex}{ext}"
+    ascii_path = os.path.join(tempfile.gettempdir(), ascii_name)
+
+    try:
+        os.link(video_path, ascii_path)
+        logger.debug(f"已创建硬链接: {video_path} -> {ascii_path}")
+    except OSError:
+        logger.debug(f"硬链接失败，回退到复制: {video_path} -> {ascii_path}")
+        shutil.copy2(video_path, ascii_path)
+
+    def cleanup():
+        try:
+            os.remove(ascii_path)
+        except OSError:
+            pass
+
+    return ascii_path, cleanup
+
+
 def run_maa_recognition(maa_path, video_path, timeout=None):
     """
     使用MAA识别引擎分析战斗视频
@@ -109,66 +183,91 @@ def run_maa_recognition(maa_path, video_path, timeout=None):
     except ImportError as e:
         raise ImportError(f"无法导入MAA Python接口: {e}\n请确认MAA目录下存在Python/asst模块")
 
-    # 加载MAA资源
-    maa_abs_path = os.path.abspath(maa_path)
-    if not Asst.load(path=maa_abs_path):
-        raise RuntimeError("MAA资源加载失败")
+    # MAA C++ 的 path_to_crt_string 通过 wcstombs_s 将路径转为 CRT 多字节
+    # 字符串后传给 cv::VideoCapture。当路径含非 ASCII 字符时，转换结果可能
+    # 无法被 OpenCV 正确解析（导致 ``video_io open failed``）。
+    # 优先使用 Windows 8.3 短路径（纯 ASCII，引用同一文件，无临时文件）；
+    # 8.3 不可用时回退到临时硬链接。
+    if not _is_ascii_path(video_path):
+        short_path = _get_short_path_name(video_path)
+        if _is_ascii_path(short_path):
+            ascii_video_path = short_path
+            cleanup = None
+            logger.info(f"视频路径含非ASCII字符，已转换为8.3短路径: {ascii_video_path}")
+        else:
+            ascii_video_path, cleanup = _make_ascii_video_path(video_path)
+            logger.warning(
+                f"8.3短路径仍含非ASCII字符（可能已禁用8.3短文件名），"
+                f"回退到临时文件: {ascii_video_path}"
+            )
+    else:
+        ascii_video_path = video_path
+        cleanup = None
 
-    logger.info("MAA资源加载成功")
+    try:
+        # 加载MAA资源
+        maa_abs_path = os.path.abspath(maa_path)
+        if not Asst.load(path=maa_abs_path):
+            raise RuntimeError("MAA资源加载失败")
 
-    # 创建实例
-    result_json_path = None
+        logger.info("MAA资源加载成功")
 
-    @Asst.CallBackType
-    def callback(msg, details, arg):
-        nonlocal result_json_path
-        try:
-            m = Message(msg)
-            d = json.loads(details.decode("utf-8"))
+        # 创建实例
+        result_json_path = None
 
-            what = d.get("what", "")
-            if m == Message.SubTaskExtraInfo and what == "Finished":
-                filename = d.get("details", {}).get("filename", "")
-                if filename:
-                    result_json_path = filename
-                    logger.info(f"识别结果文件: {filename}")
-            elif m == Message.SubTaskStart:
-                logger.info(f"  开始: {what}")
-            elif m == Message.SubTaskCompleted:
-                logger.info(f"  完成: {what}")
-            elif m == Message.TaskChainError:
-                logger.error(f"任务链错误: {d}")
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.warning(f"callback 消息解析失败: {e}")
-
-    asst = Asst(callback=callback)
-
-    # 使用VideoRecognition任务进行视频识别
-    task_id = asst.append_task("VideoRecognition", {
-        "filename": video_path
-    })
-
-    if task_id == 0:
-        raise RuntimeError("MAA任务创建失败")
-
-    logger.info("开始MAA视频识别...")
-    if not asst.start():
-        raise RuntimeError("MAA任务启动失败")
-
-    # 等待任务完成（带超时控制）
-    start_time = time.time()
-    while asst.running():
-        if timeout and (time.time() - start_time) > timeout:
+        @Asst.CallBackType
+        def callback(msg, details, arg):
+            nonlocal result_json_path
             try:
-                asst.stop()
-            except Exception:
-                pass
-            raise TimeoutError(f"MAA识别超时({timeout}s)")
-        time.sleep(0.5)
+                m = Message(msg)
+                d = json.loads(details.decode("utf-8"))
 
-    logger.info("MAA视频识别完成")
+                what = d.get("what", "")
+                if m == Message.SubTaskExtraInfo and what == "Finished":
+                    filename = d.get("details", {}).get("filename", "")
+                    if filename:
+                        result_json_path = filename
+                        logger.info(f"识别结果文件: {filename}")
+                elif m == Message.SubTaskStart:
+                    logger.info(f"  开始: {what}")
+                elif m == Message.SubTaskCompleted:
+                    logger.info(f"  完成: {what}")
+                elif m == Message.TaskChainError:
+                    logger.error(f"任务链错误: {d}")
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning(f"callback 消息解析失败: {e}")
 
-    return result_json_path
+        asst = Asst(callback=callback)
+
+        # 使用VideoRecognition任务进行视频识别
+        task_id = asst.append_task("VideoRecognition", {
+            "filename": ascii_video_path
+        })
+
+        if task_id == 0:
+            raise RuntimeError("MAA任务创建失败")
+
+        logger.info("开始MAA视频识别...")
+        if not asst.start():
+            raise RuntimeError("MAA任务启动失败")
+
+        # 等待任务完成（带超时控制）
+        start_time = time.time()
+        while asst.running():
+            if timeout and (time.time() - start_time) > timeout:
+                try:
+                    asst.stop()
+                except Exception:
+                    pass
+                raise TimeoutError(f"MAA识别超时({timeout}s)")
+            time.sleep(0.5)
+
+        logger.info("MAA视频识别完成")
+
+        return result_json_path
+    finally:
+        if cleanup is not None:
+            cleanup()
 
 
 def load_recognition_result(result_json_path):

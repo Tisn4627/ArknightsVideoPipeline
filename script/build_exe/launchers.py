@@ -63,6 +63,28 @@ def _fix_project_root() -> str:
 
 # 执行修正
 _PROJECT_ROOT = _fix_project_root()
+
+
+def _preapply_ffmpeg_config() -> None:
+    """在 ensure_default_configs() 之前应用 FFmpeg 路径配置
+
+    ensure_default_configs() 会静态导入 video_compose → movielite，
+    movielite 在导入时通过 shutil.which 检查 ffmpeg 是否在 PATH 中。
+    必须在 movielite 导入前将 FFmpeg 目录加入 PATH，否则未安装
+    FFmpeg 的机器上启动失败。
+    """
+    from arknights_video_pipeline.core.config import ConfigManager
+    from arknights_video_pipeline.core.utils import (
+        set_ffmpeg_config,
+        ensure_ffmpeg_in_path,
+    )
+    cfg = ConfigManager(_PROJECT_ROOT)
+    cfg.load_pipeline_config()
+    set_ffmpeg_config(
+        bool(cfg.pipeline.get("ffmpeg_custom_enabled", False)),
+        cfg.pipeline.get("ffmpeg_path", ""),
+    )
+    ensure_ffmpeg_in_path()
 '''
 
 
@@ -76,6 +98,7 @@ def main() -> int:
         ensure_default_configs,
         main as cli_main,
     )
+    _preapply_ffmpeg_config()
     ensure_default_configs()
     cli_main()
     return 0
@@ -133,6 +156,7 @@ def main() -> int:
 
     try:
         app = create_application(sys.argv)
+        _preapply_ffmpeg_config()
         # 首次启动时自动生成缺失的默认配置文件（不覆盖已有用户配置）
         ensure_default_configs()
         config_proxy = ConfigProxy()
@@ -177,6 +201,7 @@ def _run_cli() -> int:
         main as cli_main,
     )
     try:
+        _preapply_ffmpeg_config()
         ensure_default_configs()
         cli_main()
         return 0
@@ -221,6 +246,7 @@ def _run_gui() -> int:
 
     try:
         app = create_application(sys.argv)
+        _preapply_ffmpeg_config()
         # 首次启动时自动生成缺失的默认配置文件（不覆盖已有用户配置）
         ensure_default_configs()
         config_proxy = ConfigProxy()

@@ -193,3 +193,90 @@ class TestOverallProgress:
             service._on_worker_finished(2, True, {}, False)
 
         assert 100 in progress_values
+
+
+# ── force_terminate_workers ───────────────────────────────
+
+
+class TestForceTerminateWorkers:
+    """验证 force_terminate_workers 强制终止工作线程逻辑
+
+    wait_for_shutdown 超时后的兜底：对仍在运行的 worker 调用
+    QThread.terminate() + wait()，并从 _workers 清除。
+    """
+
+    def test_force_terminate_no_workers_is_noop(self, qapp) -> None:
+        """无运行 worker 时调用 force_terminate_workers 不报错"""
+        service = PipelineService(_make_config_proxy())
+        service.force_terminate_workers(timeout_ms=100)
+        assert len(service._workers) == 0
+
+    def test_force_terminate_running_worker_calls_terminate_and_wait(self, qapp) -> None:
+        """运行中的 worker 被 terminate + wait，并从 _workers 清除"""
+        service = PipelineService(_make_config_proxy())
+        worker = mock.MagicMock()
+        worker.isRunning.return_value = True
+        service._workers = {0: worker}
+
+        service.force_terminate_workers(timeout_ms=500)
+
+        worker.terminate.assert_called_once()
+        worker.wait.assert_called_once_with(500)
+        assert 0 not in service._workers
+
+    def test_force_terminate_non_running_worker_not_terminated(self, qapp) -> None:
+        """未运行的 worker 不调用 terminate，但仍从 _workers 清除"""
+        service = PipelineService(_make_config_proxy())
+        worker = mock.MagicMock()
+        worker.isRunning.return_value = False
+        service._workers = {0: worker}
+
+        service.force_terminate_workers(timeout_ms=500)
+
+        worker.terminate.assert_not_called()
+        worker.wait.assert_not_called()
+        assert 0 not in service._workers
+
+    def test_force_terminate_multiple_workers(self, qapp) -> None:
+        """多个 worker 均被 terminate + wait 并清除"""
+        service = PipelineService(_make_config_proxy())
+        w0 = mock.MagicMock()
+        w0.isRunning.return_value = True
+        w1 = mock.MagicMock()
+        w1.isRunning.return_value = True
+        service._workers = {0: w0, 1: w1}
+
+        service.force_terminate_workers(timeout_ms=1000)
+
+        w0.terminate.assert_called_once()
+        w0.wait.assert_called_once_with(1000)
+        w1.terminate.assert_called_once()
+        w1.wait.assert_called_once_with(1000)
+        assert len(service._workers) == 0
+
+    def test_force_terminate_emits_warning_log(self, qapp) -> None:
+        """强制终止时发射 WARNING 级别日志"""
+        service = PipelineService(_make_config_proxy())
+        worker = mock.MagicMock()
+        worker.isRunning.return_value = True
+        service._workers = {0: worker}
+        log_events: list = []
+        service.log_emitted.connect(lambda level, msg: log_events.append((level, msg)))
+
+        service.force_terminate_workers(timeout_ms=100)
+
+        assert any(level == "WARNING" for level, _ in log_events)
+
+    def test_wait_for_shutdown_does_not_terminate(self, qapp) -> None:
+        """wait_for_shutdown 仅等待，不调用 terminate"""
+        service = PipelineService(_make_config_proxy())
+        worker = mock.MagicMock()
+        worker.isRunning.return_value = True
+        service._workers = {0: worker}
+
+        service.wait_for_shutdown(timeout_ms=3000)
+
+        worker.wait.assert_called_once_with(3000)
+        worker.terminate.assert_not_called()
+        # wait_for_shutdown 不清除 _workers（worker 仍在运行）
+        assert 0 in service._workers

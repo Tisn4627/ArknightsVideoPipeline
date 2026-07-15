@@ -19,7 +19,7 @@ import unicodedata
 
 from movielite import VideoClip, TextClip, VideoWriter
 from movielite.vfx import FadeIn, FadeOut
-from pictex import Canvas
+from pictex import Canvas, Shadow
 
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config,
@@ -222,17 +222,20 @@ def create_subtitle_clip(text, start, duration, text_config, project_root, outpu
         .color(text_color)
     )
 
-    # 阴影效果
+    # 阴影效果（pictex 2.x 用 text_shadows(Shadow(...)) 替代 0.x 的 add_shadow(...)）
     if text_config.get("shadow_enabled", True):
-        canvas = canvas.add_shadow(
-            offset=(text_config.get("shadow_offset_x", 2), text_config.get("shadow_offset_y", 2)),
-            blur_radius=text_config.get("shadow_blur", 4),
-            color=text_config.get("shadow_color", "#000000"),
+        canvas = canvas.text_shadows(
+            Shadow(
+                offset=(text_config.get("shadow_offset_x", 2), text_config.get("shadow_offset_y", 2)),
+                blur_radius=text_config.get("shadow_blur", 4),
+                color=text_config.get("shadow_color", "#000000"),
+            )
         )
 
+    # 8 位 RGBA 十六进制 #00000000 = alpha 0（透明背景）
     canvas = (
         canvas
-        .background_color("transparent")
+        .background_color("#00000000")
         .padding(10)
         .line_height(line_height)
     )

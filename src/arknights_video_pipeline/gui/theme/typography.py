@@ -16,6 +16,27 @@ class MaterialTypography:
     def __init__(self, family: str | None = None) -> None:
         self.family = family or self._default_family()
 
+    @property
+    def family_list(self) -> list[str]:
+        """字体族列表（供 QFont.setFamilies 使用）"""
+        return [f.strip() for f in self.family.split(",") if f.strip()]
+
+    @property
+    def qss_font_family(self) -> str:
+        """QSS font-family 属性值（带引号，供样式表使用）
+
+        将 "Roboto, Segoe UI, sans-serif" 格式化为
+        "Roboto", "Segoe UI", sans-serif
+        """
+        parts: list[str] = []
+        for f in self.family_list:
+            # CSS 通用族关键字不加引号
+            if f in ("sans-serif", "serif", "monospace", "cursive", "fantasy"):
+                parts.append(f)
+            else:
+                parts.append(f'"{f}"')
+        return ", ".join(parts)
+
     @staticmethod
     def _default_family() -> str:
         return "Roboto, Google Sans, Segoe UI, Microsoft YaHei UI, Noto Sans SC, Arial, sans-serif"
@@ -23,7 +44,9 @@ class MaterialTypography:
     def _font(self, size: int, weight: int = QFont.Weight.Normal,
               letter_spacing: int = 0) -> QFont:
         font = QFont()
-        font.setFamily(self.family.split(",")[0].strip())
+        # 使用 setFamilies（复数）指定完整回退链，避免 Roboto 未安装时
+        # Qt 回退到系统默认字体（中文 Windows 下通常为宋体 SimSun）
+        font.setFamilies(self.family_list)
         font.setPointSize(size)
         font.setWeight(weight)
         if letter_spacing:

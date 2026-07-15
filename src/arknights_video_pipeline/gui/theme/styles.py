@@ -35,7 +35,7 @@ class MaterialStyle:
         QWidget {{
             background-color: {c.background};
             color: {c.on_surface};
-            font-family: "{self.typography.family.split(',')[0].strip()}";
+            font-family: {self.typography.qss_font_family};
             font-size: 14px;
             outline: none;
         }}

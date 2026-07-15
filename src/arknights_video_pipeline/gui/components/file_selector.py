@@ -18,6 +18,7 @@ from arknights_video_pipeline.gui.theme import (
     MaterialColors,
     filled_button_qss as _build_filled_button_qss,
 )
+from arknights_video_pipeline.gui.i18n import i18n, tr
 
 
 class FileSelector(QWidget):
@@ -36,11 +37,13 @@ class FileSelector(QWidget):
         self._filter = "All files (*.*)"
         self._is_valid = True
         self._colors = MaterialColors.light()
+        self._placeholder = placeholder
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
+        self._label: QLabel | None = None
         if label:
             self._label = QLabel(label)
             layout.addWidget(self._label)
@@ -55,11 +58,19 @@ class FileSelector(QWidget):
         self._edit.textChanged.connect(self._on_text_changed)
         layout.addWidget(self._edit, 1)
 
-        self._browse_btn = QPushButton("浏览")
-        self._browse_btn.setToolTip("选择文件或目录")
+        self._browse_btn = QPushButton(tr("file.browse"))
+        self._browse_btn.setToolTip(tr("file.browse_tooltip"))
         self._browse_btn.setStyleSheet(self._btn_qss())
         self._browse_btn.clicked.connect(self._on_browse)
         layout.addWidget(self._browse_btn)
+
+        # 语言切换时刷新浏览按钮文本与 tooltip
+        i18n().language_changed.connect(self._retranslate)
+
+    def _retranslate(self) -> None:
+        """语言切换时更新浏览按钮文本与 tooltip"""
+        self._browse_btn.setText(tr("file.browse"))
+        self._browse_btn.setToolTip(tr("file.browse_tooltip"))
 
     # ── 属性与配置 ─────────────────────────────────────────
 
@@ -79,6 +90,16 @@ class FileSelector(QWidget):
         """设置校验状态：valid=False 时显示 2px error 红色边框"""
         self._is_valid = valid
         self._edit.setStyleSheet(self._edit_qss(error=not valid))
+
+    def set_label(self, text: str) -> None:
+        """设置左侧标签文本（语言切换时调用）"""
+        if self._label is not None:
+            self._label.setText(text)
+
+    def set_placeholder(self, text: str) -> None:
+        """设置输入框占位符文本（语言切换时调用）"""
+        self._placeholder = text
+        self._edit.setPlaceholderText(text)
 
     def set_colors(self, colors: MaterialColors) -> None:
         """切换主题色（浅色/深色），刷新所有子控件内联样式"""
@@ -129,15 +150,15 @@ class FileSelector(QWidget):
     def _on_browse(self) -> None:
         if self._mode == self.MODE_OPEN_FILE:
             path, _ = QFileDialog.getOpenFileName(
-                self, "选择文件", self.path(), self._filter
+                self, tr("file.open_title"), self.path(), self._filter
             )
         elif self._mode == self.MODE_SAVE_FILE:
             path, _ = QFileDialog.getSaveFileName(
-                self, "保存文件", self.path(), self._filter
+                self, tr("file.save_title"), self.path(), self._filter
             )
         else:
             path = QFileDialog.getExistingDirectory(
-                self, "选择目录", self.path()
+                self, tr("file.dir_title"), self.path()
             )
 
         if path:

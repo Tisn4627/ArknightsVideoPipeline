@@ -193,6 +193,8 @@ desktop.ini
 material-design-icons-master
 MAA-*/
 output/
+bg.png
+video.mp4
 
 # ================================
 # build_exe packaging artifacts

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
 from arknights_video_pipeline.gui.assets.icons.nav_icons import (
     has_icon, make_icon_pixmap,
 )
+from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 
 
@@ -94,6 +95,11 @@ class NavigationRailItem(QWidget):
             self.setFixedHeight(56)
             self.setFixedWidth(64)
 
+    def set_label(self, text: str) -> None:
+        """更新导航项标签文本（语言切换时调用）"""
+        self._label_text = text
+        self._label.setText(text)
+
     def mousePressEvent(self, event) -> None:
         self.clicked.emit()
         super().mousePressEvent(event)
@@ -141,6 +147,12 @@ class NavigationRail(QFrame):
 
         self._items: list[NavigationRailItem] = []
         self._current_index = 0
+        # 导航项 (icon_name, 翻译 key) —— 标签文本由 _retranslate 经 tr() 设置
+        self._item_specs: list[tuple[str, str]] = [
+            ("home", "nav.home"),
+            ("settings", "nav.settings"),
+            ("info", "nav.info"),
+        ]
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 16, 12, 16)
@@ -150,12 +162,8 @@ class NavigationRail(QFrame):
         layout.addStretch(0)
 
         # 三个 MD3 NavigationRail 目的地：Home / Settings / Info
-        for icon_name, label in [
-            ("home", "Home"),
-            ("settings", "Settings"),
-            ("info", "Info"),
-        ]:
-            item = NavigationRailItem(icon_name, label, colors=self._colors)
+        for icon_name, key in self._item_specs:
+            item = NavigationRailItem(icon_name, tr(key), colors=self._colors)
             item.clicked.connect(self._make_handler(len(self._items)))
             self._items.append(item)
             layout.addWidget(item, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -163,6 +171,13 @@ class NavigationRail(QFrame):
         layout.addStretch()
 
         self.set_selected(0)
+        # 语言切换时刷新所有 item 标签
+        i18n().language_changed.connect(self._retranslate)
+
+    def _retranslate(self) -> None:
+        """语言切换时更新所有导航项标签"""
+        for item, (_icon, key) in zip(self._items, self._item_specs):
+            item.set_label(tr(key))
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors

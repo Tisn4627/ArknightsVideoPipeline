@@ -67,7 +67,7 @@ class TestPipelineDefaults:
     def test_ffmpeg_keys_in_pipeline_defaults(self) -> None:
         assert "ffmpeg_custom_enabled" in PIPELINE_DEFAULTS
         assert "ffmpeg_path" in PIPELINE_DEFAULTS
-        assert PIPELINE_DEFAULTS["ffmpeg_custom_enabled"] is False
+        assert PIPELINE_DEFAULTS["ffmpeg_custom_enabled"] is True
         assert PIPELINE_DEFAULTS["ffmpeg_path"] == "resource/ffmpeg/bin"
 
 
@@ -168,7 +168,7 @@ class TestConfigProxy:
 
     def test_ffmpeg_defaults(self, qapp, tmp_path) -> None:
         proxy = ConfigProxy(project_dir=str(tmp_path))
-        assert proxy.ffmpeg_custom_enabled() is False
+        assert proxy.ffmpeg_custom_enabled() is True
         assert proxy.ffmpeg_path() == "resource/ffmpeg/bin"
 
     def test_build_overrides_includes_ffmpeg(self, qapp, tmp_path) -> None:

@@ -6,6 +6,7 @@ gui.app - QApplication 初始化
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PyQt6.QtCore import Qt
@@ -45,6 +46,24 @@ def create_application(argv: list[str]) -> QApplication:
     return app
 
 
+def _hard_exit(exit_code: int | None) -> None:
+    """绕过 Python 正常关闭流程直接退出进程。
+
+    PipelineWorker 是非 daemon QThread，Python 解释器关闭时会等待其
+    退出。长步骤（MAA/track/compose 可达数百秒）中的 worker 无法及时
+    响应 cancel，即使 QThread.terminate() 也可能对 C 扩展内部阻塞无效。
+    os._exit 是最终兜底，确保进程不残留。
+    """
+    code = exit_code if isinstance(exit_code, int) else 0
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.flush()
+            except Exception:
+                pass
+    os._exit(code)
+
+
 def main() -> int:
     """GUI 入口（供 project.scripts 使用）"""
     from arknights_video_pipeline.core.exceptions import ConfigError
@@ -56,10 +75,13 @@ def main() -> int:
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()
-        return QApplication.exec()
+        exit_code = QApplication.exec()
     except ConfigError as exc:
         sys.stderr.write(f"[配置错误] {exc}\n")
-        return 2
+        exit_code = 2
     except Exception as exc:
         sys.stderr.write(f"[启动失败] {exc}\n")
-        return 1
+        exit_code = 1
+
+    _hard_exit(exit_code)
+    return 0  # unreachable: _hard_exit calls os._exit

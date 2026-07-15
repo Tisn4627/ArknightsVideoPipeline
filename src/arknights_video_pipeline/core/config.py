@@ -42,7 +42,9 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "max_concurrent": 1,
     # FFmpeg 自定义路径（仅 Windows）：启用后使用 ffmpeg_path 指定的目录
     # （含 ffmpeg.exe/ffprobe.exe）；关闭时使用系统 PATH 中的 FFmpeg。
-    "ffmpeg_custom_enabled": False,
+    # 默认启用，使打包后的 EXE 在未安装 FFmpeg 的机器上能直接使用内置的
+    # resource/ffmpeg/bin。用户可在设置中关闭以改用系统 PATH 中的 FFmpeg。
+    "ffmpeg_custom_enabled": True,
     "ffmpeg_path": "resource/ffmpeg/bin",
 }
 

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from arknights_video_pipeline.gui.assets.app_icon import load_app_icon
 from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
+from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import (
     MaterialColors,
     filled_button_qss as _build_filled_button_qss,
@@ -29,7 +30,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._colors = colors or MaterialColors.light()
         self.setObjectName("aboutDialog")
-        self.setWindowTitle("About")
+        self.setWindowTitle(tr("about.title"))
         # 自适应内容尺寸，并留出充足边距避免 OK 按钮被裁切
         self.setMinimumWidth(360)
         self.setModal(True)
@@ -61,21 +62,20 @@ class AboutDialog(QDialog):
         self._icon_label = icon_label
 
         # 标题
-        title = QLabel("ArknightsVideoPipeline")
+        title = QLabel(tr("about.app_name"))
         title.setObjectName("aboutTitle")
         title.setStyleSheet(
             f"color: {self._colors.on_surface}; background: transparent; border: none;"
             " font-size: 22px; font-weight: 600;"
         )
         card_layout.addWidget(title)
+        self._title_label = title
 
         # 描述
-        desc_lines = [
-            "Arknights video processing pipeline GUI",
-            "Built with PyQt6 and Material Design 3",
-        ]
-        for line in desc_lines:
-            lbl = QLabel(line)
+        desc_keys = ["about.desc1", "about.desc2"]
+        self._desc_labels: list[QLabel] = []
+        for key in desc_keys:
+            lbl = QLabel(tr(key))
             lbl.setObjectName("aboutDesc")
             lbl.setStyleSheet(
                 f"color: {self._colors.on_surface_variant}; background: transparent; border: none;"
@@ -83,6 +83,7 @@ class AboutDialog(QDialog):
             )
             lbl.setWordWrap(True)
             card_layout.addWidget(lbl)
+            self._desc_labels.append(lbl)
 
         # 间隔
         card_layout.addSpacing(12)
@@ -92,7 +93,7 @@ class AboutDialog(QDialog):
         button_row.setSpacing(8)
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.addStretch()
-        ok_btn = MaterialButton("OK", variant=MaterialButton.VARIANT_FILLED)
+        ok_btn = MaterialButton(tr("about.ok"), variant=MaterialButton.VARIANT_FILLED)
         ok_btn.setMinimumWidth(96)
         ok_btn.setMinimumHeight(40)
         ok_btn.setStyleSheet(self._ok_button_qss())
@@ -104,6 +105,16 @@ class AboutDialog(QDialog):
         outer.addWidget(card)
         # 同步当前主题色
         self.set_colors(self._colors)
+        # 语言切换时刷新文本
+        i18n().language_changed.connect(self._retranslate)
+
+    def _retranslate(self) -> None:
+        """语言切换时刷新窗口标题、应用名、描述与按钮文本"""
+        self.setWindowTitle(tr("about.title"))
+        self._title_label.setText(tr("about.app_name"))
+        for lbl, key in zip(self._desc_labels, ("about.desc1", "about.desc2")):
+            lbl.setText(tr(key))
+        self._ok_btn.setText(tr("about.ok"))
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors

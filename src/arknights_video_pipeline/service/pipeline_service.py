@@ -193,6 +193,24 @@ class PipelineService(QObject):
             if worker.isRunning():
                 worker.wait(timeout_ms)
 
+    def force_terminate_workers(self, timeout_ms: int = 2000) -> None:
+        """强制终止所有仍在运行的工作线程。
+
+        wait_for_shutdown 超时后的兜底手段。worker.cancel() 仅在步骤边界
+        检查 cancel_event，长步骤（MAA ~320s、track ~358s、compose ~360s）
+        不会在短超时内响应。QThread.terminate() 立即终止线程，可能留下
+        未释放的资源，但确保进程不会因非 daemon QThread 阻塞而无法退出。
+        """
+        for idx, worker in list(self._workers.items()):
+            if worker.isRunning():
+                self.log_emitted.emit(
+                    "WARNING",
+                    f"工作线程 {idx} 在超时后仍未退出，强制终止",
+                )
+                worker.terminate()
+                worker.wait(timeout_ms)
+            self._workers.pop(idx, None)
+
     # ── 内部：worker 调度 ─────────────────────────────────
 
     def _dispatch_next(self) -> None:

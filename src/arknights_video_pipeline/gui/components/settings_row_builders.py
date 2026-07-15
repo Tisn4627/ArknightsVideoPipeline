@@ -12,7 +12,7 @@ gui.components.settings_row_builders - 可复用的设置行构建器
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, QRegularExpression
@@ -136,18 +136,22 @@ class FieldRow:
         get_value: () -> Any，获取当前值
         set_colors: (MaterialColors) -> None，刷新主题色
         set_enabled: (bool) -> None，启用/禁用控件
+        set_label: (text) -> None，刷新行标签文本（语言切换时调用），默认 no-op
+        set_desc: (text) -> None，刷新行描述文本（仅 switch_row 有），默认 no-op
     """
     widget: QWidget
     set_value: Callable[[Any, bool], None]
     get_value: Callable[[], Any]
     set_colors: Callable[[MaterialColors], None]
     set_enabled: Callable[[bool], None]
+    set_label: Callable[[str], None] = field(default=lambda s: None)
+    set_desc: Callable[[str], None] = field(default=lambda s: None)
 
 
 # ── 行布局辅助 ─────────────────────────────────────────
 
-def _make_row(label_text: str, colors: MaterialColors) -> tuple[QWidget, QHBoxLayout]:
-    """创建带标签的行容器，返回 (container, content_layout)"""
+def _make_row(label_text: str, colors: MaterialColors) -> tuple[QWidget, QHBoxLayout, QLabel]:
+    """创建带标签的行容器，返回 (container, content_layout, label_widget)"""
     container = QWidget()
     container.setStyleSheet("background: transparent; border: none;")
     layout = QHBoxLayout(container)
@@ -157,11 +161,11 @@ def _make_row(label_text: str, colors: MaterialColors) -> tuple[QWidget, QHBoxLa
     lbl = _make_label(label_text, colors)
     lbl.setFixedWidth(140)
     layout.addWidget(lbl)
-    return container, layout
+    return container, layout, lbl
 
 
-def _make_switch_row(label_text: str, desc: str, colors: MaterialColors) -> tuple[QWidget, QVBoxLayout, MaterialSwitch]:
-    """创建带标题+描述的开关行容器，返回 (container, text_box, switch)"""
+def _make_switch_row(label_text: str, desc: str, colors: MaterialColors) -> tuple[QWidget, QVBoxLayout, MaterialSwitch, QLabel, QLabel | None]:
+    """创建带标题+描述的开关行容器，返回 (container, text_box, switch, title_lbl, desc_lbl)"""
     container = QWidget()
     container.setStyleSheet("background: transparent; border: none;")
     layout = QHBoxLayout(container)
@@ -177,6 +181,7 @@ def _make_switch_row(label_text: str, desc: str, colors: MaterialColors) -> tupl
     title.setFont(_title_font())
     text_box.addWidget(title)
 
+    desc_lbl: QLabel | None = None
     if desc:
         desc_lbl = QLabel(desc)
         desc_lbl.setWordWrap(True)
@@ -185,7 +190,7 @@ def _make_switch_row(label_text: str, desc: str, colors: MaterialColors) -> tupl
     layout.addLayout(text_box, 1)
     switch = MaterialSwitch(checked=False, colors=colors)
     layout.addWidget(switch, 0, Qt.AlignmentFlag.AlignVCenter)
-    return container, text_box, switch
+    return container, text_box, switch, title, desc_lbl
 
 
 def _title_font():
@@ -207,9 +212,9 @@ def build_switch_row(
 ) -> FieldRow:
     """布尔开关行：左侧标题+描述，右侧 MaterialSwitch"""
     c = colors or MaterialColors.light()
-    container, text_box, switch = _make_switch_row(label, desc, c)
+    container, text_box, switch, title_lbl, desc_lbl = _make_switch_row(label, desc, c)
 
-    dim_labels = [w for w in (text_box.itemAt(1).widget() if text_box.count() > 1 else None,) if w is not None]
+    dim_labels = [w for w in (desc_lbl,) if w is not None]
 
     if on_changed:
         switch.toggled.connect(on_changed)
@@ -235,7 +240,15 @@ def build_switch_row(
     def set_enabled(enabled: bool) -> None:
         switch.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    def set_label(text: str) -> None:
+        title_lbl.setText(text)
+
+    def set_desc(text: str) -> None:
+        if desc_lbl is not None:
+            desc_lbl.setText(text)
+
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=set_label, set_desc=set_desc)
 
 
 def build_int_row(
@@ -249,7 +262,7 @@ def build_int_row(
 ) -> FieldRow:
     """整数输入行：标签 + QSpinBox（隐藏箭头）"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
     spin = QSpinBox()
     spin.setRange(minimum, maximum)
     spin.setValue(default)
@@ -275,13 +288,13 @@ def build_int_row(
 
     def set_colors(new_colors: MaterialColors) -> None:
         spin.setStyleSheet(_spinbox_qss(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         spin.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 def build_float_row(
@@ -296,7 +309,7 @@ def build_float_row(
 ) -> FieldRow:
     """浮点数输入行：标签 + QDoubleSpinBox（隐藏箭头）"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
     spin = QDoubleSpinBox()
     spin.setRange(minimum, maximum)
     spin.setValue(default)
@@ -323,13 +336,13 @@ def build_float_row(
 
     def set_colors(new_colors: MaterialColors) -> None:
         spin.setStyleSheet(_spinbox_qss(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         spin.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 def build_combo_row(
@@ -341,7 +354,7 @@ def build_combo_row(
 ) -> FieldRow:
     """下拉选择行：标签 + QComboBox"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
     combo = QComboBox()
     combo.addItems(items)
     if default and default in items:
@@ -366,13 +379,13 @@ def build_combo_row(
 
     def set_colors(new_colors: MaterialColors) -> None:
         combo.setStyleSheet(_combo_qss(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         combo.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 def build_path_row(
@@ -405,7 +418,8 @@ def build_path_row(
     def set_enabled(enabled: bool) -> None:
         selector.setEnabled(enabled)
 
-    return FieldRow(selector, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(selector, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, s=selector: s.set_label(t))
 
 
 def build_string_row(
@@ -416,7 +430,7 @@ def build_string_row(
 ) -> FieldRow:
     """字符串输入行：标签 + QLineEdit"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
     edit = QLineEdit()
     edit.setText(default)
     edit.setStyleSheet(_lineedit_qss(c))
@@ -437,13 +451,13 @@ def build_string_row(
 
     def set_colors(new_colors: MaterialColors) -> None:
         edit.setStyleSheet(_lineedit_qss(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         edit.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 _COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -457,7 +471,7 @@ def build_color_row(
 ) -> FieldRow:
     """颜色输入行：标签 + QLineEdit（#RRGGBB 格式校验）"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
     edit = QLineEdit()
     edit.setText(default)
     edit.setPlaceholderText("#RRGGBB")
@@ -501,13 +515,13 @@ def build_color_row(
         nonlocal c
         c = new_colors
         edit.setStyleSheet(_lineedit_qss(c, error=not _is_valid[0]))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         edit.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 def build_range_row(
@@ -523,7 +537,7 @@ def build_range_row(
 ) -> FieldRow:
     """范围输入行：标签 + 两个 QDoubleSpinBox（min/max），on_changed 收到 [min, max]"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
 
     spin_min = QDoubleSpinBox()
     spin_min.setRange(minimum, maximum)
@@ -574,14 +588,14 @@ def build_range_row(
         spin_min.setStyleSheet(_spinbox_qss(new_colors))
         spin_max.setStyleSheet(_spinbox_qss(new_colors))
         sep.setStyleSheet(_dim_label_style(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         spin_min.setEnabled(enabled)
         spin_max.setEnabled(enabled)
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))
 
 
 def build_nullable_int_row(
@@ -594,7 +608,7 @@ def build_nullable_int_row(
 ) -> FieldRow:
     """可空整数行：MaterialSwitch + QSpinBox。开关关闭时值为 None"""
     c = colors or MaterialColors.light()
-    container, layout = _make_row(label, c)
+    container, layout, label_w = _make_row(label, c)
 
     switch = MaterialSwitch(checked=default is not None, colors=c)
     layout.addWidget(switch)
@@ -646,11 +660,11 @@ def build_nullable_int_row(
     def set_colors(new_colors: MaterialColors) -> None:
         switch.set_colors(new_colors)
         spin.setStyleSheet(_spinbox_qss(new_colors))
-        label_w = layout.itemAt(0).widget()
         label_w.setStyleSheet(_dim_label_style(new_colors))
 
     def set_enabled(enabled: bool) -> None:
         switch.setEnabled(enabled)
         spin.setEnabled(enabled and switch.is_checked())
 
-    return FieldRow(container, set_value, get_value, set_colors, set_enabled)
+    return FieldRow(container, set_value, get_value, set_colors, set_enabled,
+                    set_label=lambda t, w=label_w: w.setText(t))

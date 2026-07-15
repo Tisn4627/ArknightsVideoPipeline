@@ -250,6 +250,20 @@ SUPPORTED_IMAGE_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".webp"
 # ── 视频验证 ──────────────────────────────────────────────
 
 
+def _no_window_kwargs() -> dict[str, Any]:
+    """返回 Windows 平台下抑制子进程 console 窗口的 subprocess kwargs。
+
+    GUI exe 经 PyInstaller --noconsole 打包后无 attached console，启动
+    ffmpeg/ffprobe 等 console 子系统子进程时，Windows 会为子进程分配全新
+    console 窗口（即使 capture_output=True 重定向了 stdout/stderr，窗口
+    仍会弹出且无内容）。CREATE_NO_WINDOW 阻止该分配。非 Windows 平台返回
+    空 dict，零影响。
+    """
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
     """运行 ffprobe 并返回解析后的 JSON（公共实现，修复 L8）
 
@@ -280,6 +294,10 @@ def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            # GUI exe（--noconsole）启动 ffprobe 时，Windows 会为子进程
+            # 分配全新 console 窗口（虽然 capture_output 已重定向输出，
+            # 窗口仍会弹出且无内容，表现为闪烁）。CREATE_NO_WINDOW 阻止分配。
+            **_no_window_kwargs(),
         )
         if result.returncode != 0:
             raise VideoValidationError(f"无法解析视频文件: {video_path}")

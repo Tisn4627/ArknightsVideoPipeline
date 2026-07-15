@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 
 from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
+from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import (
     MaterialColors,
     filled_button_qss as _build_filled_button_qss,
@@ -170,7 +171,7 @@ class InfoDialog(_BaseMessageDialog):
         )
 
     def _build_buttons(self) -> None:
-        ok_btn = MaterialButton("OK")
+        ok_btn = MaterialButton(tr("dialog.ok"))
         ok_btn.setMinimumWidth(96)
         ok_btn.setMinimumHeight(40)
         ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
@@ -196,7 +197,7 @@ class WarningDialog(_BaseMessageDialog):
         )
 
     def _build_buttons(self) -> None:
-        ok_btn = MaterialButton("OK")
+        ok_btn = MaterialButton(tr("dialog.ok"))
         ok_btn.setMinimumWidth(96)
         ok_btn.setMinimumHeight(40)
         ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
@@ -221,12 +222,12 @@ class ConfirmDialog(_BaseMessageDialog):
     CANCELLED = 0
 
     def __init__(self, title: str, text: str,
-                 confirm_text: str = "Confirm",
-                 cancel_text: str = "Cancel",
+                 confirm_text: str | None = None,
+                 cancel_text: str | None = None,
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
-        self._confirm_text = confirm_text
-        self._cancel_text = cancel_text
+        self._confirm_text = confirm_text or tr("dialog.confirm")
+        self._cancel_text = cancel_text or tr("dialog.cancel")
         super().__init__(
             title=title, text=text,
             icon_text="?", icon_bg="#6750A4",

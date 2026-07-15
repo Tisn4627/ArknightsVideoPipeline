@@ -55,4 +55,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _exit_code = 0
+    try:
+        _exit_code = main() or 0
+    except SystemExit as exc:
+        _exit_code = exc.code if isinstance(exc.code, int) else 1
+    for _s in (sys.stdout, sys.stderr):
+        if _s is not None:
+            try:
+                _s.flush()
+            except Exception:
+                pass
+    os._exit(_exit_code)
