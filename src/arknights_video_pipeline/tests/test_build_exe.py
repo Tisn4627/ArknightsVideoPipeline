@@ -11,15 +11,12 @@
 from __future__ import annotations
 
 import os
-import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from script.build_exe.analyzer import DependencyAnalyzer
 from script.build_exe.builder import (
-    _ALWAYS_EXCLUDE,
     _HIDDEN_IMPORTS,
     _PROJECT_HIDDEN_IMPORTS,
     _TEST_EXCLUDES,

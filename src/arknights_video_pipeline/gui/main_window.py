@@ -648,7 +648,7 @@ class MainWindow(QMainWindow):
         self._bg_selector.set_placeholder(tr("home.background_placeholder"))
         self._style_label.setText(tr("home.style"))
         self._skip_title.setText(tr("home.skip_steps"))
-        # Skip 复选框标签（专有名词，两语言相同，但仍刷新以保持一致性）
+        # Skip 复选框标签（MAA 为产品名保留原文，其余步骤名按语言刷新）
         skip_labels = {
             "copilot": tr("home.skip.copilot"),
             "formation": tr("home.skip.formation"),

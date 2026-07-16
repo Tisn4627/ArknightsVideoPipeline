@@ -13,7 +13,6 @@ from unittest import mock
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from PyQt6.QtGui import QIcon
 
 from arknights_video_pipeline.gui.assets import app_icon
 

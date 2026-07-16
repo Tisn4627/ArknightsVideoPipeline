@@ -29,7 +29,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 
 from arknights_video_pipeline.core.utils import PROJECT_ROOT
-from arknights_video_pipeline.gui.i18n import I18n, init_i18n, i18n, tr
+from arknights_video_pipeline.gui.i18n import I18n, init_i18n, i18n
 from arknights_video_pipeline.gui.i18n import manager as i18n_manager
 from arknights_video_pipeline.gui.theme.gui_config import GuiConfig
 
