@@ -1,10 +1,22 @@
 # ArknightsVideoPipeline × ArknightsVideoRecognition 合并方案
 
-> 状态：方案设计（未实施任何代码改动）
+> 状态：方案已实施（2026-08-08）
 > 日期：2026-08-07
 > 涉及仓库：
 > - 父项目：`https://github.com/Tisn4627/ArknightsVideoPipeline`（GPL-2.0）
 > - 子项目：`https://github.com/Tisn4627/ArknightsVideoRecognition`（资源 AGPL-3.0）
+
+> **实施调整说明（相对原方案）**：
+> 1. 原方案的"Git submodule + `script/sync_recognition_resources.py` 同步资源"已改为
+>    **彻底 vendor**：`src/ArknightsVideoRecognition/` 的代码直接入库（排除其
+>    `resource/`、`tests/`、`.github/`、`uv.lock`）；识别资源（约 216M）直接入库于
+>    顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile，与 font/locales 同层）。
+>    克隆后零额外步骤。`sync_recognition_resources.py` 与 `test_sync_resources.py` 已删除。
+> 2. 子模块方式（§5.3、§6、§8 等章节）保留为历史方案描述，不再适用于当前仓库。
+>    识别资源更新方式：在 Recognition 上游仓库更新后，手动将新资源复制入库并提交。
+> 3. 打包（§9）：`builder.py` 已为 Recognition 代码补 `--hidden-import` 与
+>    `--paths src/ArknightsVideoRecognition/src`；`runtime_hook.py` 已设置
+>    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
 
 ---
 

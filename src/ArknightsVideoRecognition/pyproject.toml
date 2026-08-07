@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ArknightsVideoRecognition"
+version = "0.1.0"
+description = "Python rewrite of Maa's video-to-copilot-JSON recognition pipeline"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "onnxruntime",
+    "rapidocr-onnxruntime",
+    "pillow",
+]
+
+[project.scripts]
+arknights-video-recognition = "ArknightsVideoRecognition.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (real video pipeline runs, ~1-3min each). Run with: pytest -m slow",
+]
+addopts = "-m 'not slow'"

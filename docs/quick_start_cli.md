@@ -56,20 +56,13 @@ source venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### 1.5 同步识别资源（recognition 后端必需）
+### 1.5 识别资源与代码（recognition 后端必需）
 
-步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 214M 识别资源
-（模型/地图/头像），并入顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile 等）：
-
-```bash
-# 符号链接模式（零拷贝，子模块更新自动生效；Windows 无符号链接权限时请用 copy 模式）
-python script/sync_recognition_resources.py --mode=link
-# 或复制模式（跨平台无权限问题）：
-python script/sync_recognition_resources.py --mode=copy
-```
-
-> 若使用 git 管理：先执行 `git submodule update --init --recursive` 初始化
-> `src/ArknightsVideoRecognition` 子模块，再运行上述同步脚本。
+步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 216M 识别资源
+（模型/地图/头像）与识别代码 `src/ArknightsVideoRecognition/`（原为 git 子模块，
+现随仓库直接分发）。两者均已入库，克隆后无需额外初始化即可使用：
+识别资源直接位于顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile 等，
+与 font/locales 同层）。
 
 ## 第二步：项目初始化
 
@@ -330,11 +323,9 @@ python main.py video.mp4 --style style2
 ### Q: 提示识别资源缺失（Recognition 资源缺失）
 
 步骤 1 报错提示 `Recognition 资源缺失` 时，说明 `resource/` 下的识别资源
-（avatar/config/data/ocr/onnx/template/tile）不存在或不完整。运行同步脚本重新生成：
-
-```bash
-python script/sync_recognition_resources.py --mode=copy --force
-```
+（avatar/config/data/ocr/onnx/template/tile）不存在或不完整。该目录已随仓库
+分发，请检查克隆是否完整（可用 `git lfs`/大文件支持确认），或重新完整克隆；
+也可通过配置 `recognition.resource_dir` 指向其他位置的资源副本。
 
 ### Q: 开始按钮识别未检测到
 

@@ -47,27 +47,21 @@ python main.py video.mp4 -b bg.png --backend maa --maa-path C:/MAA
 
 配置文件中通过 `copilot_backend` 键切换，详见 [配置说明](docs/configuration.md)。
 
-## 克隆与资源同步
+## 克隆与资源
 
-recognition 识别资源（约 214M）由 `src/ArknightsVideoRecognition` 子模块提供。
-首次克隆后需初始化子模块并同步资源到顶层 `resource/`（avatar/config/data/
-ocr/onnx/template/tile 等与 font/locales 同层共存）：
+recognition 识别资源（约 216M）与识别代码（`src/ArknightsVideoRecognition`，
+原为 git 子模块，现随仓库直接分发）均已入库，克隆后无需额外初始化：
 
 ```bash
-# 1. 初始化子模块
-git submodule update --init --recursive
+# 1. 克隆（含全部识别资源，体积约 400M+）
+git clone <仓库地址>
 
-# 2. 同步资源（符号链接模式，零拷贝；Windows 无符号链接权限时回退复制模式）
-python script/sync_recognition_resources.py --mode=link
-# 或: python script/sync_recognition_resources.py --mode=copy
-
-# 3. 安装依赖（含 recognition 后端所需 onnxruntime / rapidocr-onnxruntime）
+# 2. 安装依赖（含 recognition 后端所需 onnxruntime / rapidocr-onnxruntime）
 pip install -e .
 ```
 
-> 本仓库当前为直接放置的子模块 checkout；若以 git 方式管理，请先执行
-> `git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/ArknightsVideoRecognition`
-> 建立子模块关联（`.gitmodules` 已预置）。
+识别资源（avatar/config/data/ocr/onnx/template/tile）直接位于顶层
+`resource/` 下，与 font/locales 同层共存。
 
 ## 视频要求
 

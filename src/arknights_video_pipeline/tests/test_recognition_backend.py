@@ -208,14 +208,14 @@ class TestRecognitionBackendRecognize:
                 )
 
     def test_resource_missing_wrapped_with_hint(self, tmp_path) -> None:
-        """ResourceMissingError 包装为 RuntimeError 并提示运行同步脚本"""
+        """ResourceMissingError 包装为 RuntimeError 并提示检查资源目录"""
         class NoResPipeline(FakePipeline):
             def run(self, *a, **kw):
                 raise FakeResourceError("tile/levels.json 缺失")
 
         backend = RecognitionBackend({})
         with _mock_import(NoResPipeline):
-            with pytest.raises(RuntimeError, match="sync_recognition_resources"):
+            with pytest.raises(RuntimeError, match="顶层 resource/ 目录"):
                 backend.recognize(
                     video_path=str(tmp_path / "b.mp4"),
                     output_dir=str(tmp_path / "out"),

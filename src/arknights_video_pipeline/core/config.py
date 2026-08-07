@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 全局流水线默认配置
 PIPELINE_DEFAULTS: dict[str, Any] = {
     # === 后端选择（新增）===
-    # "recognition"（默认，纯 Python 实现，ArknightsVideoRecognition 子模块）
+    # "recognition"（默认，纯 Python 实现，ArknightsVideoRecognition 随仓库分发）
     # | "maa"（可选回退，依赖 MAA 项目安装）
     "copilot_backend": "recognition",
 

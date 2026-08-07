@@ -214,15 +214,11 @@ config/
 resource/ffmpeg/
 
 # ================================
-# Recognition resources (copy mode)
-# 由 script/sync_recognition_resources.py 从子模块同步生成，
-# 并入顶层 resource/（与 font/locales/StartButton 同层）
-# （符号链接模式下本目录为链接，可入库，无需 ignore）
+# Vendored ArknightsVideoRecognition（原子模块）中的冗余/无关内容
+# 识别资源已直接入库于顶层 resource/（与 font/locales 同层），
+# 因此 vendor 目录内的 resource 副本不入库
 # ================================
-resource/avatar/
-resource/config/
-resource/data/
-resource/ocr/
-resource/onnx/
-resource/template/
-resource/tile/
+src/ArknightsVideoRecognition/resource/
+src/ArknightsVideoRecognition/tests/
+src/ArknightsVideoRecognition/.github/
+src/ArknightsVideoRecognition/uv.lock

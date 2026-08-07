@@ -80,6 +80,11 @@ _HIDDEN_IMPORTS: list[str] = [
 _PROJECT_HIDDEN_IMPORTS: list[str] = [
     "arknights_video_pipeline.core.video_compose",
     "arknights_video_pipeline.core.video_compose_style2",
+    # recognition 后端：recognition_backend 在函数内延迟导入并在运行时
+    # 注入 sys.path，PyInstaller 静态分析无法从标准搜索路径收集
+    "ArknightsVideoRecognition",
+    "ArknightsVideoRecognition.pipeline",
+    "ArknightsVideoRecognition.config.settings",
 ]
 
 # GUI 模式额外的隐藏导入
@@ -565,6 +570,14 @@ class BuildManager:
 
         for mod in hidden_imports:
             args.extend(["--hidden-import", mod])
+
+        # recognition 后端代码搜索路径（vendor 于 src/ArknightsVideoRecognition/src，
+        # 不在标准 sys.path，需显式加入 pathex 供 hidden-import 解析）
+        vendored_src = os.path.join(
+            self.config.project_root, "src", "ArknightsVideoRecognition", "src"
+        )
+        if os.path.isdir(vendored_src):
+            args.extend(["--paths", vendored_src])
 
         # 排除模块
         for mod in excludes:

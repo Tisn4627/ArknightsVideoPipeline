@@ -101,7 +101,7 @@ python main.py video.mp4 -b bg.png -o C:/Output
 
 选择视频转作业 JSON 的识别后端，优先级高于配置文件：
 
-- `recognition`（默认）：纯 Python 视频识别（ArknightsVideoRecognition 子模块），无需 MAA 安装
+- `recognition`（默认）：纯 Python 视频识别（ArknightsVideoRecognition，代码随仓库分发），无需 MAA 安装
 - `maa`：调用 MAA 项目的 `VideoRecognition` 任务（需配合 `--maa-path`）
 
 ```bash

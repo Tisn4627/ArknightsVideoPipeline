@@ -2,10 +2,11 @@
 
 本文件声明本项目分发中包含的第三方资源与代码的归属及许可信息。
 
-## recognition 识别资源（resource/recognition/）
+## recognition 识别资源（resource/）
 
-`resource/recognition/` 目录由 `script/sync_recognition_resources.py` 从子模块
-`src/ArknightsVideoRecognition/resource/` 同步生成，包含：
+识别资源（avatar/config/data/ocr/onnx/template/tile）直接位于顶层
+`resource/` 目录（与 font/locales 同层），源自
+`src/ArknightsVideoRecognition/resource/`，包含：
 
 - `tile/levels.json`：地图数据（源自 ArknightsGameResource 上游仓库）
 - `avatar/`：干员头像库
@@ -20,8 +21,8 @@
 
 ## recognition 代码（src/ArknightsVideoRecognition/）
 
-代码部分由子模块独立维护，遵循其自身声明的许可证（详见该子模块的
-`pyproject.toml` 与 README）。
+代码部分由 ArknightsVideoRecognition 项目维护，遵循其自身声明的许可证
+（详见该项目的 `pyproject.toml` 与 README）。
 
 ## 其他
 

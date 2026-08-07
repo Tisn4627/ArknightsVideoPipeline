@@ -1,8 +1,8 @@
 """
 core.recognition_backend - Recognition 后端（默认）
 
-用 ArknightsVideoRecognition 子模块完成视频转 copilot JSON。
-依赖子模块 src/ArknightsVideoRecognition（见 docs/merge_plan.md §4.2、§8）。
+用随仓库分发的 ArknightsVideoRecognition 代码完成视频转 copilot JSON。
+代码位于 src/ArknightsVideoRecognition/（vendor，原为 git 子模块）。
 
 资源目录优先级（必须在 import ArknightsVideoRecognition.* 之前确定）：
   1. 配置 recognition.resource_dir（recognize() 内应用）
@@ -23,22 +23,22 @@ from pathlib import Path
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource"
-_SUBMODULE_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
-_SUBMODULE_SRC_DIR = _SUBMODULE_ROOT / "src"
+_VENDORED_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
+_VENDORED_SRC_DIR = _VENDORED_ROOT / "src"
 
 if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
-# 确保子模块源码可导入（editable 安装则无需）
-# 子模块代码包位于 src/ArknightsVideoRecognition/src/ArknightsVideoRecognition
-if str(_SUBMODULE_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SUBMODULE_SRC_DIR))
+# 确保 vendor 的识别代码可导入（editable 安装则无需）
+# 代码包位于 src/ArknightsVideoRecognition/src/ArknightsVideoRecognition
+if str(_VENDORED_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDORED_SRC_DIR))
 
 
 def _import_recognition_pipeline(resource_dir: str | None = None):
     """按需导入 Recognition 主流水线（首次导入前应用配置级资源目录覆盖）
 
-    延迟导入使本模块在子模块缺失或 onnxruntime 未安装时仍可被导入
+    延迟导入使本模块在识别代码缺失或 onnxruntime 未安装时仍可被导入
     （工厂/测试环境不强制依赖 Recognition）。
     """
     if resource_dir:
@@ -127,7 +127,7 @@ class RecognitionBackend:
         except ResourceMissingError as exc:
             raise RuntimeError(
                 f"Recognition 资源缺失: {exc}\n"
-                "请运行: python script/sync_recognition_resources.py --mode=copy"
+                "请检查顶层 resource/ 目录（识别资源已随仓库分发，不应缺失）"
             ) from exc
 
         if timeout is not None and (time.time() - start) > timeout:
