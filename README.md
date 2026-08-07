@@ -61,7 +61,9 @@ pip install -e .
 ```
 
 识别资源（avatar/config/data/ocr/onnx/template/tile）直接位于顶层
-`resource/` 下，与 font/locales 同层共存。
+`resource/` 下，与 font/locales 同层共存。其中 tile/avatar/data/config
+由仓库内置的 [Sync Resources workflow](.github/workflows/sync-resources.yml)
+每周一自动同步上游并提交；template/onnx/ocr 更新频率低，由开发者手动更新。
 
 ## 视频要求
 

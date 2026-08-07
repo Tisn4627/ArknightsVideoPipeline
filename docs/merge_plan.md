@@ -9,7 +9,7 @@
 > **实施调整说明（相对原方案）**：
 > 1. 原方案的"Git submodule + `script/sync_recognition_resources.py` 同步资源"已改为
 >    **彻底 vendor**：`src/ArknightsVideoRecognition/` 的代码直接入库（排除其
->    `resource/`、`tests/`、`.github/`、`uv.lock`）；识别资源（约 216M）直接入库于
+>    `resource/`、`tests/`、`uv.lock`）；识别资源（约 216M）直接入库于
 >    顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile，与 font/locales 同层）。
 >    克隆后零额外步骤。`sync_recognition_resources.py` 与 `test_sync_resources.py` 已删除。
 > 2. 子模块方式（§5.3、§6、§8 等章节）保留为历史方案描述，不再适用于当前仓库。
@@ -17,6 +17,10 @@
 > 3. 打包（§9）：`builder.py` 已为 Recognition 代码补 `--hidden-import` 与
 >    `--paths src/ArknightsVideoRecognition/src`；`runtime_hook.py` 已设置
 >    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
+> 4. 资源自动同步：已由主仓库 `.github/workflows/sync-resources.yml` 接管（每周一
+>    08:00 UTC 定时 + 手动触发，直接更新顶层 resource/ 并自动提交）。原子模块
+>    （ArknightsVideoRecognition 上游）自身的 sync-resources.yml 已停用，
+>    vendor 内 `.github/workflows/` 仅保留其全注释副本作对照（见 §8.3）。
 
 ---
 
@@ -681,12 +685,29 @@ resource/                                    # 父项目统一资源根
 - 打包 exe / CI 产物 → 方式 B（复制）
 - 同步脚本应支持 `--mode=link|copy` 参数切换
 
-### 8.3 子模块资源更新流程
+<!--
+### 8.3 子模块资源更新流程【已停用，见下方"现行流程"】
 
 1. Recognition 仓库的 `.github/workflows/sync-resources.yml` 继续每周自动同步 `tile`/`avatar`/`data`/`config`（在子模块仓库内完成）
 2. 父项目通过 `git submodule update --remote` 拉取子模块最新版本（含资源更新）
 3. 父项目重新运行 `sync_recognition_resources.py`（方式 A 链接自动生效；方式 B 需重新复制）
 4. `template`/`onnx`/`ocr` 仍由 Recognition 开发者在子模块仓库内手动更新
+-->
+
+### 8.3 资源更新流程（现行）
+
+资源同步已由**主仓库** `.github/workflows/sync-resources.yml` 接管
+（移植自 Recognition 上游同名 workflow，适配主仓库布局）：
+
+1. 每周一 08:00 UTC（北京时间 16:00）定时自动运行，也可在 Actions 页面手动触发
+2. 自动同步 `tile`/`avatar`/`data`（battle_data/ocr_config/character_table/char_roles）与
+   重新生成 `config/roi.json`，直接更新主仓库顶层 `resource/`，有变更时自动提交推送
+3. `template`/`onnx`/`ocr` 三类大体积资源仍不自动同步：从 Recognition 上游仓库
+   （https://github.com/Tisn4627/ArknightsVideoRecognition）获取更新后，由开发者
+   本地复制入库并手动提交
+4. Recognition 上游仓库（原子模块）自身的 `sync-resources.yml` 已停用：
+   vendor 目录 `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
+   保留其全注释副本（仅作对照参考，GitHub 不会执行 vendor 内的 workflow）
 
 ### 8.4 资源路径运行时解析（优先级）
 
