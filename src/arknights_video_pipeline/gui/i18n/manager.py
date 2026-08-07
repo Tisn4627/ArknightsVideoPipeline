@@ -18,6 +18,7 @@ import logging
 import os
 from typing import Any
 
+from PyQt6 import sip
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from arknights_video_pipeline.core.utils import PROJECT_ROOT
@@ -171,9 +172,9 @@ def init_i18n(locales_dir: str | None = None, language: str | None = None,
 
 
 def i18n() -> I18n:
-    """获取全局 i18n 单例（未初始化时用默认配置创建）"""
+    """获取全局 i18n 单例（未初始化或底层 C++ 对象已被销毁时重建）"""
     global _instance
-    if _instance is None:
+    if _instance is None or sip.isdeleted(_instance):
         _instance = I18n()
     return _instance
 

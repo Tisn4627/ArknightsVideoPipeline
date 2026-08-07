@@ -377,6 +377,16 @@ class TestPictexDepsHiddenImports:
     PyInstaller modulegraph 对函数级导入检测不可靠，必须显式声明。
     """
 
+    @pytest.fixture
+    def project_root(self) -> str:
+        return os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                )
+            )
+        )
+
     def test_pictex_deps_in_hidden_imports_constant(self) -> None:
         """_HIDDEN_IMPORTS 包含 pictex 2.x 的四个传递依赖"""
         for dep in ("uharfbuzz", "bidi", "regex", "stretchable"):
