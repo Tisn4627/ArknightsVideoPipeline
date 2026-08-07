@@ -43,6 +43,11 @@ class MAARecognitionError(PipelineError):
     pass
 
 
+class CopilotBackendError(PipelineError):
+    """视频转 copilot 后端（recognition / maa）调用失败"""
+    pass
+
+
 class ConfigError(PipelineError):
     """配置文件加载或校验失败"""
     pass

@@ -212,3 +212,10 @@ config/
 # FFmpeg release files
 # ================================
 resource/ffmpeg/
+
+# ================================
+# Recognition resources (copy mode)
+# 由 script/sync_recognition_resources.py 从子模块同步生成
+# （符号链接模式下本目录为链接，可入库，无需 ignore）
+# ================================
+resource/recognition/

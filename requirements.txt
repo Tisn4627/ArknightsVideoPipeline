@@ -9,3 +9,6 @@ pictex>=2.0,<3
 Pillow>=10.0.0,<12
 tqdm>=4.65.0,<5
 PyQt6>=6.6.0,<7
+# Recognition 后端依赖（默认后端）
+onnxruntime>=1.16
+rapidocr-onnxruntime>=1.3

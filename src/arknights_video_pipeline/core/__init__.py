@@ -11,6 +11,7 @@ from arknights_video_pipeline.core.exceptions import (
     VideoValidationError,
     ImageValidationError,
     MAARecognitionError,
+    CopilotBackendError,
     ConfigError,
 )
 from arknights_video_pipeline.core.logger import setup_logger, get_step_logger
@@ -53,6 +54,7 @@ __all__ = [
     "VideoValidationError",
     "ImageValidationError",
     "MAARecognitionError",
+    "CopilotBackendError",
     "ConfigError",
     # 日志
     "setup_logger",

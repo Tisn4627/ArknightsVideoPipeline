@@ -1,0 +1,3 @@
+[submodule "src/ArknightsVideoRecognition"]
+	path = src/ArknightsVideoRecognition
+	url = https://github.com/Tisn4627/ArknightsVideoRecognition

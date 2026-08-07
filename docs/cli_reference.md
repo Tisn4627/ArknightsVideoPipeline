@@ -90,6 +90,68 @@ python main.py video.mp4 -b bg.png --output-dir results
 python main.py video.mp4 -b bg.png -o C:/Output
 ```
 
+### `--backend`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | 枚举 |
+| 必填 | 否 |
+| 可选值 | `recognition`, `maa` |
+| 默认值 | 使用 `pipeline.json` 中的 `copilot_backend`（默认 `recognition`） |
+
+选择视频转作业 JSON 的识别后端，优先级高于配置文件：
+
+- `recognition`（默认）：纯 Python 视频识别（ArknightsVideoRecognition 子模块），无需 MAA 安装
+- `maa`：调用 MAA 项目的 `VideoRecognition` 任务（需配合 `--maa-path`）
+
+```bash
+python main.py video.mp4 -b bg.png                       # 默认 recognition 后端
+python main.py video.mp4 -b bg.png --backend maa --maa-path C:/MAA
+```
+
+### `--ocr`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | 枚举 |
+| 必填 | 否 |
+| 可选值 | `maamodel`, `default` |
+| 默认值 | 使用 `pipeline.json` 中 `recognition.ocr_source`（默认 `maamodel`） |
+
+Recognition 后端的 OCR 模型来源（`maamodel`=Maa finetune 模型 / `default`=rapidocr 默认模型）。仅 `--backend recognition` 时生效。
+
+```bash
+python main.py video.mp4 -b bg.png --ocr default
+```
+
+### `--stage`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | string |
+| 必填 | 否 |
+| 默认值 | 无（自动识别关卡） |
+
+Recognition 后端的关卡指定（code/name/stageId，如 `2-10` 或 `main_02-10`）。指定后跳过关卡 OCR，可用于自动识别失败时的兜底。仅 `--backend recognition` 时生效。
+
+```bash
+python main.py video.mp4 -b bg.png --stage 2-10
+```
+
+### `--resolution`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | string（`"WxH"`） |
+| 必填 | 否 |
+| 默认值 | 使用 `pipeline.json` 中 `recognition.resolution`（默认 `1280x720`） |
+
+Recognition 后端的视频处理分辨率。仅 `--backend recognition` 时生效。
+
+```bash
+python main.py video.mp4 -b bg.png --resolution 1920x1080
+```
+
 ### `--maa-path`
 
 | 属性 | 值 |
@@ -98,10 +160,10 @@ python main.py video.mp4 -b bg.png -o C:/Output
 | 必填 | 否 |
 | 默认值 | 使用 `pipeline.json` 中的 `maa_path` |
 
-指定 MAA 项目路径，优先级高于配置文件。
+指定 MAA 项目路径，优先级高于配置文件。仅 `--backend maa` 时生效。
 
 ```bash
-python main.py video.mp4 -b bg.png --maa-path C:/MAA
+python main.py video.mp4 -b bg.png --backend maa --maa-path C:/MAA
 ```
 
 ### `--config`, `-c`
@@ -171,7 +233,7 @@ python main.py video.mp4 -b bg.png --no-log-file
 
 | 步骤名 | 功能 |
 |--------|------|
-| `copilot` | 视频转 MAA 作业 JSON |
+| `copilot` | 视频转作业 JSON（recognition / maa 后端） |
 | `formation` | 编队配置转文本 |
 | `actions` | 操作指令转文本 |
 | `track` | 开始按钮识别 |

@@ -56,6 +56,21 @@ source venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 ```
 
+### 1.5 同步识别资源（recognition 后端必需）
+
+步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 214M 识别资源
+（模型/地图/头像），存放于顶层 `resource/recognition/`：
+
+```bash
+# 符号链接模式（零拷贝，子模块更新自动生效；Windows 无符号链接权限时请用 copy 模式）
+python script/sync_recognition_resources.py --mode=link
+# 或复制模式（跨平台无权限问题）：
+python script/sync_recognition_resources.py --mode=copy
+```
+
+> 若使用 git 管理：先执行 `git submodule update --init --recursive` 初始化
+> `src/ArknightsVideoRecognition` 子模块，再运行上述同步脚本。
+
 ## 第二步：项目初始化
 
 ### 2.1 生成默认配置文件
@@ -83,14 +98,17 @@ config/
     └── style2.json        # style2 风格（全屏视频+底部字幕）
 ```
 
-### 2.2 配置 MAA 路径（必需）
+### 2.2 选择识别后端（默认 recognition，无需配置）
 
-`maa_path` 是 MAA 识别引擎的安装路径，**必须手动配置**，默认值为空。未配置时流水线的视频转 JSON 步骤将无法执行。
+步骤 1 默认使用 `copilot_backend: "recognition"`（纯 Python 识别，无需 MAA 安装）。
+识别资源已由 1.5 节同步到 `resource/recognition/`，开箱即用。
+
+如需回退到 **MAA 后端**（调用 MAA 项目的视频识别），需手动配置 `maa_path`：
 
 #### 配置步骤
 
 1. 找到 MAA 的安装目录（包含`MAA.exe` 的文件夹）
-2. 打开 `config/pipeline.json`，将 `maa_path` 设置为该目录路径
+2. 打开 `config/pipeline.json`，将 `copilot_backend` 改为 `"maa"`，并将 `maa_path` 设置为该目录路径
 
 #### 路径格式要求
 
@@ -102,12 +120,14 @@ config/
 
 ```json
 {
+    "copilot_backend": "maa",
     "maa_path": "MaaAssistantArknights"
 }
 ```
 
 ```json
 {
+    "copilot_backend": "maa",
     "maa_path": "C:/Program Files/MAA"
 }
 ```
@@ -115,7 +135,11 @@ config/
 也可通过 CLI 参数临时覆盖，无需修改配置文件：
 
 ```bash
-python main.py video.mp4 -b bg.png --maa-path C:/path/to/MAA
+# 使用默认 recognition 后端（无需 --maa-path）
+python main.py video.mp4 -b bg.png
+
+# 临时切换为 MAA 后端
+python main.py video.mp4 -b bg.png --backend maa --maa-path C:/path/to/MAA
 ```
 
 注意：高版本的MaaAssistantArknights可能会报错，建议使用5.12.1版本。
@@ -215,15 +239,16 @@ python main.py video.mp4 --style style2
 ```
 output/video/
 ├── pipeline.log              # 流水线日志
-├── maa_copilot_video.json    # MAA 识别结果 JSON
+├── recognition_copilot_video.json  # 识别结果 JSON（recognition 后端）
+├── maa_copilot_video.json    # MAA 识别结果 JSON（仅 maa 后端）
 ├── formation_video.txt       # 编队文本
 ├── actions_video.txt         # 操作文本
 ├── track_result_video.json   # 开始按钮识别结果
 └── output_video.mp4          # 最终合成视频
 ```
 ### 注意事项
-- 确保 MAA 路径配置正确，否则会报错。
-- 在运行流水线前，先打开一遍MaaAssistantArknights更新资源文件，确保识别正确。
+- 默认 recognition 后端无需配置 MAA 路径；切换为 `--backend maa` 时需确保 MAA 路径配置正确，否则会报错。
+- 使用 MAA 后端时，建议在运行流水线前先打开一遍 MaaAssistantArknights 更新资源文件，确保识别正确。
 - 流水线会自动创建输出目录，无需手动创建。
 ## 第五步：常用操作示例
 
@@ -291,15 +316,24 @@ python main.py video.mp4 -b bg.png
 python main.py video.mp4 --style style2
 ```
 
-### Q: MAA 识别超时
+### Q: 识别超时
 
-可在 `config/pipeline.json` 中调整超时时间和重试次数：
+可在 `config/pipeline.json` 中调整超时时间和重试次数（两个后端共用）：
 
 ```json
 {
-    "maa_timeout_seconds": 1200,
-    "maa_max_retries": 3
+    "copilot_timeout_seconds": 1200,
+    "copilot_max_retries": 3
 }
+```
+
+### Q: 提示识别资源缺失（Recognition 资源缺失）
+
+步骤 1 报错提示 `Recognition 资源缺失` 时，说明 `resource/recognition/` 不存在或
+不完整。运行同步脚本重新生成：
+
+```bash
+python script/sync_recognition_resources.py --mode=copy --force
 ```
 
 ### Q: 开始按钮识别未检测到

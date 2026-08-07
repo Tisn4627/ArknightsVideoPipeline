@@ -3,7 +3,7 @@ pipeline.py - 明日方舟视频处理流水线 CLI 工具
 
 完整自动化工作流：
   1. 接收并验证原始视频文件路径
-  2. 调用MAA工具将视频转换为JSON（含超时控制和重试机制）
+  2. 调用识别后端（recognition 默认 / MAA 可选）将视频转换为JSON（含超时控制和重试机制）
   3. 解析JSON，提取编队配置文本和操作指令文本
   4. 识别"开始"按钮出现的精确时间戳
   5. 使用编队文本、操作文本和时间戳执行视频合成
@@ -32,8 +32,8 @@ from typing import Any, Callable
 from arknights_video_pipeline.core.config import ConfigManager
 from arknights_video_pipeline.core.exceptions import (
     ConfigError,
+    CopilotBackendError,
     ImageValidationError,
-    MAARecognitionError,
     PipelineError,
     PipelineStepError,
     VideoValidationError,
@@ -130,77 +130,88 @@ class Pipeline:
         )
         self.logger.info("=" * 60)
 
-    # ── 步骤1：视频转 MAA copilot JSON ────────────────────
+    # ── 步骤1：视频转 copilot JSON ─────────────────────────
+
+    def _backend_config(self, backend_name: str) -> dict[str, Any]:
+        """组装后端子配置（与后端 recognize() 的 config 参数对应）"""
+        if backend_name == "maa":
+            # 兼容旧配置：加载 video_to_copilot_config 指向的子配置文件
+            sub_config_path = resolve_path(
+                self.config.project_dir,
+                self.config.pipeline.get("video_to_copilot_config", ""),
+            )
+            if sub_config_path and os.path.exists(sub_config_path):
+                from arknights_video_pipeline.core.video_to_copilot import (
+                    load_config as load_vtc_config,
+                )
+
+                sub_config = load_vtc_config(sub_config_path, {})
+            else:
+                sub_config = {}
+            sub_config["maa_path"] = self.config.get_maa_path()
+            return sub_config
+        return self.config.get_recognition_config()
 
     def step_video_to_copilot(self) -> StepResult:
-        """调用MAA识别引擎，将视频转换为copilot JSON"""
+        """调用选定的识别后端（recognition 默认 / maa 可选），将视频转换为copilot JSON"""
         result = StepResult(
             name="video_to_copilot",
-            description="视频转MAA作业JSON",
+            description="视频转作业JSON",
         )
         result.mark_running()
         start = time.time()
 
         try:
-            from arknights_video_pipeline.core.video_to_copilot import (
-                load_config as load_vtc_config,
-                validate_maa_path,
-                video_to_copilot,
+            from arknights_video_pipeline.core.copilot_backend import (
+                create_backend,
             )
 
-            sub_config_path = resolve_path(
-                self.config.project_dir,
-                self.config.pipeline.get(
-                    "video_to_copilot_config", ""
-                ),
-            )
-            if sub_config_path and os.path.exists(sub_config_path):
-                sub_config = load_vtc_config(sub_config_path, {})
-            else:
-                sub_config = {}
-            sub_config["output_dir"] = os.path.relpath(
-                self.config.get_output_dir(), self.config.project_dir
-            )
-            sub_config["maa_path"] = self.config.pipeline.get(
-                "maa_path", sub_config.get("maa_path", "")
-            )
+            backend_name = self.config.get_copilot_backend()
+            backend_config = self._backend_config(backend_name)
+            backend = create_backend(backend_name, backend_config)
 
-            maa_path = self.config.get_maa_path()
-            validate_maa_path(maa_path)
+            output_dir = self.output_dir
+            timeout = self.config.get_copilot_timeout()
+            max_retries = self.config.get_copilot_max_retries()
+            if max_retries < 1:
+                raise CopilotBackendError(
+                    f"copilot_max_retries 必须大于 0，当前值: {max_retries}"
+                )
 
             self.logger.info(f"输入视频: {self.video_path}")
-            self.logger.info(f"MAA路径: {maa_path}")
+            self.logger.info(f"识别后端: {backend.name}")
+            if backend_name == "maa":
+                self.logger.info(f"MAA路径: {self.config.get_maa_path()}")
 
-            # 带重试机制的MAA识别
-            max_retries = self.config.get_maa_max_retries()
-            if max_retries < 1:
-                raise MAARecognitionError(
-                    f"maa_max_retries 必须大于 0，当前值: {max_retries}"
-                )
-            timeout = self.config.get_maa_timeout()
-
+            # 带重试机制的识别
             for attempt in range(1, max_retries + 1):
                 try:
                     self.logger.info(
-                        f"MAA识别尝试 {attempt}/{max_retries}"
+                        f"{backend.name}识别尝试 {attempt}/{max_retries}"
                         + (f" (超时: {timeout}s)" if timeout else "")
                     )
-                    json_path = video_to_copilot(self.video_path, sub_config, timeout=timeout)
+                    json_path = backend.recognize(
+                        video_path=self.video_path,
+                        output_dir=output_dir,
+                        config=backend_config,
+                        timeout=timeout,
+                    )
                     self.copilot_json_path = json_path
                     break
-                except (RuntimeError, TimeoutError, OSError) as exc:
+                except (RuntimeError, TimeoutError, OSError, CopilotBackendError) as exc:
                     if attempt < max_retries:
                         self.logger.warning(
-                            f"MAA识别第{attempt}次尝试失败: {exc}，正在重试..."
+                            f"{backend.name}识别第{attempt}次尝试失败: {exc}，正在重试..."
                         )
+                        time.sleep(min(2 ** attempt, 10))
                     else:
-                        raise MAARecognitionError(
-                            f"MAA识别在{max_retries}次尝试后均失败: {exc}"
+                        raise CopilotBackendError(
+                            f"{backend.name}后端识别在{max_retries}次尝试后均失败: {exc}"
                         ) from exc
 
             if not self.copilot_json_path:
-                raise MAARecognitionError(
-                    "MAA识别完成但未返回有效的JSON文件路径"
+                raise CopilotBackendError(
+                    f"{backend.name}识别完成但未返回有效的JSON文件路径"
                 )
 
             result.mark_success(output_files=[self.copilot_json_path])
@@ -671,7 +682,8 @@ def build_argparser() -> argparse.ArgumentParser:
 使用示例:
   python main.py video.mp4 --background-image bg.png
   python main.py video.mp4 -b bg.png --output-dir results
-  python main.py video.mp4 -b bg.png --maa-path C:/MAA --skip-step track
+  python main.py video.mp4 -b bg.png --maa-path C:/MAA --backend maa --skip-step track
+  python main.py video.mp4 -b bg.png --backend recognition --stage 2-10
   python main.py video.mp4 -b bg.png --log-level DEBUG --dry-run
   python main.py --init-config
   python main.py --init-config formation
@@ -703,7 +715,29 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--maa-path",
         default=None,
-        help="MAA项目路径 (优先级高于配置文件)",
+        help="MAA项目路径 (优先级高于配置文件；仅 backend=maa 时生效)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["recognition", "maa"],
+        default=None,
+        help="视频识别后端 (默认: recognition)。recognition=纯Python实现（默认）；maa=调用MAA项目（需配置 --maa-path）",
+    )
+    parser.add_argument(
+        "--ocr",
+        choices=["maamodel", "default"],
+        default=None,
+        help="Recognition 后端的 OCR 模型来源 (默认: maamodel)。仅 backend=recognition 时生效",
+    )
+    parser.add_argument(
+        "--stage",
+        default=None,
+        help="Recognition 后端的关卡指定（code/name/stageId，如 2-10 或 main_02-10），不指定则自动识别。仅 backend=recognition 时生效",
+    )
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help='Recognition 后端的视频分辨率 "WxH" (默认: 1280x720)。仅 backend=recognition 时生效',
     )
     parser.add_argument(
         "--config", "-c",
@@ -939,6 +973,18 @@ def main() -> None:
     cli_overrides: dict[str, Any] = {}
     if args.maa_path:
         cli_overrides["maa_path"] = args.maa_path
+    if args.backend:
+        cli_overrides["copilot_backend"] = args.backend
+    # Recognition 后端子配置覆盖（合并到已有 recognition 配置块）
+    if args.ocr or args.stage or args.resolution:
+        rec_cfg = dict(config_mgr.pipeline.get("recognition", {}) or {})
+        if args.ocr:
+            rec_cfg["ocr_source"] = args.ocr
+        if args.stage:
+            rec_cfg["stage_override"] = args.stage
+        if args.resolution:
+            rec_cfg["resolution"] = args.resolution
+        cli_overrides["recognition"] = rec_cfg
     if args.output_dir:
         cli_overrides["output_dir"] = args.output_dir
     if args.log_level:
@@ -993,6 +1039,7 @@ def main() -> None:
     if args.dry_run:
         logger.info("Dry-run模式：开始验证全部输入")
         logger.info(f"背景板图片: {background_image_path}")
+        logger.info(f"识别后端: {config_mgr.get_copilot_backend()}")
         logger.info(f"MAA路径: {config_mgr.get_maa_path()}")
         logger.info(f"跳过步骤: {args.skip_step}")
         all_ok = True

@@ -1,0 +1,28 @@
+# NOTICE
+
+本文件声明本项目分发中包含的第三方资源与代码的归属及许可信息。
+
+## recognition 识别资源（resource/recognition/）
+
+`resource/recognition/` 目录由 `script/sync_recognition_resources.py` 从子模块
+`src/ArknightsVideoRecognition/resource/` 同步生成，包含：
+
+- `tile/levels.json`：地图数据（源自 ArknightsGameResource 上游仓库）
+- `avatar/`：干员头像库
+- `onnx/`：战斗识别 ONNX 模型（源自 Maa）
+- `ocr/`：Maa finetune OCR 模型（源自 Maa）
+- `data/`：战斗/OCR 配置与干员职业表（源自 ArknightsGameResource / Maa）
+- `template/`：模板图片（源自 Maa）
+- `config/roi.json`：ROI 配置（源自 Maa）
+
+以上资源遵循各自上游仓库的许可证，其中 Maa 相关资源为 **AGPL-3.0**。
+该目录作为独立数据目录分发，不与本项目代码链接。
+
+## recognition 代码（src/ArknightsVideoRecognition/）
+
+代码部分由子模块独立维护，遵循其自身声明的许可证（详见该子模块的
+`pyproject.toml` 与 README）。
+
+## 其他
+
+- `resource/StartButton/` 开始按钮底板图片由 Maa 提供。

@@ -37,14 +37,22 @@ python main.py --init-config compose
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `maa_path` | string | `""` | MAA 项目路径，**必须手动配置**。支持相对路径（基于项目根目录）或绝对路径，必须指向有效的文件夹 |
+| `copilot_backend` | string | `"recognition"` | 视频转作业 JSON 的识别后端：`"recognition"`（默认，纯 Python 实现，ArknightsVideoRecognition 子模块）或 `"maa"`（调用 MAA 项目，需配置 `maa_path`）。CLI 可用 `--backend` 覆盖 |
+| `recognition.ocr_source` | string | `"maamodel"` | Recognition 后端的 OCR 模型来源：`"maamodel"`（Maa finetune 模型，默认）或 `"default"`（rapidocr 默认模型）。CLI 可用 `--ocr` 覆盖 |
+| `recognition.resolution` | string | `"1280x720"` | Recognition 后端的视频处理分辨率，格式 `"WxH"`。CLI 可用 `--resolution` 覆盖 |
+| `recognition.stage_override` | string | `""` | 关卡指定（code/name/stageId，如 `2-10` 或 `main_02-10`）。空=自动识别；指定后跳过关卡 OCR。CLI 可用 `--stage` 覆盖 |
+| `recognition.with_video_time` | boolean | `false` | 是否在 actions 中输出非标准的 `video_time` 扩展字段（视频时间点，秒） |
+| `recognition.resource_dir` | string | `""` | Recognition 资源目录覆盖。空=使用顶层 `resource/recognition/`（由 `script/sync_recognition_resources.py` 同步生成）；非空时使用该路径（运行时优先级最高，优先于环境变量 `AVR_RESOURCE_DIR`） |
+| `maa_path` | string | `""` | MAA 项目路径，**仅 `copilot_backend="maa"` 时生效**。支持相对路径（基于项目根目录）或绝对路径，必须指向有效的文件夹 |
 | `output_dir` | string | `"output"` | 输出根目录，支持相对路径或绝对路径 |
 | `log_level` | string | `"INFO"` | 日志级别，可选值：`DEBUG`、`INFO`、`WARNING`、`ERROR` |
 | `log_to_file` | boolean | `true` | 是否将日志输出到文件 |
 | `log_max_bytes` | integer | `10485760` | 单个日志文件最大字节数（10MB），超过后触发轮转 |
 | `log_backup_count` | integer | `3` | 保留的历史日志文件数量 |
-| `maa_timeout_seconds` | integer | `600` | MAA 识别超时时间（秒） |
-| `maa_max_retries` | integer | `2` | MAA 识别最大重试次数 |
+| `maa_timeout_seconds` | integer | `600` | MAA 识别超时时间（秒）。`copilot_timeout_seconds` 未设置时作为通用超时回退值 |
+| `maa_max_retries` | integer | `2` | MAA 识别最大重试次数。`copilot_max_retries` 未设置时作为通用重试次数回退值 |
+| `copilot_timeout_seconds` | integer | `600` | 识别通用超时时间（秒），两个后端共用；优先于 `maa_timeout_seconds` |
+| `copilot_max_retries` | integer | `2` | 识别通用最大重试次数，两个后端共用；优先于 `maa_max_retries` |
 | `formation` | string | `"config/formation.json"` | 编队转文本配置文件路径 |
 | `actions` | string | `"config/actions.json"` | 操作转文本配置文件路径 |
 | `track` | string | `"config/track.json"` | 开始按钮识别配置文件路径 |
@@ -61,14 +69,24 @@ python main.py --init-config compose
 
 ```json
 {
+    "copilot_backend": "recognition",
+    "recognition": {
+        "ocr_source": "maamodel",
+        "resolution": "1280x720",
+        "stage_override": "",
+        "with_video_time": false,
+        "resource_dir": ""
+    },
     "maa_path": "",
+    "maa_timeout_seconds": 600,
+    "maa_max_retries": 2,
+    "copilot_timeout_seconds": 600,
+    "copilot_max_retries": 2,
     "output_dir": "output",
     "log_level": "INFO",
     "log_to_file": true,
     "log_max_bytes": 10485760,
     "log_backup_count": 3,
-    "maa_timeout_seconds": 600,
-    "maa_max_retries": 2,
     "formation": "config/formation.json",
     "actions": "config/actions.json",
     "track": "config/track.json",
@@ -82,6 +100,11 @@ python main.py --init-config compose
     "ffmpeg_path": "resource/ffmpeg/bin"
 }
 ```
+
+> **识别资源说明（recognition 后端）**：`recognition.resource_dir` 为空时，运行时读取
+> `<项目根>/resource/recognition/`（由 `script/sync_recognition_resources.py` 从子模块
+> `src/ArknightsVideoRecognition/resource/` 同步生成）。资源缺失时步骤 1 会报错并提示
+> 运行同步脚本。详见 [合并方案](docs/merge_plan.md) §8。
 
 > **`video_paths` 与 `video_path` 说明**：`video_paths`（复数）是批量视频处理引入的新字段，GUI 用于持久化 **Video files** 卡片中的文件列表与顺序，下次启动时自动恢复。`video_path`（单数）为旧字段，保留仅为向后兼容，新版本不再写入；批量场景请统一使用 `video_paths`。CLI 不读取这两个字段，而是通过 `video` 位置参数接收视频列表。
 

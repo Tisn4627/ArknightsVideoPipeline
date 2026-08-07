@@ -21,7 +21,7 @@ class StepDef:
 
 # 流水线 5 个步骤的统一定义（顺序即执行顺序）
 STEPS: list[StepDef] = [
-    StepDef(key="copilot",   method="step_video_to_copilot",  label="视频转MAA作业JSON",   percent=10),
+    StepDef(key="copilot",   method="step_video_to_copilot",  label="视频转作业JSON",      percent=10),
     StepDef(key="formation", method="step_formation_to_text", label="编队配置转文本",      percent=30),
     StepDef(key="actions",   method="step_actions_to_text",   label="操作指令转文本",      percent=50),
     StepDef(key="track",     method="step_track_startbutton", label="识别开始按钮时间戳",   percent=70),

@@ -20,14 +20,34 @@ logger = logging.getLogger(__name__)
 
 # 全局流水线默认配置
 PIPELINE_DEFAULTS: dict[str, Any] = {
+    # === 后端选择（新增）===
+    # "recognition"（默认，纯 Python 实现，ArknightsVideoRecognition 子模块）
+    # | "maa"（可选回退，依赖 MAA 项目安装）
+    "copilot_backend": "recognition",
+
+    # === Recognition 后端配置（新增）===
+    "recognition": {
+        "ocr_source": "maamodel",      # "maamodel" | "default"
+        "resolution": "1280x720",      # "WxH"
+        "stage_override": "",          # 空=自动识别；否则指定关卡 code/name/stageId
+        "with_video_time": False,      # 是否输出 video_time 扩展字段
+        "resource_dir": "",            # 空=用顶层 resource/recognition/；否则覆盖
+    },
+
+    # === MAA 后端配置（仅 backend=maa 时生效）===
     "maa_path": "",
+    "maa_timeout_seconds": 600,
+    "maa_max_retries": 2,
+
+    # === 通用（两后端共用）===
+    "copilot_timeout_seconds": 600,
+    "copilot_max_retries": 2,
+
     "output_dir": "output",
     "log_level": "INFO",
     "log_to_file": True,
     "log_max_bytes": 10 * 1024 * 1024,
     "log_backup_count": 3,
-    "maa_timeout_seconds": 600,
-    "maa_max_retries": 2,
     "formation": "config/formation.json",
     "actions": "config/actions.json",
     "track": "config/track.json",
@@ -203,6 +223,39 @@ class ConfigManager:
 
     def get_maa_max_retries(self) -> int:
         return self.pipeline.get("maa_max_retries", 2)
+
+    # ── 后端选择（recognition / maa）────────────────────────
+
+    def get_copilot_backend(self) -> str:
+        """获取当前 copilot 后端标识，默认 "recognition"（见 docs/merge_plan.md §6）"""
+        return str(self.pipeline.get("copilot_backend", "recognition")).lower()
+
+    def get_copilot_timeout(self) -> int:
+        """获取 copilot 识别通用超时（秒）
+
+        优先 copilot_timeout_seconds，回退 maa_timeout_seconds（兼容旧配置）。
+        """
+        return self.pipeline.get(
+            "copilot_timeout_seconds",
+            self.pipeline.get("maa_timeout_seconds", 600),
+        )
+
+    def get_copilot_max_retries(self) -> int:
+        """获取 copilot 识别通用重试次数
+
+        优先 copilot_max_retries，回退 maa_max_retries（兼容旧配置）。
+        """
+        return self.pipeline.get(
+            "copilot_max_retries",
+            self.pipeline.get("maa_max_retries", 2),
+        )
+
+    def get_recognition_config(self) -> dict[str, Any]:
+        """获取 Recognition 后端子配置块（缺失键回退默认值）"""
+        cfg = self.pipeline.get("recognition", {})
+        if not isinstance(cfg, dict):
+            return {}
+        return deepcopy(cfg)
 
     def get_video_compose_style(self) -> str:
         """获取当前视频合成风格名称，默认为 style1"""
