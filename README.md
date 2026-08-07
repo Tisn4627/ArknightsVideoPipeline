@@ -50,7 +50,8 @@ python main.py video.mp4 -b bg.png --backend maa --maa-path C:/MAA
 ## 克隆与资源同步
 
 recognition 识别资源（约 214M）由 `src/ArknightsVideoRecognition` 子模块提供。
-首次克隆后需初始化子模块并同步资源到顶层 `resource/recognition/`：
+首次克隆后需初始化子模块并同步资源到顶层 `resource/`（avatar/config/data/
+ocr/onnx/template/tile 等与 font/locales 同层共存）：
 
 ```bash
 # 1. 初始化子模块
@@ -93,7 +94,7 @@ pip install -e .
 ## 许可证
 
 - 本项目代码遵循 [LICENSE](LICENSE) 声明。
-- `resource/recognition/` 目录下的识别资源（模型、地图数据、头像库等）源自
+- `resource/` 下的识别资源（`avatar/` `config/` `data/` `ocr/` `onnx/` `template/` `tile/`，模型、地图数据、头像库等）源自
   `src/ArknightsVideoRecognition/resource/`，遵循其上游（Maa 等）的 **AGPL-3.0** 许可，
   详见 [NOTICE](NOTICE)。
 - `resource/StartButton/` 开始按钮底板图片由 **Maa** 提供。

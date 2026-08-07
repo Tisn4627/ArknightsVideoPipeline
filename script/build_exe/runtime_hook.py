@@ -7,7 +7,7 @@ runtime_hook - PyInstaller 运行时钩子
     1. 在 noconsole 模式下将 None 的 sys.stdout/sys.stderr 重定向到 null sink
     2. 确保 ffmpeg/ffprobe 可在 PATH 中找到（Windows 注册表回退）
     3. 设置环境变量，标记当前处于打包环境
-    4. 设置 AVR_RESOURCE_DIR 指向打包内的 resource/recognition（recognition 后端必需）
+    4. 设置 AVR_RESOURCE_DIR 指向打包内的 resource（recognition 后端必需）
 
 注意:
     PROJECT_ROOT 的修正逻辑在入口脚本(launcher)中处理，而非此处。
@@ -36,17 +36,17 @@ def _setup_environment() -> None:
     _ensure_ffmpeg_in_path()
 
     # recognition 后端资源目录（recognition_backend 在导入时读取该变量）
-    # 打包时 resource/recognition/ 随 bundle 分发；_MEIPASS 为解包临时目录
+    # 打包时识别资源并入 resource/ 随 bundle 分发；_MEIPASS 为解包临时目录
     _ensure_recognition_resource_dir()
 
 
 def _ensure_recognition_resource_dir() -> None:
-    """设置 AVR_RESOURCE_DIR 指向打包内的 resource/recognition
+    """设置 AVR_RESOURCE_DIR 指向打包内的 resource
 
     recognition 后端在导入 ArknightsVideoRecognition 前读取
     AVR_RESOURCE_DIR 环境变量（见 core/recognition_backend.py）。
-    打包环境下资源随 bundle 分发（--add-data resource/recognition;
-    resource/recognition），此处将环境变量指向解包后的资源目录。
+    打包环境下资源随 bundle 分发（--add-data <resource>;resource），
+    此处将环境变量指向解包后的资源目录。
 
     非打包环境不设置，交由 recognition_backend 的默认路径解析。
     """
@@ -58,7 +58,7 @@ def _ensure_recognition_resource_dir() -> None:
     bundle_dir = getattr(sys, "_MEIPASS", None) or os.path.dirname(
         os.path.abspath(sys.argv[0])
     )
-    resource_dir = os.path.join(bundle_dir, "resource", "recognition")
+    resource_dir = os.path.join(bundle_dir, "resource")
     if os.path.isdir(resource_dir):
         os.environ["AVR_RESOURCE_DIR"] = resource_dir
 

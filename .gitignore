@@ -215,7 +215,14 @@ resource/ffmpeg/
 
 # ================================
 # Recognition resources (copy mode)
-# 由 script/sync_recognition_resources.py 从子模块同步生成
+# 由 script/sync_recognition_resources.py 从子模块同步生成，
+# 并入顶层 resource/（与 font/locales/StartButton 同层）
 # （符号链接模式下本目录为链接，可入库，无需 ignore）
 # ================================
-resource/recognition/
+resource/avatar/
+resource/config/
+resource/data/
+resource/ocr/
+resource/onnx/
+resource/template/
+resource/tile/

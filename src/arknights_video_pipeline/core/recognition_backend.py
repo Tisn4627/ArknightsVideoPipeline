@@ -7,7 +7,7 @@ core.recognition_backend - Recognition 后端（默认）
 资源目录优先级（必须在 import ArknightsVideoRecognition.* 之前确定）：
   1. 配置 recognition.resource_dir（recognize() 内应用）
   2. 环境变量 AVR_RESOURCE_DIR
-  3. 默认 <项目根>/resource/recognition/
+  3. 默认 <项目根>/resource/（识别资源并入顶层 resource/）
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ import time
 from pathlib import Path
 
 # === 关键：在 import ArknightsVideoRecognition 之前设置资源目录 ===
-# 资源统一存放于父项目顶层 resource/recognition/（见 docs/merge_plan.md §3.1、§8）。
+# 识别资源（avatar/config/data/ocr/onnx/template/tile）并入父项目顶层 resource/。
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource" / "recognition"
+_DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource"
 _SUBMODULE_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
 _SUBMODULE_SRC_DIR = _SUBMODULE_ROOT / "src"
 

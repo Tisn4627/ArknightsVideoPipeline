@@ -42,7 +42,7 @@ python main.py --init-config compose
 | `recognition.resolution` | string | `"1280x720"` | Recognition 后端的视频处理分辨率，格式 `"WxH"`。CLI 可用 `--resolution` 覆盖 |
 | `recognition.stage_override` | string | `""` | 关卡指定（code/name/stageId，如 `2-10` 或 `main_02-10`）。空=自动识别；指定后跳过关卡 OCR。CLI 可用 `--stage` 覆盖 |
 | `recognition.with_video_time` | boolean | `false` | 是否在 actions 中输出非标准的 `video_time` 扩展字段（视频时间点，秒） |
-| `recognition.resource_dir` | string | `""` | Recognition 资源目录覆盖。空=使用顶层 `resource/recognition/`（由 `script/sync_recognition_resources.py` 同步生成）；非空时使用该路径（运行时优先级最高，优先于环境变量 `AVR_RESOURCE_DIR`） |
+| `recognition.resource_dir` | string | `""` | Recognition 资源目录覆盖。空=使用顶层 `resource/`（识别资源 avatar/config/data/ocr/onnx/template/tile 并入顶层，由 `script/sync_recognition_resources.py` 同步生成）；非空时使用该路径（运行时优先级最高，优先于环境变量 `AVR_RESOURCE_DIR`） |
 | `maa_path` | string | `""` | MAA 项目路径，**仅 `copilot_backend="maa"` 时生效**。支持相对路径（基于项目根目录）或绝对路径，必须指向有效的文件夹 |
 | `output_dir` | string | `"output"` | 输出根目录，支持相对路径或绝对路径 |
 | `log_level` | string | `"INFO"` | 日志级别，可选值：`DEBUG`、`INFO`、`WARNING`、`ERROR` |
@@ -102,7 +102,7 @@ python main.py --init-config compose
 ```
 
 > **识别资源说明（recognition 后端）**：`recognition.resource_dir` 为空时，运行时读取
-> `<项目根>/resource/recognition/`（由 `script/sync_recognition_resources.py` 从子模块
+> `<项目根>/resource/`（识别资源并入顶层，由 `script/sync_recognition_resources.py` 从子模块
 > `src/ArknightsVideoRecognition/resource/` 同步生成）。资源缺失时步骤 1 会报错并提示
 > 运行同步脚本。详见 [合并方案](docs/merge_plan.md) §8。
 

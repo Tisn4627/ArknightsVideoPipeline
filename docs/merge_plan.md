@@ -190,14 +190,14 @@ ArknightsVideoPipeline/                          # 父项目仓库根
 > **布局要点**：
 > 1. **不新建 `submodules/` 目录**——recognition 子模块直接作为 `src/ArknightsVideoRecognition/` 与父项目代码包 `src/arknights_video_pipeline/` 平级共存于 `src/` 下。
 > 2. **命名隔离**：父项目包用 `snake_case`（`arknights_video_pipeline`），子模块根用 `PascalCase`（`ArknightsVideoRecognition`），两者在 `src/` 下不冲突。
-> 3. **资源统一原则**：所有运行时资源（父项目自有 + Recognition）一律存放在顶层 `resource/` 下。Recognition 资源位于 `resource/recognition/`，运行时 `AVR_RESOURCE_DIR` 指向该目录。子模块内的 `resource/` 仅作"来源真相"（git submodule 完整 checkout 必然存在），不作为运行时读取路径，避免双份资源与路径歧义（详见 §8）。
+> 3. **资源统一原则**：所有运行时资源（父项目自有 + Recognition）一律存放在顶层 `resource/` 下。Recognition 资源位于 `resource/`，运行时 `AVR_RESOURCE_DIR` 指向该目录。子模块内的 `resource/` 仅作"来源真相"（git submodule 完整 checkout 必然存在），不作为运行时读取路径，避免双份资源与路径歧义（详见 §8）。
 
 ### 3.2 职责边界
 
 | 关注点 | 归属 | 说明 |
 | --- | --- | --- |
 | 视频识别算法（编队/关卡/动作） | `src/ArknightsVideoRecognition/`（子模块） | 子模块独立实现，父项目不重复 |
-| ONNX/OCR 模型、地图数据、头像库 | 父项目 `resource/recognition/` | **统一存放于顶层 resource/**，由同步脚本从子模块 `src/ArknightsVideoRecognition/resource/` 拉取（见 §8） |
+| ONNX/OCR 模型、地图数据、头像库 | 父项目 `resource/` | **统一存放于顶层 resource/**，由同步脚本从子模块 `src/ArknightsVideoRecognition/resource/` 拉取（见 §8） |
 | 开始按钮模板、字体、i18n | 父项目 `resource/`（StartButton/font/locales） | 父项目自有，与识别无关 |
 | 视频合成（movielite）、文本渲染（pictex） | Pipeline | 父项目独有 |
 | GUI（PyQt6）、CLI、流水线编排 | Pipeline | 父项目独有 |
@@ -277,13 +277,13 @@ import time
 from pathlib import Path
 
 # === 关键：在 import recognition 之前设置资源目录 ===
-# 资源统一存放于父项目顶层 resource/recognition/（见 §3.1、§8）。
-# 优先级：配置 > 环境变量 AVR_RESOURCE_DIR > 默认 resource/recognition/
+# 资源统一存放于父项目顶层 resource/（见 §3.1、§8）。
+# 优先级：配置 > 环境变量 AVR_RESOURCE_DIR > 默认 resource/
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource" / "recognition"
 _SUBMODULE_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
 
-# 仅当未被外部（配置/环境变量）显式设置时，回退到顶层 resource/recognition/
+# 仅当未被外部（配置/环境变量）显式设置时，回退到顶层 resource/
 if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
@@ -518,7 +518,7 @@ def step_video_to_copilot(self) -> StepResult:
       "resolution": "1280x720",         // "WxH"
       "stage_override": "",             // 空=自动识别；否则指定关卡 code/name/stageId
       "with_video_time": false,          // 是否输出 video_time 扩展字段
-      "resource_dir": ""                // 空=用顶层 resource/recognition/；否则覆盖（见 §8.4）
+      "resource_dir": ""                // 空=用顶层 resource/；否则覆盖（见 §8.4）
     },
 
     // === MAA 后端配置（保留，仅 backend=maa 时生效）===
@@ -598,13 +598,13 @@ pip install -e src/ArknightsVideoRecognition
 - 由 `recognition_backend.py` 在 import 前将 `src/ArknightsVideoRecognition/src` 加入 `sys.path`（已在 §4.2 代码中实现）
 - 适合开发期快速切换；生产部署建议方式 A
 
-> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/ArknightsVideoRecognition/src/ArknightsVideoRecognition/config/settings.py`，其 `parents[3]` 解析到子模块根 `src/ArknightsVideoRecognition/`，默认 `RESOURCE_DIR` 指向 `src/ArknightsVideoRecognition/resource`。**但我们要求资源在顶层 `resource/recognition/`**，因此适配层必须显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
+> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/ArknightsVideoRecognition/src/ArknightsVideoRecognition/config/settings.py`，其 `parents[3]` 解析到子模块根 `src/ArknightsVideoRecognition/`，默认 `RESOURCE_DIR` 指向 `src/ArknightsVideoRecognition/resource`。**但我们要求资源在顶层 `resource/`**，因此适配层必须显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
 
 ### 7.3 构建脚本（`script/build_exe/`）
 
 打包 exe 时需注意：
-- 顶层 `resource/recognition/`（214M）需一并打包，路径需与运行时 `AVR_RESOURCE_DIR` 一致
-- 在 `runtime_hook.py` 中设置 `os.environ["AVR_RESOURCE_DIR"]` 指向打包后的 `resource/recognition/` 目录
+- 顶层 `resource/` 下的识别资源（214M）需一并打包，路径需与运行时 `AVR_RESOURCE_DIR` 一致
+- 在 `runtime_hook.py` 中设置 `os.environ["AVR_RESOURCE_DIR"]` 指向打包后的 `resource/` 目录
 - ONNX 运行时依赖需包含在打包目标中
 
 ---
@@ -626,18 +626,19 @@ resource/                                    # 父项目统一资源根
     └── ...
 ```
 
-- **运行时读取路径**：`AVR_RESOURCE_DIR` 指向 `resource/recognition/`（见 §4.2 适配层代码）
+- **运行时读取路径**：`AVR_RESOURCE_DIR` 指向 `resource/`（见 §4.2 适配层代码）
 - **子模块内 `resource/` 的角色**：仅为"来源真相"——git submodule 完整 checkout 必然包含它（214M 由子模块仓库版本控制），但**运行时不直接读取**，避免双份资源与路径歧义
-- **父项目 `resource/recognition/` 的角色**：运行时唯一入口，由同步脚本（§8.2）从子模块拉取/链接
+- **父项目 `resource/` 的角色**：运行时唯一入口，由同步脚本（§8.2）从子模块拉取/链接
 
 ### 8.2 资源同步策略
 
-子模块的资源需"进入"父项目顶层 `resource/recognition/`。提供两种实现方式（推荐方式 A）：
+子模块的资源需"进入"父项目顶层 `resource/`。提供两种实现方式（推荐方式 A）：
 
 **方式 A（推荐）：符号链接（开发期零拷贝）**
-- 子模块初始化后，运行 `script/sync_recognition_resources.py` 创建符号链接：
+- 子模块初始化后，运行 `script/sync_recognition_resources.py` 为每个条目创建符号链接：
   ```
-  resource/recognition  ->  src/ArknightsVideoRecognition/resource
+  resource/<条目>  ->  src/ArknightsVideoRecognition/resource/<条目>
+  （如 resource/template -> src/ArknightsVideoRecognition/resource/template）
   ```
 - 优点：零存储重复、子模块更新后自动生效（链接指向最新 checkout）
 - 注意：Windows 创建符号链接需开发者模式或管理员权限；CI 环境通常允许
@@ -648,17 +649,18 @@ resource/                                    # 父项目统一资源根
   from pathlib import Path
   ROOT = Path(__file__).resolve().parents[1]
   SRC = ROOT / "src" / "ArknightsVideoRecognition" / "resource"
-  DST = ROOT / "resource" / "recognition"
-  if DST.is_symlink() or DST.exists():
-      print(f"已存在: {DST}")
-      sys.exit(0)
-  DST.parent.mkdir(parents=True, exist_ok=True)
-  os.symlink(SRC, DST, target_is_directory=True)
-  print(f"已链接: {DST} -> {SRC}")
+  DST = ROOT / "resource"
+  for entry in SRC.iterdir():
+      link = DST / entry.name
+      if link.is_symlink() or link.exists():
+          continue
+      os.symlink(entry, link, target_is_directory=True)
   ```
 
 **方式 B：复制（打包期 / 无符号链接权限环境）**
-- 同步脚本改为递归复制 `SRC → DST`，并加 `.gitignore` 忽略 `resource/recognition/`
+- 同步脚本按条目递归复制 `SRC/<条目> → DST/<条目>`（绝不删除/覆盖 `resource/` 下的
+  font/locales/StartButton 等主项目资源），并加 `.gitignore` 忽略 `resource/` 下的
+  识别资源子目录（avatar/config/data/ocr/onnx/template/tile）
 - 优点：跨平台无权限问题、打包友好
 - 缺点：214M 重复存储，子模块更新需重新运行脚本
 
@@ -679,17 +681,17 @@ resource/                                    # 父项目统一资源根
 `recognition_backend.py` 中（见 §4.2）：
 1. **配置覆盖**：`recognition.resource_dir` 非空 → 用该路径
 2. **环境变量**：`AVR_RESOURCE_DIR` 已设置 → 用该路径
-3. **默认**：`<父项目根>/resource/recognition/`
+3. **默认**：`<父项目根>/resource/`
 4. **必须在 import `ArknightsVideoRecognition.*` 之前完成设置**（因 `settings.py` 在 import 时读取环境变量）
 
 ### 8.5 .gitignore 处理
 
-- 方式 A（符号链接）：`resource/recognition` 作为符号链接，**可纳入父项目版本控制**（git 记录链接目标，不记录内容），无需 ignore
-- 方式 B（复制）：`resource/recognition/` 加入 `.gitignore`（214M 不入库），由同步脚本生成
+- 方式 A（符号链接）：`resource/<条目>` 作为符号链接，**可纳入父项目版本控制**（git 记录链接目标，不记录内容），无需 ignore
+- 方式 B（复制）：`resource/` 下的识别资源子目录加入 `.gitignore`（214M 不入库），由同步脚本生成
 
 ```
 # .gitignore（方式 B 时追加）
-resource/recognition/
+resource/
 ```
 
 ### 8.6 资源完整性校验
@@ -720,7 +722,7 @@ resource/recognition/
    - GPL-3.0 与 AGPL-3.0 兼容（组合作品可按 AGPL-3.0 分发）
    - GPL-2.0 → GPL-3.0 升级需所有贡献者同意（当前仅 1 位贡献者 Tisn4627，可行）
 2. **资源归属声明**：在父项目 `LICENSE`/`NOTICE` 中明确：
-   - `resource/recognition/` 内的资源遵循 AGPL-3.0（源自子模块 `src/ArknightsVideoRecognition/resource/`）
+   - `resource/` 内的资源遵循 AGPL-3.0（源自子模块 `src/ArknightsVideoRecognition/resource/`）
    - 资源作为独立数据目录分发，不与父项目代码"链接"
 3. **补充 Recognition 代码许可证**：在子模块 `pyproject.toml` 显式声明代码许可证
 
@@ -736,15 +738,15 @@ resource/recognition/
 1. 父项目执行 `git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/ArknightsVideoRecognition`（子模块直接入 `src/`，不新建 `submodules/`）
 2. 更新 `.gitmodules`（path 指向 `src/ArknightsVideoRecognition`）
 3. 新增 `script/sync_recognition_resources.py`（资源同步脚本，支持 `--mode=link|copy`）
-4. 运行同步脚本：`resource/recognition/` ← `src/ArknightsVideoRecognition/resource/`（方式 A 符号链接）
-5. 更新 `.gitignore`（若用方式 B 复制，追加 `resource/recognition/`）
+4. 运行同步脚本：`resource/` ← `src/ArknightsVideoRecognition/resource/`（方式 A 符号链接）
+5. 更新 `.gitignore`（若用方式 B 复制，追加识别资源子目录 avatar/config/data/ocr/onnx/template/tile）
 6. 文档补充 `git submodule update --init --recursive` + 运行同步脚本的克隆说明
 7. CI 中增加子模块初始化 + 资源同步步骤
 
 ### 阶段 2：后端抽象层（新增代码，不改现有逻辑）
 8. 新增 `core/copilot_backend.py`（Protocol + 工厂）
 9. 新增 `core/maa_backend.py`，包装现有 `video_to_copilot.py` 逻辑
-10. 新增 `core/recognition_backend.py`（适配层 + 归一化，`AVR_RESOURCE_DIR` 指向 `resource/recognition/`）
+10. 新增 `core/recognition_backend.py`（适配层 + 归一化，`AVR_RESOURCE_DIR` 指向 `resource/`）
 11. `video_to_copilot.py` 保留向后兼容 re-export
 
 ### 阶段 3：流水线接入
@@ -761,10 +763,10 @@ resource/recognition/
 
 ### 阶段 5：验证
 20. 单元测试：后端工厂、归一化函数、Mock 两个后端
-21. 集成测试：用样例视频跑 recognition 后端全流程（资源从 `resource/recognition/` 读取）
+21. 集成测试：用样例视频跑 recognition 后端全流程（资源从 `resource/` 读取）
 22. 回归测试：切换 `copilot_backend=maa` 验证 MAA 后端仍可用
 23. 资源同步测试：方式 A/B 切换、子模块更新后重新同步
-24. 打包测试：exe 构建含 `resource/recognition/` 资源路径
+24. 打包测试：exe 构建含 `resource/` 资源路径
 
 ### 阶段 6：文档与发布
 25. 更新 `README.md`：说明双后端、子模块克隆 + 资源同步方式
@@ -779,7 +781,7 @@ resource/recognition/
 | 风险 | 影响 | 缓解措施 |
 | --- | --- | --- |
 | Recognition 资源 214M 导致父项目 clone 慢 | 中 | submodule 默认不下载，需 `--init`；文档说明；CI 缓存 |
-| 资源未同步到 `resource/recognition/` → 运行时找不到 | 高 | 适配层启动时校验并提示运行同步脚本；CI 强制同步步骤 |
+| 资源未同步到 `resource/` → 运行时找不到 | 高 | 适配层启动时校验并提示运行同步脚本；CI 强制同步步骤 |
 | 符号链接在 Windows 无权限创建 | 中 | 同步脚本支持 `--mode=copy` 回退；文档说明开启开发者模式 |
 | `AVR_RESOURCE_DIR` 未在 import 前设置 → 资源找不到 | 高 | 适配层在模块顶部最早设置；单测覆盖路径解析 |
 | Recognition 输出无 `kills/costs`，下游文本步骤异常 | 中 | 归一化 + `.get()` 容错；集成测试验证 |
@@ -796,13 +798,13 @@ resource/recognition/
 
 ### 12.1 单元测试
 - `test_copilot_backend.py`：后端工厂创建、未知后端报错
-- `test_recognition_backend.py`：Mock `VideoRecognitionPipeline.run()`，验证落盘、归一化、超时、`AVR_RESOURCE_DIR` 默认指向 `resource/recognition/`
+- `test_recognition_backend.py`：Mock `VideoRecognitionPipeline.run()`，验证落盘、归一化、超时、`AVR_RESOURCE_DIR` 默认指向 `resource/`
 - `test_maa_backend.py`：Mock `video_to_copilot`，验证包装正确
 - `test_normalize.py`：归一化函数各字段补默认
 - `test_sync_resources.py`：同步脚本链接/复制模式、已存在时跳过、跨平台兼容
 
 ### 12.2 集成测试
-- 用样例视频跑 recognition 后端完整 5 步流水线（资源从 `resource/recognition/` 读取）
+- 用样例视频跑 recognition 后端完整 5 步流水线（资源从 `resource/` 读取）
 - 切换 `copilot_backend` 配置，验证两后端产出可被下游步骤消费
 - `pytest -m slow`（Recognition 已有慢测试标记）
 
@@ -812,7 +814,7 @@ resource/recognition/
 
 ### 12.4 资源同步测试
 - 子模块更新后重新运行同步脚本（方式 A 链接自动生效、方式 B 重新复制）
-- `resource/recognition/` 缺失时适配层抛出友好错误提示运行同步脚本
+- `resource/` 缺失时适配层抛出友好错误提示运行同步脚本
 
 ---
 
@@ -832,7 +834,7 @@ resource/recognition/
 ## 14. 后续可演进方向（非本次范围）
 
 1. **GUI 后端切换控件**：在 PyQt6 界面增加后端选择下拉框与 recognition 参数面板
-2. **资源共享优化**：复用 `resource/recognition/template/` 给 Pipeline 的开始按钮识别（如有重叠）
+2. **资源共享优化**：复用 `resource/template/` 给 Pipeline 的开始按钮识别（如有重叠）
 3. **缓存机制**：对同一视频的识别结果缓存，避免重复识别
 4. **并行识别**：多视频批量时，recognition 后端（纯 Python）比 MAA（资源争用）更适合并发
 5. **Recognition 包发布**：将 Recognition 发布到 PyPI，父项目改用 pip 依赖（替代 submodule + 资源同步）
@@ -845,11 +847,11 @@ resource/recognition/
 | --- | --- | --- |
 | `.gitmodules` | 新增 | 声明 recognition 子模块（path 指向 `src/ArknightsVideoRecognition`） |
 | `src/ArknightsVideoRecognition/` | 新增 | git submodule（与父项目代码包平级共存于 `src/`，含代码 + 子模块内 resource 作来源） |
-| `script/sync_recognition_resources.py` | 新增 | 资源同步脚本（`--mode=link\|copy`），子模块 resource → 顶层 `resource/recognition/` |
-| `resource/recognition/` | 新增 | Recognition 资源统一入口（符号链接或复制，见 §8） |
-| `.gitignore` | 修改 | 方式 B 复制时追加 `resource/recognition/` |
+| `script/sync_recognition_resources.py` | 新增 | 资源同步脚本（`--mode=link\|copy`），子模块 resource → 顶层 `resource/` |
+| `resource/` 下的识别资源子目录（avatar/config/data/ocr/onnx/template/tile） | 新增 | Recognition 资源统一入口（符号链接或复制，见 §8） |
+| `.gitignore` | 修改 | 方式 B 复制时追加识别资源子目录 |
 | `src/arknights_video_pipeline/core/copilot_backend.py` | 新增 | 后端 Protocol + 工厂 |
-| `src/arknights_video_pipeline/core/recognition_backend.py` | 新增 | Recognition 适配层（`AVR_RESOURCE_DIR` 指向 `resource/recognition/`） |
+| `src/arknights_video_pipeline/core/recognition_backend.py` | 新增 | Recognition 适配层（`AVR_RESOURCE_DIR` 指向 `resource/`） |
 | `src/arknights_video_pipeline/core/maa_backend.py` | 新增 | MAA 后端包装 |
 | `src/arknights_video_pipeline/core/video_to_copilot.py` | 重构/兼容 | 逻辑迁出，保留 re-export |
 | `src/arknights_video_pipeline/core/pipeline.py` | 修改 | step1 选后端、新增 CLI 参数 |

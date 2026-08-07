@@ -1,7 +1,7 @@
 """Recognition 后端适配层单元测试
 
 验证 core/recognition_backend.py：
-- AVR_RESOURCE_DIR 默认指向 <项目根>/resource/recognition/
+- AVR_RESOURCE_DIR 默认指向 <项目根>/resource/（识别资源并入顶层）
 - 配置级 resource_dir 覆盖在首次导入前生效
 - 分辨率解析、stage_override 透传
 - 输出 JSON 落盘与归一化
@@ -105,10 +105,10 @@ class TestResourceDir:
     """验证资源目录解析优先级"""
 
     def test_default_env_set_to_top_level_resource(self, monkeypatch) -> None:
-        """模块导入时 AVR_RESOURCE_DIR 默认指向 <项目根>/resource/recognition"""
+        """模块导入时 AVR_RESOURCE_DIR 默认指向 <项目根>/resource"""
         monkeypatch.delenv("AVR_RESOURCE_DIR", raising=False)
         importlib.reload(importlib.import_module("arknights_video_pipeline.core.recognition_backend"))
-        expected = os.path.join(_PROJECT_ROOT, "resource", "recognition")
+        expected = os.path.join(_PROJECT_ROOT, "resource")
         assert os.environ["AVR_RESOURCE_DIR"].replace("\\", "/") == expected.replace("\\", "/")
 
     def test_existing_env_var_respected(self, monkeypatch) -> None:

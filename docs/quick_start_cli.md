@@ -59,7 +59,7 @@ pip install -r requirements.txt
 ### 1.5 同步识别资源（recognition 后端必需）
 
 步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 214M 识别资源
-（模型/地图/头像），存放于顶层 `resource/recognition/`：
+（模型/地图/头像），并入顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile 等）：
 
 ```bash
 # 符号链接模式（零拷贝，子模块更新自动生效；Windows 无符号链接权限时请用 copy 模式）
@@ -101,7 +101,7 @@ config/
 ### 2.2 选择识别后端（默认 recognition，无需配置）
 
 步骤 1 默认使用 `copilot_backend: "recognition"`（纯 Python 识别，无需 MAA 安装）。
-识别资源已由 1.5 节同步到 `resource/recognition/`，开箱即用。
+识别资源已由 1.5 节同步到顶层 `resource/`，开箱即用。
 
 如需回退到 **MAA 后端**（调用 MAA 项目的视频识别），需手动配置 `maa_path`：
 
@@ -329,8 +329,8 @@ python main.py video.mp4 --style style2
 
 ### Q: 提示识别资源缺失（Recognition 资源缺失）
 
-步骤 1 报错提示 `Recognition 资源缺失` 时，说明 `resource/recognition/` 不存在或
-不完整。运行同步脚本重新生成：
+步骤 1 报错提示 `Recognition 资源缺失` 时，说明 `resource/` 下的识别资源
+（avatar/config/data/ocr/onnx/template/tile）不存在或不完整。运行同步脚本重新生成：
 
 ```bash
 python script/sync_recognition_resources.py --mode=copy --force

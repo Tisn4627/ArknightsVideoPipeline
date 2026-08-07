@@ -31,7 +31,7 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
         "resolution": "1280x720",      # "WxH"
         "stage_override": "",          # 空=自动识别；否则指定关卡 code/name/stageId
         "with_video_time": False,      # 是否输出 video_time 扩展字段
-        "resource_dir": "",            # 空=用顶层 resource/recognition/；否则覆盖
+        "resource_dir": "",            # 空=用顶层 resource/（识别资源并入）；否则覆盖
     },
 
     # === MAA 后端配置（仅 backend=maa 时生效）===
