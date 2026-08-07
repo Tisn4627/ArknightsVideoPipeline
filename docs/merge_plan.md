@@ -19,8 +19,8 @@
 >    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
 > 4. 资源自动同步：主仓库新增独立 `.github/workflows/sync-resources.yml`（每周一
 >    08:00 UTC 定时 + 手动触发，直接更新本仓库顶层 resource/ 并自动提交）。
->    原子仓库（ArknightsVideoRecognition 上游）自身的 sync-resources.yml **保持运行**
->    （继续维护其仓库内 resource/），两者互不影响、均不修改。vendor 内
+>    原子仓库（ArknightsVideoRecognition 上游）自身的 sync-resources.yml 已整体
+>    注释停用（2026-08-08，上游提交 7f30007），避免两侧重复同步；vendor 内
 >    `.github/workflows/` 保留该文件的全注释副本：GitHub Actions 只扫描仓库根
 >    `.github/workflows/`，vendor 内的文件不会被执行，副本仅供对照参考（见 §8.3）。
 
@@ -707,9 +707,10 @@ resource/                                    # 父项目统一资源根
 3. `template`/`onnx`/`ocr` 三类大体积资源仍不自动同步：从 Recognition 上游仓库
    （https://github.com/Tisn4627/ArknightsVideoRecognition）获取更新后，由开发者
    本地复制入库并手动提交
-4. Recognition 上游仓库（原子仓库）自身的 `sync-resources.yml` **保持运行**，
-   继续维护其仓库内 `resource/`，不与本仓库的 workflow 冲突，双方均不做停用修改；
-   本仓库 vendor 目录 `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
+4. Recognition 上游仓库（原子仓库）自身的 `sync-resources.yml` 已整体注释停用
+   （2026-08-08，上游提交 7f30007），资源同步统一由本仓库 workflow 负责，避免
+   两侧重复同步提交；本仓库 vendor 目录
+   `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
    保留其全注释副本（仅作对照参考——GitHub Actions 只扫描仓库根目录，vendor 内的
    workflow 文件不会被执行）
 

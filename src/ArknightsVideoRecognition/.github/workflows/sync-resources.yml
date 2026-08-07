@@ -3,8 +3,10 @@
 # 的全注释副本（随 vendor 代码入库，仅供对照参考）。
 # 注意：GitHub Actions 只扫描仓库根目录的 .github/workflows/，vendor 目录内的
 # workflow 文件不会被执行；上游原子仓库（ArknightsVideoRecognition）自身的
-# 该 workflow 仍在运行，未被停用，本仓库的 Sync Resources workflow（仓库根
-# .github/workflows/sync-resources.yml）与上游相互独立。
+# 该 workflow 已于 2026-08-08 同步整体注释停用（上游提交 7f30007），
+# 资源同步统一由本仓库（ArknightsVideoPipeline）根目录
+# .github/workflows/sync-resources.yml 接管。
+# ========================================================================
 # ========================================================================
 # #
 # # 所有 resource 文件均保留在仓库中（开箱即用），但只有以下子目录由本
