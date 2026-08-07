@@ -1,0 +1,119 @@
+# 定期从上游仓库同步 resource/ 下的文本/图片资源并提交。
+#
+# 所有 resource 文件均保留在仓库中（开箱即用），但只有以下子目录由本
+# workflow 自动同步更新：
+#   - resource/tile/levels.json      <- yuanyan3060/ArknightsGameResource
+#   - resource/avatar/               <- yuanyan3060/ArknightsGameResource
+#   - resource/data/battle_data.json <- MaaAssistantArknights/MaaAssistantArknights
+#   - resource/data/ocr_config.json  <- MaaAssistantArknights/MaaAssistantArknights
+#   - resource/data/character_table.json + char_roles.json <- Kengxxiao/ArknightsGameData（脚本下载）
+#   - resource/config/roi.json       <- Maa tasks.json 提取（--regen-roi）
+#
+# 不由本 workflow 自动同步（已在仓库中，由开发者本地手动更新）：
+#   - resource/template/  模板图片（体积大、二进制）
+#   - resource/onnx/       ONNX 模型（体积大、二进制）
+#   - resource/ocr/        PaddleOCR 模型（体积大、二进制）
+# 这三类资源更新频率低，从 Recognition 上游仓库
+# （https://github.com/Tisn4627/ArknightsVideoRecognition）获取更新后
+# 本地复制入库并手动提交。
+#
+# 识别代码位于 src/ArknightsVideoRecognition/（vendor，原为 git 子模块），
+# 同步脚本即其中的 scripts/update_resources.py 与 scripts/update_character_table.py；
+# 脚本写入顶层 resource/（AVR_RESOURCE_DIR 指向仓库根 resource/）。
+#
+# 触发方式：
+#   - 定时：每周一 08:00 UTC 自动运行
+#   - 手动：Actions 页面手动触发（workflow_dispatch）
+
+name: Sync Resources
+
+on:
+  schedule:
+    # 每周一 08:00 UTC（北京时间 16:00）自动运行
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    # 允许在 Actions 页面手动触发
+
+permissions:
+  contents: write  # 需要写权限以推送提交
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      # 使 settings.py 的 RESOURCE_DIR/DATA_DIR 指向仓库顶层 resource/
+      AVR_RESOURCE_DIR: ${{ github.workspace }}/resource
+    steps:
+      - name: Checkout 本仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow  # 助战模板缩放需要 Pillow
+
+      - name: 浅克隆上游 Maa 仓库
+        # Maa 仓库较大，浅克隆（depth=1）+ sparse checkout 加速，只取 resource 目录
+        run: |
+          git clone --depth=1 --filter=blob:none --sparse \
+            https://github.com/MaaAssistantArknights/MaaAssistantArknights.git /tmp/Maa
+          cd /tmp/Maa
+          git sparse-checkout set resource
+
+      - name: 浅克隆上游 ArknightsGameResource 仓库
+        # 该仓库提供 levels.json 与干员头像
+        run: |
+          git clone --depth=1 \
+            https://github.com/yuanyan3060/ArknightsGameResource.git /tmp/ArknightsResources
+
+      - name: 同步 character_table.json / char_roles.json（update_character_table.py 直接下载）
+        # update_resources.py 不负责 character_table / char_roles，需单独运行
+        run: python src/ArknightsVideoRecognition/scripts/update_character_table.py
+
+      - name: 同步 levels.json / battle_data.json / ocr_config.json / 干员头像 / 重新生成 roi.json
+        # update_resources.py 负责从本地克隆仓库复制上述资源，并用 --regen-roi
+        # 从 tasks.json 重新提取 roi.json。
+        # 注意：该脚本也会同步 template / onnx / ocr（在 build_sync_plan 中），
+        # 但下面 git add 仅暂存需自动同步的目录，这三类资源不会被提交。
+        run: |
+          python src/ArknightsVideoRecognition/scripts/update_resources.py \
+            --resource-dir ${{ github.workspace }}/resource \
+            --tilepos-dir /tmp/ArknightsResources \
+            --maa-dir /tmp/Maa \
+            --arknights-resources-dir /tmp/ArknightsResources \
+            --regen-roi
+
+      - name: 检查是否有变更
+        id: diff
+        run: |
+          # 仅暂存由 workflow 自动同步的目录（排除 template / onnx / ocr）
+          git add resource/tile/ resource/avatar/ resource/data/ resource/config/
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "无资源变更，跳过提交。"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            # 统计变更概要
+            echo "### 资源同步变更概要" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "变更文件数：$(git diff --cached --name-only | wc -l)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            git diff --cached --stat >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 提交并推送变更
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 生成提交信息
+          COMMIT_MSG="chore(resource): 自动同步上游资源 ($(date -u '+%Y-%m-%d'))"
+          git commit -m "$COMMIT_MSG"
+          git push
