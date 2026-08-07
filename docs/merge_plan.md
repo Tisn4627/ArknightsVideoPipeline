@@ -17,10 +17,12 @@
 > 3. 打包（§9）：`builder.py` 已为 Recognition 代码补 `--hidden-import` 与
 >    `--paths src/ArknightsVideoRecognition/src`；`runtime_hook.py` 已设置
 >    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
-> 4. 资源自动同步：已由主仓库 `.github/workflows/sync-resources.yml` 接管（每周一
->    08:00 UTC 定时 + 手动触发，直接更新顶层 resource/ 并自动提交）。原子模块
->    （ArknightsVideoRecognition 上游）自身的 sync-resources.yml 已停用，
->    vendor 内 `.github/workflows/` 仅保留其全注释副本作对照（见 §8.3）。
+> 4. 资源自动同步：主仓库新增独立 `.github/workflows/sync-resources.yml`（每周一
+>    08:00 UTC 定时 + 手动触发，直接更新本仓库顶层 resource/ 并自动提交）。
+>    原子仓库（ArknightsVideoRecognition 上游）自身的 sync-resources.yml **保持运行**
+>    （继续维护其仓库内 resource/），两者互不影响、均不修改。vendor 内
+>    `.github/workflows/` 保留该文件的全注释副本：GitHub Actions 只扫描仓库根
+>    `.github/workflows/`，vendor 内的文件不会被执行，副本仅供对照参考（见 §8.3）。
 
 ---
 
@@ -686,7 +688,7 @@ resource/                                    # 父项目统一资源根
 - 同步脚本应支持 `--mode=link|copy` 参数切换
 
 <!--
-### 8.3 子模块资源更新流程【已停用，见下方"现行流程"】
+### 8.3 子模块资源更新流程（历史方案，见下方"现行流程"）
 
 1. Recognition 仓库的 `.github/workflows/sync-resources.yml` 继续每周自动同步 `tile`/`avatar`/`data`/`config`（在子模块仓库内完成）
 2. 父项目通过 `git submodule update --remote` 拉取子模块最新版本（含资源更新）
@@ -696,18 +698,20 @@ resource/                                    # 父项目统一资源根
 
 ### 8.3 资源更新流程（现行）
 
-资源同步已由**主仓库** `.github/workflows/sync-resources.yml` 接管
-（移植自 Recognition 上游同名 workflow，适配主仓库布局）：
+本仓库新增 `.github/workflows/sync-resources.yml`
+（移植自 Recognition 上游同名 workflow，适配本仓库布局）：
 
 1. 每周一 08:00 UTC（北京时间 16:00）定时自动运行，也可在 Actions 页面手动触发
 2. 自动同步 `tile`/`avatar`/`data`（battle_data/ocr_config/character_table/char_roles）与
-   重新生成 `config/roi.json`，直接更新主仓库顶层 `resource/`，有变更时自动提交推送
+   重新生成 `config/roi.json`，直接更新本仓库顶层 `resource/`，有变更时自动提交推送
 3. `template`/`onnx`/`ocr` 三类大体积资源仍不自动同步：从 Recognition 上游仓库
    （https://github.com/Tisn4627/ArknightsVideoRecognition）获取更新后，由开发者
    本地复制入库并手动提交
-4. Recognition 上游仓库（原子模块）自身的 `sync-resources.yml` 已停用：
-   vendor 目录 `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
-   保留其全注释副本（仅作对照参考，GitHub 不会执行 vendor 内的 workflow）
+4. Recognition 上游仓库（原子仓库）自身的 `sync-resources.yml` **保持运行**，
+   继续维护其仓库内 `resource/`，不与本仓库的 workflow 冲突，双方均不做停用修改；
+   本仓库 vendor 目录 `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
+   保留其全注释副本（仅作对照参考——GitHub Actions 只扫描仓库根目录，vendor 内的
+   workflow 文件不会被执行）
 
 ### 8.4 资源路径运行时解析（优先级）
 

@@ -1,10 +1,11 @@
 # ========================================================================
-# 本文件为 ArknightsVideoRecognition 上游仓库的 .github/workflows/ 副本，
-# 现已被【停用】：主仓库已接管资源同步（见主仓库根目录 .github/workflows/
-# sync-resources.yml，每周一 08:00 UTC 定时 + 手动触发，直接更新顶层 resource/）。
-# 原文件内容整体注释保留于此，仅供对照与上游维护参考，GitHub 不会执行本文件。
+# 本文件为 ArknightsVideoRecognition 上游仓库 .github/workflows/sync-resources.yml
+# 的全注释副本（随 vendor 代码入库，仅供对照参考）。
+# 注意：GitHub Actions 只扫描仓库根目录的 .github/workflows/，vendor 目录内的
+# workflow 文件不会被执行；上游原子仓库（ArknightsVideoRecognition）自身的
+# 该 workflow 仍在运行，未被停用，本仓库的 Sync Resources workflow（仓库根
+# .github/workflows/sync-resources.yml）与上游相互独立。
 # ========================================================================
-# # 定期从上游仓库同步 resource/ 下的文本/图片资源并提交。
 # #
 # # 所有 resource 文件均保留在仓库中（开箱即用），但只有以下子目录由本
 # # workflow 自动同步更新：
