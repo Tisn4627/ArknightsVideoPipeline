@@ -9,14 +9,27 @@ from __future__ import annotations
 import os
 import sys
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox
 
 from arknights_video_pipeline.gui.assets.app_icon import (
     apply_windows_taskbar_identity,
     load_app_icon,
 )
 from arknights_video_pipeline.gui.theme import MaterialStyle, MaterialTypography
+
+
+class _WheelGuard(QObject):
+    """阻止滚轮修改 QSpinBox/QComboBox 等设置控件的值，避免误操作"""
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel:
+            widget = obj
+            while widget is not None:
+                if isinstance(widget, (QAbstractSpinBox, QComboBox)):
+                    return True
+                widget = widget.parent()
+        return super().eventFilter(obj, event)
 
 
 def create_application(argv: list[str]) -> QApplication:
@@ -35,6 +48,10 @@ def create_application(argv: list[str]) -> QApplication:
     app = QApplication(argv)
     app.setApplicationName("ArknightsVideoPipeline")
     app.setOrganizationName("AVP")
+
+    # 全局屏蔽设置控件上的滚轮事件（QSpinBox/QComboBox 默认会随滚轮改值）
+    app.setProperty("_wheel_guard", _WheelGuard(app))
+    app.installEventFilter(app.property("_wheel_guard"))
 
     # 应用官方图标：作用于所有窗口标题栏、任务栏与 Alt-Tab 切换视图
     app.setWindowIcon(load_app_icon())

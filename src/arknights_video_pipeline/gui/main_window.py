@@ -549,17 +549,38 @@ class MainWindow(QMainWindow):
                 if sub_name:
                     self._config.reload_sub_config(sub_name)
 
-        # 2. 刷新 pipeline 相关共享控件
+        # 2. 刷新 pipeline 相关共享控件（设置页 + 主页）
         if "pipeline" in generated:
-            self._style_combo.blockSignals(True)
+            controls = [
+                self._bg_selector,
+                self._style_combo,
+            ]
+            controls.extend(cb for cb in self._skip_checkboxes.values())
+            for ctrl in controls:
+                ctrl.blockSignals(True)
+            # 阻塞批量列表信号，避免 set 时回写配置
+            self._batch_list.blockSignals(True)
             try:
                 style = self._config.style()
                 index = self._style_combo.findText(style)
                 if index >= 0:
                     self._style_combo.setCurrentIndex(index)
                 self._on_style_changed(style)
+
+                # 主页控件同步刷新：背景图 / Skip 复选框 / 视频列表
+                self._bg_selector.set_path(self._config.background_image())
+                skip_steps = self._config.skip_steps()
+                for key, cb in self._skip_checkboxes.items():
+                    cb.setChecked(key in skip_steps)
+                self._batch_list.clear()
+                self._batch_list.add_paths(self._config.video_paths())
             finally:
-                self._style_combo.blockSignals(False)
+                for ctrl in controls:
+                    ctrl.blockSignals(False)
+                self._batch_list.blockSignals(False)
+
+            if not self._service.is_running():
+                self._run_btn.setEnabled(bool(self._config.video_paths()))
 
             sp.set_maa_path(self._config.maa_path())
             sp.set_output_dir(self._config.output_dir())
