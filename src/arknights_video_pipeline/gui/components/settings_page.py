@@ -1120,6 +1120,43 @@ class SettingsPage(QWidget):
                 tr("settings.compose.auto_fit_max_font_size"), default=200, minimum=10, maximum=500, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.auto_fit_max_font_size")), "settings.compose.auto_fit_max_font_size")
 
+        # 逐操作显示（map_overlay）子区域标题（仅 style1：地图操作序号 + 面板当前操作高亮）
+        if style == "style1":
+            map_title = QLabel(tr("settings.compose.map_overlay_title"))
+            map_title.setStyleSheet(
+                f"color: {c.on_surface_variant}; border: none;"
+                f" background: transparent; font-weight: 500; font-size: 13px;"
+                f" letter-spacing: 0.5px; margin-top: 8px;"
+            )
+            layout.addWidget(map_title)
+            self._dim_labels.append(map_title)
+            self._tr_labels.append((map_title.setText, "settings.compose.map_overlay_title"))
+
+            mp = "map_overlay"
+            add(f"{mp}.enabled", build_switch_row(
+                tr("settings.compose.map_overlay_enabled"), default=False, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.enabled")), "settings.compose.map_overlay_enabled")
+            add(f"{mp}.resolution", build_string_row(
+                tr("settings.compose.map_overlay_resolution"), default="1280x720", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.resolution")), "settings.compose.map_overlay_resolution")
+            add(f"{mp}.number_size_mode", build_combo_row(
+                tr("settings.compose.map_overlay_number_size_mode"),
+                items=["approximate", "precise"], default="approximate", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_size_mode")), "settings.compose.map_overlay_number_size_mode")
+            add(f"{mp}.number_font_ratio", build_float_row(
+                tr("settings.compose.map_overlay_number_font_ratio"), default=0.5,
+                minimum=0.1, maximum=1.0, step=0.05, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_font_ratio")), "settings.compose.map_overlay_number_font_ratio")
+            add(f"{mp}.number_color", build_color_row(
+                tr("settings.compose.map_overlay_number_color"), default="#FFD700", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_color")), "settings.compose.map_overlay_number_color")
+            add(f"{mp}.panel_highlight_enabled", build_switch_row(
+                tr("settings.compose.map_overlay_panel_highlight_enabled"), default=True, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_enabled")), "settings.compose.map_overlay_panel_highlight_enabled")
+            add(f"{mp}.panel_highlight_color", build_color_row(
+                tr("settings.compose.map_overlay_panel_highlight_color"), default="#FFD700", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_color")), "settings.compose.map_overlay_panel_highlight_color")
+
         card.add_layout(layout)
 
         # ── 高级字段容器（开关关闭时隐藏，不占用布局空间）──
@@ -1180,6 +1217,50 @@ class SettingsPage(QWidget):
             add_adv(f"{tp}.bottom_margin", build_int_row(
                 tr("settings.compose.bottom_margin"), default=60, minimum=0, maximum=500, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.bottom_margin")), "settings.compose.bottom_margin")
+
+        if style == "style1":
+            add_adv(f"{mp}.number_shadow_enabled", build_switch_row(
+                tr("settings.compose.map_overlay_number_shadow_enabled"), default=True, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_enabled")), "settings.compose.map_overlay_number_shadow_enabled")
+            add_adv(f"{mp}.number_shadow_offset_x", build_int_row(
+                tr("settings.compose.map_overlay_number_shadow_offset_x"), default=2, minimum=-50, maximum=50, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_offset_x")), "settings.compose.map_overlay_number_shadow_offset_x")
+            add_adv(f"{mp}.number_shadow_offset_y", build_int_row(
+                tr("settings.compose.map_overlay_number_shadow_offset_y"), default=2, minimum=-50, maximum=50, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_offset_y")), "settings.compose.map_overlay_number_shadow_offset_y")
+            add_adv(f"{mp}.number_shadow_blur", build_int_row(
+                tr("settings.compose.map_overlay_number_shadow_blur"), default=4, minimum=0, maximum=50, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_blur")), "settings.compose.map_overlay_number_shadow_blur")
+            add_adv(f"{mp}.number_shadow_color", build_color_row(
+                tr("settings.compose.map_overlay_number_shadow_color"), default="#000000", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_color")), "settings.compose.map_overlay_number_shadow_color")
+            add_adv(f"{mp}.number_bg_enabled", build_switch_row(
+                tr("settings.compose.map_overlay_number_bg_enabled"), default=True, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_bg_enabled")), "settings.compose.map_overlay_number_bg_enabled")
+            add_adv(f"{mp}.number_bg_color", build_color_row(
+                tr("settings.compose.map_overlay_number_bg_color"), default="#000000", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_bg_color")), "settings.compose.map_overlay_number_bg_color")
+            add_adv(f"{mp}.number_bg_alpha", build_float_row(
+                tr("settings.compose.map_overlay_number_bg_alpha"), default=0.45,
+                minimum=0.0, maximum=1.0, step=0.05, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_bg_alpha")), "settings.compose.map_overlay_number_bg_alpha")
+            add_adv(f"{mp}.number_padding", build_int_row(
+                tr("settings.compose.map_overlay_number_padding"), default=2, minimum=0, maximum=50, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_padding")), "settings.compose.map_overlay_number_padding")
+            add_adv(f"{mp}.number_min_font_size", build_int_row(
+                tr("settings.compose.map_overlay_number_min_font_size"), default=8, minimum=1, maximum=200, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_min_font_size")), "settings.compose.map_overlay_number_min_font_size")
+            add_adv(f"{mp}.panel_highlight_background", build_color_row(
+                tr("settings.compose.map_overlay_panel_highlight_background"), default="#000000", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_background")), "settings.compose.map_overlay_panel_highlight_background")
+            add_adv(f"{mp}.panel_highlight_bg_alpha", build_float_row(
+                tr("settings.compose.map_overlay_panel_highlight_bg_alpha"), default=0.55,
+                minimum=0.0, maximum=1.0, step=0.05, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_bg_alpha")), "settings.compose.map_overlay_panel_highlight_bg_alpha")
+            add_adv(f"{mp}.panel_fade_duration", build_float_row(
+                tr("settings.compose.map_overlay_panel_fade_duration"), default=0.3,
+                minimum=0.0, maximum=5.0, step=0.1, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_fade_duration")), "settings.compose.map_overlay_panel_fade_duration")
 
         adv_container.setVisible(False)
         card.add_widget(adv_container)

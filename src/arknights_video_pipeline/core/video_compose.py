@@ -9,6 +9,7 @@
 风格配置文件位于 config/video_compose/ 目录下，每个风格对应一个 JSON 文件。
 """
 
+import json
 import logging
 import os
 
@@ -16,8 +17,10 @@ from movielite import VideoClip, ImageClip, TextClip, VideoWriter
 from movielite.vfx import FadeIn, FadeOut
 from pictex import Canvas, Shadow
 
+from arknights_video_pipeline.core.exceptions import VideoValidationError
+from arknights_video_pipeline.core.map_overlay import DEFAULT_MAP_OVERLAY_CONFIG
 from arknights_video_pipeline.core.utils import (
-    PROJECT_ROOT, load_config, save_default_config,
+    PROJECT_ROOT, load_config, save_default_config, validate_video_file,
     resolve_font_path, load_formation_text, load_actions_text, get_switch_time,
 )
 from arknights_video_pipeline.core.video_compose_common import (
@@ -56,7 +59,11 @@ DEFAULT_CONFIG = {
         "auto_fit_min_font_size": 10,
         "auto_fit_max_font_size": 200,
         "auto_fit_available_width": None,
-    }
+    },
+    # 逐操作显示（地图操作序号 + 左侧面板当前操作高亮）
+    # 前提：recognition 后端输出 video_time 扩展字段（with_video_time 配置）
+    # 默认值详见 core/map_overlay.py DEFAULT_MAP_OVERLAY_CONFIG
+    "map_overlay": dict(DEFAULT_MAP_OVERLAY_CONFIG),
 }
 
 
@@ -360,6 +367,58 @@ def compose_video(config):
         else:
             logger.info("  操作文本为空，跳过")
 
+        # 逐操作显示：地图操作序号 + 左侧面板当前操作高亮
+        # （需 copilot JSON 含 video_time 扩展字段，缺失时降级为静态文本）
+        map_cfg = config.get("map_overlay", {})
+        if map_cfg.get("enabled", False):
+            logger.info("--- 逐操作显示 ---")
+            from arknights_video_pipeline.core.map_overlay import (
+                has_video_time, load_level, build_map_overlay_clips,
+            )
+            from arknights_video_pipeline.core.actions_to_text import format_actions_lines
+
+            input_data = None
+            try:
+                with open(inputs["input_json"], "r", encoding="utf-8") as f:
+                    input_data = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning(f"读取 copilot JSON 失败，跳过逐操作显示: {exc}")
+
+            actions = (input_data or {}).get("actions", [])
+            if not has_video_time(actions):
+                logger.warning(
+                    "copilot JSON 未包含 video_time 扩展字段，跳过逐操作显示。"
+                    "请开启 识别设置 -> 输出 video_time 扩展字段 后重新识别"
+                )
+            elif actions:
+                # 面板逐行文本（与主操作文本块逐字一致）
+                actions_config = load_config(inputs["actions_config"], {})
+                lines = format_actions_lines(input_data, actions_config)
+
+                level = load_level((input_data or {}).get("stage_name", ""))
+
+                # 视频原生分辨率（识别坐标 -> 视频坐标等比映射所需）
+                video_native_size = None
+                try:
+                    video_info = validate_video_file(video_source)
+                    video_native_size = (video_info["width"], video_info["height"])
+                except VideoValidationError as exc:
+                    logger.warning(f"无法获取视频分辨率，按识别分辨率直接映射: {exc}")
+
+                map_font_path = resolve_font_path(
+                    text_config.get("font", "SOURCEHANSANSCN-HEAVY.OTF"),
+                    os.path.join(PROJECT_ROOT, text_config.get("font_dir", "resource/font")),
+                )
+
+                overlay_clips = build_map_overlay_clips(
+                    actions, lines, level, switch_time, video.duration,
+                    config["video_scale"], config["video_x"], config["video_y"],
+                    video_native_size, map_cfg, text_config, map_font_path,
+                )
+                clips.extend(overlay_clips)
+                logger.info(f"  逐操作显示已加载 ({len(overlay_clips)} 个叠加片段)")
+            logger.info("--- 逐操作显示配置完成 ---")
+
         logger.info("--- 文本叠加配置完成 ---")
     else:
         logger.info("动态文本叠加已禁用")
@@ -398,7 +457,9 @@ def main():
         save_default_config(config_path, DEFAULT_CONFIG)
         logger.info(f"已生成默认配置文件: {config_path}")
 
-    config = load_config(config_path, DEFAULT_CONFIG, deep_merge_keys=["text_overlay"])
+    config = load_config(
+        config_path, DEFAULT_CONFIG, deep_merge_keys=["text_overlay", "map_overlay"]
+    )
     compose_video(config)
 
 

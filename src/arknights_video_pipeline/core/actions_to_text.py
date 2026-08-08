@@ -154,10 +154,12 @@ def format_action(action, index, opers_map, config):
     return line
 
 
-def actions_to_text(data, config):
-    """将操作数据转为文本"""
-    lines = []
+def format_actions_lines(data, config):
+    """将操作数据转为逐行文本列表（与 actions_to_text 输出逐字一致）
 
+    供逐操作显示（core.map_overlay）复用：面板高亮行的文本
+    必须与主操作文本块的行一一对应。
+    """
     # 构建干员名到信息的映射（opers + groups中的opers）
     opers_map = {}
     for oper in data.get("opers", []):
@@ -168,11 +170,15 @@ def actions_to_text(data, config):
 
     actions = data.get("actions", [])
 
+    lines = []
     for i, action in enumerate(actions, 1):
-        line = format_action(action, i, opers_map, config)
-        lines.append(line)
+        lines.append(format_action(action, i, opers_map, config))
+    return lines
 
-    return "\n".join(lines)
+
+def actions_to_text(data, config):
+    """将操作数据转为文本"""
+    return "\n".join(format_actions_lines(data, config))
 
 
 def main():

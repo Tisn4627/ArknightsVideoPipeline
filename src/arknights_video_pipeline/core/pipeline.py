@@ -481,11 +481,20 @@ class Pipeline:
             )
             compose_config = load_config(
                 compose_config_path, COMPOSE_DEFAULT_CONFIG,
-                deep_merge_keys=["text_overlay"],
+                deep_merge_keys=["text_overlay", "map_overlay"],
             )
             compose_config["video_source"] = self.video_path
             # 注入用户配置的 output_dir，使视频合成输出到统一目录（修复 M7）
             compose_config["output_dir"] = self.output_dir
+
+            # 注入识别分辨率到逐操作显示配置（tile 投影基准须与识别一致）
+            if "map_overlay" in compose_config and isinstance(
+                compose_config["map_overlay"], dict
+            ):
+                rec_resolution = self.config.get_recognition_config().get(
+                    "resolution", "1280x720"
+                )
+                compose_config["map_overlay"]["resolution"] = rec_resolution
 
             # 使用 CLI 提供的背景板图片覆盖配置
             if self.background_image_path:
