@@ -431,6 +431,15 @@ class MainWindow(QMainWindow):
         sp.track_path_changed.connect(self._config.set_track_path)
         # 子配置字段变更（track/formation/actions/video_compose style1+style2）
         sp.sub_config_changed.connect(self._config.set_sub)
+        # Pipeline 配置变更（Copilot 后端 + recognition 识别参数）
+        sp.copilot_backend_changed.connect(self._config.set_copilot_backend)
+        sp.copilot_timeout_changed.connect(self._config.set_copilot_timeout)
+        sp.copilot_max_retries_changed.connect(self._config.set_copilot_max_retries)
+        sp.ocr_source_changed.connect(self._config.set_ocr_source)
+        sp.resolution_changed.connect(self._config.set_resolution)
+        sp.stage_override_changed.connect(self._config.set_stage_override)
+        sp.with_video_time_changed.connect(self._config.set_with_video_time)
+        sp.resource_dir_changed.connect(self._config.set_recognition_resource_dir)
         # 高级分区折叠状态：从 gui.json 加载初始值 + 连接变更信号
         sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
         sp.advanced_expanded_changed.connect(self._gui_config.set_advanced_expanded)
@@ -512,6 +521,15 @@ class MainWindow(QMainWindow):
         sp.set_formation_path(self._config.formation_path())
         sp.set_actions_path(self._config.actions_path())
         sp.set_track_path(self._config.track_path())
+        # Pipeline 配置：Copilot 后端 + recognition 识别参数
+        sp.set_copilot_backend(self._config.copilot_backend())
+        sp.set_copilot_timeout(self._config.copilot_timeout())
+        sp.set_copilot_max_retries(self._config.copilot_max_retries())
+        sp.set_ocr_source(self._config.ocr_source())
+        sp.set_resolution(self._config.resolution())
+        sp.set_stage_override(self._config.stage_override())
+        sp.set_with_video_time(self._config.with_video_time())
+        sp.set_resource_dir(self._config.recognition_resource_dir())
         # 子配置字段（track/formation/actions/video_compose style1+style2）
         sp.load_sub_config_values(self._config)
 
@@ -600,6 +618,15 @@ class MainWindow(QMainWindow):
             sp.set_formation_path(self._config.formation_path())
             sp.set_actions_path(self._config.actions_path())
             sp.set_track_path(self._config.track_path())
+            # Pipeline 配置同步刷新（Copilot 后端 + recognition 识别参数）
+            sp.set_copilot_backend(self._config.copilot_backend())
+            sp.set_copilot_timeout(self._config.copilot_timeout())
+            sp.set_copilot_max_retries(self._config.copilot_max_retries())
+            sp.set_ocr_source(self._config.ocr_source())
+            sp.set_resolution(self._config.resolution())
+            sp.set_stage_override(self._config.stage_override())
+            sp.set_with_video_time(self._config.with_video_time())
+            sp.set_resource_dir(self._config.recognition_resource_dir())
 
         # 3. 刷新子配置字段行（任何子配置或 pipeline 被重置都需要刷新）
         sub_keys = {"formation", "actions", "track", "compose", "compose_style2"}

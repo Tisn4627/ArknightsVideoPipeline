@@ -226,6 +226,87 @@ class ConfigProxy(QObject):
     def set_log_to_file(self, enabled: bool) -> None:
         self.set("log_to_file", enabled)
 
+    # ── Copilot 后端配置 ──────────────────────────────────
+
+    COPILOT_BACKENDS: tuple[str, ...] = ("recognition", "maa")
+
+    def copilot_backend(self) -> str:
+        backend = str(self.get("copilot_backend", "recognition")).lower()
+        return backend if backend in ConfigProxy.COPILOT_BACKENDS else "recognition"
+
+    def set_copilot_backend(self, backend: str) -> None:
+        backend = (backend or "").lower()
+        if backend not in ConfigProxy.COPILOT_BACKENDS:
+            raise ValueError(
+                f"非法的后端名称: {backend!r}，可选: {', '.join(ConfigProxy.COPILOT_BACKENDS)}"
+            )
+        self.set("copilot_backend", backend)
+
+    def copilot_timeout(self) -> int:
+        try:
+            return int(self.get("copilot_timeout_seconds", 600))
+        except (TypeError, ValueError):
+            return 600
+
+    def set_copilot_timeout(self, seconds: int) -> None:
+        self.set("copilot_timeout_seconds", int(seconds))
+
+    def copilot_max_retries(self) -> int:
+        try:
+            return int(self.get("copilot_max_retries", 2))
+        except (TypeError, ValueError):
+            return 2
+
+    def set_copilot_max_retries(self, n: int) -> None:
+        self.set("copilot_max_retries", int(n))
+
+    # ── Recognition 后端配置（recognition.* 嵌套字段） ─────
+
+    def _recognition_field(self, field: str, default: Any = None) -> Any:
+        rec = self.get("recognition")
+        if isinstance(rec, dict):
+            return rec.get(field, default)
+        return default
+
+    def _set_recognition_field(self, field: str, value: Any) -> None:
+        rec = self._config_mgr.pipeline.setdefault("recognition", {})
+        rec[field] = value
+        self.config_changed.emit(f"recognition.{field}", value)
+
+    def ocr_source(self) -> str:
+        value = str(self._recognition_field("ocr_source", "maamodel")).lower()
+        return value if value in ("maamodel", "default") else "maamodel"
+
+    def set_ocr_source(self, source: str) -> None:
+        source = (source or "").lower()
+        if source not in ("maamodel", "default"):
+            raise ValueError(f"非法的 OCR 来源: {source!r}，可选: maamodel, default")
+        self._set_recognition_field("ocr_source", source)
+
+    def resolution(self) -> str:
+        return str(self._recognition_field("resolution", "1280x720"))
+
+    def set_resolution(self, resolution: str) -> None:
+        self._set_recognition_field("resolution", (resolution or "").strip())
+
+    def stage_override(self) -> str:
+        return str(self._recognition_field("stage_override", ""))
+
+    def set_stage_override(self, stage: str) -> None:
+        self._set_recognition_field("stage_override", (stage or "").strip())
+
+    def with_video_time(self) -> bool:
+        return bool(self._recognition_field("with_video_time", False))
+
+    def set_with_video_time(self, enabled: bool) -> None:
+        self._set_recognition_field("with_video_time", bool(enabled))
+
+    def recognition_resource_dir(self) -> str:
+        return str(self._recognition_field("resource_dir", "resource"))
+
+    def set_recognition_resource_dir(self, path: str) -> None:
+        self._set_recognition_field("resource_dir", (path or "").strip())
+
     # ── 多线程配置 ────────────────────────────────────────
 
     def multithreading(self) -> bool:

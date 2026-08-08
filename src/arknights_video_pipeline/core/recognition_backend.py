@@ -34,14 +34,25 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 
+def _resolve_resource_dir(resource_dir: str | None) -> str | None:
+    """解析识别资源目录：相对路径基于项目根目录解析（与 track 资源目录一致）"""
+    if not resource_dir:
+        return None
+    path = Path(resource_dir)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    return str(path.resolve())
+
+
 def _import_recognition_pipeline(resource_dir: str | None = None):
     """按需导入 Recognition 主流水线（首次导入前应用配置级资源目录覆盖）
 
     延迟导入使本模块在识别代码缺失或 onnxruntime 未安装时仍可被导入
     （工厂/测试环境不强制依赖 Recognition）。
     """
-    if resource_dir:
-        os.environ["AVR_RESOURCE_DIR"] = str(Path(resource_dir).resolve())
+    resolved = _resolve_resource_dir(resource_dir)
+    if resolved:
+        os.environ["AVR_RESOURCE_DIR"] = resolved
 
     from ArknightsVideoRecognition.config.settings import ResourceMissingError
     from ArknightsVideoRecognition.pipeline import (

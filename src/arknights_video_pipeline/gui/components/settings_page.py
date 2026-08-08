@@ -81,6 +81,15 @@ class SettingsPage(QWidget):
     # 子配置变更信号：(config_name, field_path, value)
     # config_name 为 "formation"/"actions"/"track"/"style1"/"style2"
     sub_config_changed = pyqtSignal(str, str, object)
+    # Pipeline 配置变更信号（Copilot 后端 + recognition 识别参数）
+    copilot_backend_changed = pyqtSignal(str)
+    copilot_timeout_changed = pyqtSignal(int)
+    copilot_max_retries_changed = pyqtSignal(int)
+    ocr_source_changed = pyqtSignal(str)
+    resolution_changed = pyqtSignal(str)
+    stage_override_changed = pyqtSignal(str)
+    with_video_time_changed = pyqtSignal(bool)
+    resource_dir_changed = pyqtSignal(str)
     # 高级分区折叠状态变更信号（持久化到 gui.json）
     advanced_expanded_changed = pyqtSignal(bool)
 
@@ -405,8 +414,9 @@ class SettingsPage(QWidget):
         return card
 
     def _build_advanced_card(self) -> MaterialCard:
-        """全局设置卡片：MAA 路径 / Output 路径 / MAA 超时 / MAA 重试（始终可见）
-        + 日志级别 / 日志文件 / 子配置文件路径（高级开关打开后可见）。"""
+        """全局设置卡片：Copilot 后端 / Output 路径（始终可见）+ MAA 路径 /
+        MAA 超时 / MAA 重试 / Copilot 超时/重试 / 识别参数 / 日志级别 / 日志文件 /
+        子配置文件路径（高级开关打开后可见）。MAA 路径仅在识别后端为 maa 时显示。"""
         card = MaterialCard(tr("settings.global.title"))
         self._tr_labels.append((card.set_title, "settings.global.title"))
         layout = QVBoxLayout()
@@ -421,12 +431,23 @@ class SettingsPage(QWidget):
         self._tr_labels.append((self._advanced_desc.setText, "settings.global.desc"))
         layout.addWidget(self._advanced_desc)
 
-        # MAA 路径（单行标题 + FileSelector）
+        # Copilot 后端选择：recognition（默认，纯 Python）/ maa（需安装 MAA）
+        row = build_combo_row(
+            tr("settings.global.backend"), ["recognition", "maa"],
+            default="recognition", colors=self._colors,
+            on_changed=self._on_copilot_backend_changed,
+        )
+        layout.addWidget(row.widget)
+        self._pipeline_field_rows["copilot_backend"] = row
+        self._tr_labels.append((row.set_label, "settings.global.backend"))
+
+        # MAA 路径（单行标题 + FileSelector）：仅后端为 maa 时显示
         self._maa_selector = FileSelector(
             mode=FileSelector.MODE_DIRECTORY,
             label=tr("settings.global.maa_path"),
             placeholder=tr("settings.global.maa_path_placeholder"),
         )
+        self._maa_selector.setVisible(False)
         layout.addWidget(self._maa_selector)
 
         # Output 路径
@@ -445,28 +466,6 @@ class SettingsPage(QWidget):
         # 将内部控件信号转发为公开信号，供 MainWindow 连接
         self._maa_selector.path_changed.connect(self.maa_path_changed)
         self._output_selector.path_changed.connect(self.output_dir_changed)
-
-        # MAA 超时（秒）
-        row = build_int_row(
-            tr("settings.global.maa_timeout"), default=600,
-            minimum=10, maximum=7200, step=10,
-            colors=self._colors,
-            on_changed=self.maa_timeout_changed.emit,
-        )
-        layout.addWidget(row.widget)
-        self._pipeline_field_rows["maa_timeout_seconds"] = row
-        self._tr_labels.append((row.set_label, "settings.global.maa_timeout"))
-
-        # MAA 最大重试次数
-        row = build_int_row(
-            tr("settings.global.maa_retries"), default=2,
-            minimum=0, maximum=10, step=1,
-            colors=self._colors,
-            on_changed=self.maa_max_retries_changed.emit,
-        )
-        layout.addWidget(row.widget)
-        self._pipeline_field_rows["maa_max_retries"] = row
-        self._tr_labels.append((row.set_label, "settings.global.maa_retries"))
 
         card.add_layout(layout)
 
@@ -538,6 +537,109 @@ class SettingsPage(QWidget):
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["log_backup_count"] = row
         self._tr_labels.append((row.set_label, "settings.global.log_backup_count"))
+
+        # MAA 超时（秒）
+        row = build_int_row(
+            tr("settings.global.maa_timeout"), default=600,
+            minimum=10, maximum=7200, step=10,
+            colors=self._colors,
+            on_changed=self.maa_timeout_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["maa_timeout_seconds"] = row
+        self._tr_labels.append((row.set_label, "settings.global.maa_timeout"))
+
+        # MAA 最大重试次数
+        row = build_int_row(
+            tr("settings.global.maa_retries"), default=2,
+            minimum=0, maximum=10, step=1,
+            colors=self._colors,
+            on_changed=self.maa_max_retries_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["maa_max_retries"] = row
+        self._tr_labels.append((row.set_label, "settings.global.maa_retries"))
+
+        # Copilot 超时（秒）
+        row = build_int_row(
+            tr("settings.global.copilot_timeout"), default=600,
+            minimum=10, maximum=7200, step=10,
+            colors=self._colors,
+            on_changed=self.copilot_timeout_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["copilot_timeout_seconds"] = row
+        self._tr_labels.append((row.set_label, "settings.global.copilot_timeout"))
+
+        # Copilot 最大重试次数
+        row = build_int_row(
+            tr("settings.global.copilot_retries"), default=2,
+            minimum=0, maximum=10, step=1,
+            colors=self._colors,
+            on_changed=self.copilot_max_retries_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["copilot_max_retries"] = row
+        self._tr_labels.append((row.set_label, "settings.global.copilot_retries"))
+
+        # recognition 识别参数小节标题
+        rec_title = QLabel(tr("settings.global.recognition_title"))
+        rec_title.setFont(self._typo.title_medium)
+        rec_title.setStyleSheet("border: none; background: transparent;")
+        adv_layout.addWidget(rec_title)
+        self._tr_labels.append((rec_title.setText, "settings.global.recognition_title"))
+
+        # OCR 来源：maamodel（默认，使用 MAA 模型）/ default
+        row = build_combo_row(
+            tr("settings.global.ocr_source"), ["maamodel", "default"],
+            default="maamodel", colors=self._colors,
+            on_changed=self.ocr_source_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["ocr_source"] = row
+        self._tr_labels.append((row.set_label, "settings.global.ocr_source"))
+
+        # 识别分辨率（宽x高）
+        row = build_string_row(
+            tr("settings.global.resolution"), default="1280x720",
+            colors=self._colors,
+            on_changed=self.resolution_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["resolution"] = row
+        self._tr_labels.append((row.set_label, "settings.global.resolution"))
+
+        # 关卡覆盖：空=自动识别，否则指定关卡 code/name/stageId
+        row = build_string_row(
+            tr("settings.global.stage_override"), default="",
+            colors=self._colors,
+            on_changed=self.stage_override_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["stage_override"] = row
+        self._tr_labels.append((row.set_label, "settings.global.stage_override"))
+
+        # 输出 video_time 扩展字段
+        row = build_switch_row(
+            tr("settings.global.with_video_time"),
+            tr("settings.global.with_video_time_desc"),
+            default=False, colors=self._colors,
+            on_changed=self.with_video_time_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["with_video_time"] = row
+        self._tr_labels.append((row.set_label, "settings.global.with_video_time"))
+        self._tr_labels.append((row.set_desc, "settings.global.with_video_time_desc"))
+
+        # 识别资源目录：空=用顶层 resource/
+        row = build_path_row(
+            tr("settings.global.resource_dir"), mode=FileSelector.MODE_DIRECTORY,
+            colors=self._colors,
+            on_changed=self.resource_dir_changed.emit,
+        )
+        adv_layout.addWidget(row.widget)
+        self._pipeline_field_rows["resource_dir"] = row
+        self._tr_labels.append((row.set_label, "settings.global.resource_dir"))
 
         # Formation 配置文件路径
         row = build_path_row(
@@ -1180,6 +1282,11 @@ class SettingsPage(QWidget):
     def _on_max_concurrent_changed(self, value: int) -> None:
         self.max_concurrent_changed.emit(value)
 
+    def _on_copilot_backend_changed(self, backend: str) -> None:
+        """Copilot 后端切换：转发信号并同步 MAA 路径选择框显隐（仅 maa 后端显示）"""
+        self.copilot_backend_changed.emit(backend)
+        self._maa_selector.setVisible(backend == "maa")
+
     def _on_ffmpeg_custom_toggled(self, enabled: bool) -> None:
         # 开关切换时同步路径选择器可用态
         if getattr(self, "_ffmpeg_selector", None) is not None:
@@ -1358,6 +1465,50 @@ class SettingsPage(QWidget):
 
     def set_track_path(self, path: str) -> None:
         row = self._pipeline_field_rows.get("track")
+        if row:
+            row.set_value(path or "", block_signal=True)
+
+    # ── Pipeline 配置控件公开访问（Copilot 后端 + recognition 参数） ──
+
+    def set_copilot_backend(self, backend: str) -> None:
+        row = self._pipeline_field_rows.get("copilot_backend")
+        if row:
+            row.set_value(backend, block_signal=True)
+        # 同步 MAA 路径选择框显隐（仅 maa 后端显示）
+        self._maa_selector.setVisible(backend == "maa")
+
+    def set_copilot_timeout(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("copilot_timeout_seconds")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_copilot_max_retries(self, value: int) -> None:
+        row = self._pipeline_field_rows.get("copilot_max_retries")
+        if row:
+            row.set_value(int(value), block_signal=True)
+
+    def set_ocr_source(self, value: str) -> None:
+        row = self._pipeline_field_rows.get("ocr_source")
+        if row:
+            row.set_value(value, block_signal=True)
+
+    def set_resolution(self, value: str) -> None:
+        row = self._pipeline_field_rows.get("resolution")
+        if row:
+            row.set_value(value or "", block_signal=True)
+
+    def set_stage_override(self, value: str) -> None:
+        row = self._pipeline_field_rows.get("stage_override")
+        if row:
+            row.set_value(value or "", block_signal=True)
+
+    def set_with_video_time(self, enabled: bool) -> None:
+        row = self._pipeline_field_rows.get("with_video_time")
+        if row:
+            row.set_value(bool(enabled), block_signal=True)
+
+    def set_resource_dir(self, path: str) -> None:
+        row = self._pipeline_field_rows.get("resource_dir")
         if row:
             row.set_value(path or "", block_signal=True)
 

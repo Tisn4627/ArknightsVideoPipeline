@@ -31,7 +31,7 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
         "resolution": "1280x720",      # "WxH"
         "stage_override": "",          # 空=自动识别；否则指定关卡 code/name/stageId
         "with_video_time": False,      # 是否输出 video_time 扩展字段
-        "resource_dir": "",            # 空=用顶层 resource/（识别资源并入）；否则覆盖
+        "resource_dir": "resource",       # 相对项目根的识别资源目录；默认用项目 resource/
     },
 
     # === MAA 后端配置（仅 backend=maa 时生效）===
@@ -56,6 +56,9 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "skip_steps": [],
     "video_path": "",
     "video_paths": [],
+    # 合成背景图（仅 style1 使用）；必须存在于默认配置中，
+    # 否则重置 pipeline.json 后该键不会写回磁盘，旧值残留在内存与输入框。
+    "background_image": "",
     # 多线程批量处理：默认关闭（保持串行，避免 MAA 资源争用）。
     # 启用后由 max_concurrent 限制同时运行的合成任务数。
     "multithreading": False,
@@ -137,7 +140,9 @@ class ConfigManager:
         )
         user_config = self._load_json(config_path)
         if user_config:
-            self.pipeline = _deep_merge_dict(self.pipeline, user_config)
+            # 以全新默认值为基底合并，而非当前内存状态：磁盘文件中缺失的键
+            # （重置后默认化/删除的字段）不会残留，确保配置重置能真正清空旧值。
+            self.pipeline = _deep_merge_dict(PIPELINE_DEFAULTS, user_config)
         return self.pipeline
 
     def save_pipeline_defaults(self, path: str | None = None) -> None:
