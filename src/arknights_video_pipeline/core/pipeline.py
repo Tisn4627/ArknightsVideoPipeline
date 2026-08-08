@@ -352,6 +352,7 @@ class Pipeline:
         try:
             from arknights_video_pipeline.core.track_startbutton import (
                 DEFAULT_CONFIG as TRACK_DEFAULT_CONFIG,
+                TRACK_MODE_BATTLESTART,
                 track_element,
             )
 
@@ -361,7 +362,11 @@ class Pipeline:
                     "track", "config/track.json"
                 ),
             )
-            track_config = load_config(track_config_path, TRACK_DEFAULT_CONFIG)
+            # battle_start 为嵌套子配置，需要深度合并（缺失子键回退默认值）
+            track_config = load_config(
+                track_config_path, TRACK_DEFAULT_CONFIG,
+                deep_merge_keys=["battle_start"],
+            )
             track_config["video_source"] = self.video_path
             track_config["output_result"] = True
 
@@ -377,7 +382,21 @@ class Pipeline:
             )
             write_json_file(self.track_result_path, track_result)
 
-            if track_result.get("was_detected"):
+            if track_result.get("track_mode") == TRACK_MODE_BATTLESTART:
+                if track_result.get("battle_start_detected"):
+                    self.logger.info(
+                        f"进入战斗时间: {track_result['battle_start_time']}s"
+                    )
+                    result.metadata["battle_start_time"] = track_result[
+                        "battle_start_time"
+                    ]
+                    result.metadata["max_confidence"] = track_result[
+                        "battle_start_max_ratio"
+                    ]
+                else:
+                    self.logger.warning("未检测到进入战斗")
+                    result.add_warning("未检测到进入战斗，视频合成将使用默认切换时间")
+            elif track_result.get("was_detected"):
                 self.logger.info(
                     f"开始按钮出现时间: {track_result['first_appear_time']}s"
                 )

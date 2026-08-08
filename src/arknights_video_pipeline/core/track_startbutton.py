@@ -15,6 +15,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 
+from arknights_video_pipeline.core.battlestart import (
+    BATTLE_START_DEFAULTS,
+    TRACK_MODE_BATTLESTART,
+    TRACK_MODE_STARTBUTTON,
+    scan_battle_start,
+)
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT,
     _no_window_kwargs,
@@ -33,6 +39,7 @@ except ImportError:
 
 # 默认配置（video_source 由流水线运行时注入）
 DEFAULT_CONFIG = {
+    "track_mode": TRACK_MODE_STARTBUTTON,  # 识别模式：startbutton=开始按钮 / battlestart=战斗开始
     "resource_dir": "resource/StartButton",
     "match_threshold": 0.75,
     "scale_range": [0.5, 1.5],
@@ -49,7 +56,9 @@ DEFAULT_CONFIG = {
     "early_stop_threshold": 0.92,
     "max_workers": 4,
     "debug_mode": True,
-    "output_result": True
+    "output_result": True,
+    # battle_start 子配置（battlestart 模式使用，与默认值深度合并）
+    "battle_start": dict(BATTLE_START_DEFAULTS),
 }
 
 
@@ -329,8 +338,29 @@ def track_element(config):
                 logger.warning(f"清理临时文件失败: {e}")
 
 
+def _resolve_track_mode(config):
+    """解析识别模式配置，未知值回退到默认的开始按钮识别"""
+    mode = str(config.get("track_mode", DEFAULT_CONFIG["track_mode"])).strip().lower()
+    if mode not in (TRACK_MODE_STARTBUTTON, TRACK_MODE_BATTLESTART):
+        logger.warning(
+            f"未知的识别模式: {config.get('track_mode')!r}，"
+            f"回退到默认值 {DEFAULT_CONFIG['track_mode']!r}"
+        )
+        mode = DEFAULT_CONFIG["track_mode"]
+    return mode
+
+
+def _battle_start_config(config):
+    """提取 battle_start 子配置，与默认值合并（缺失键使用默认值）"""
+    bs_cfg = dict(BATTLE_START_DEFAULTS)
+    bs_cfg.update(config.get("battle_start") or {})
+    return bs_cfg
+
+
 def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio, was_downscaled):
     """track_element 的内部实现，临时文件由外层 try/finally 保证清理"""
+    track_mode = _resolve_track_mode(config)
+    bs_cfg = _battle_start_config(config)
     resource_dir = config.get("resource_dir", "resource/StartButton")
     detection_fps = config.get("detection_fps", 2)
     detection_time_limit = config.get("detection_time_limit", 30)
@@ -342,14 +372,6 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
     # 将相对路径解析为基于项目根目录的绝对路径
     if not os.path.isabs(resource_dir):
         resource_dir = os.path.join(PROJECT_ROOT, resource_dir)
-
-    # 加载模板
-    logger.info(f"\n加载模板资源: {resource_dir}")
-    templates = load_templates(resource_dir, use_grayscale)
-    if not templates:
-        logger.error("未找到任何模板图片")
-        return None
-    logger.info(f"共加载 {len(templates)} 个模板\n")
 
     # 打开视频（使用降分辨率后的路径）
     cap = cv2.VideoCapture(downscaled_path)
@@ -381,12 +403,17 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
 
         # ── 检测时间限制 ──────────────────────────────────────
         # 边界条件：视频时长不足限制时间时，自动调整为检测完整视频
-        if detection_time_limit is not None and detection_time_limit > 0:
-            effective_time_limit = min(detection_time_limit, duration)
+        # battlestart 模式使用 battle_start.time_limit，startbutton 模式使用 detection_time_limit
+        time_limit = (
+            bs_cfg["time_limit"] if track_mode == TRACK_MODE_BATTLESTART
+            else detection_time_limit
+        )
+        if time_limit is not None and time_limit > 0:
+            effective_time_limit = min(time_limit, duration)
             detection_end_frame = int(effective_time_limit * fps)
-            if detection_time_limit > duration:
+            if time_limit > duration:
                 logger.info(
-                    f"检测时间限制: {detection_time_limit}s > 视频时长{duration:.2f}s，"
+                    f"检测时间限制: {time_limit}s > 视频时长{duration:.2f}s，"
                     f"自动调整为检测完整视频"
                 )
             else:
@@ -413,6 +440,24 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
             f"检测帧率: {detection_fps}fps "
             f"(采样间隔: 每{sample_interval}帧, 实际约{actual_detection_fps:.2f}fps)"
         )
+
+        # ── 战斗开始检测模式（battlestart）：无需模板资源 ──
+        if track_mode == TRACK_MODE_BATTLESTART:
+            logger.info(f"识别模式: {track_mode} (战斗开始识别)")
+            return scan_battle_start(
+                cap, bs_cfg, fps, total_frames, duration,
+                sample_interval, effective_time_limit, debug_mode,
+                video_scale_ratio, was_downscaled,
+            )
+
+        # ── 开始按钮识别模式（startbutton）：加载模板资源 ──
+        logger.info(f"识别模式: {track_mode} (开始按钮识别)")
+        logger.info(f"\n加载模板资源: {resource_dir}")
+        templates = load_templates(resource_dir, use_grayscale)
+        if not templates:
+            logger.error("未找到任何模板图片")
+            return None
+        logger.info(f"共加载 {len(templates)} 个模板\n")
 
         # 调整缩放范围：视频降分辨率后，模板需要额外缩小
         base_scale_range = config.get("scale_range", [0.5, 1.5])
@@ -611,6 +656,12 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                 logger.info(f"  最佳置信度距阈值仅差 {gap:.4f}，可尝试降低阈值至 {global_best_confidence:.2f}")
 
         result = {
+            "track_mode": track_mode,
+            # battle_start 相关字段（startbutton 模式下恒为未检测）
+            "battle_start_time": None,
+            "battle_start_frame": 0,
+            "battle_start_max_ratio": 0.0,
+            "battle_start_detected": False,
             "first_appear_time": round(first_appear_time, 2) if first_appear_time is not None else None,
             "disappear_time": round(disappear_time, 2) if disappear_time is not None else None,
             "duration_visible": round(disappear_time - first_appear_time, 2) if first_appear_time is not None and disappear_time is not None else None,
@@ -657,6 +708,7 @@ def main():
     logger.info("=" * 50)
     logger.info("视频元素识别与跟踪 (优化版)")
     logger.info("=" * 50)
+    logger.info(f"识别模式: {_resolve_track_mode(config)}")
     logger.info(f"视频源: {config.get('video_source', 'test.mp4')}")
     logger.info(f"资源目录: {config.get('resource_dir', 'resource/StartButton')}")
     logger.info(f"匹配阈值: {config.get('match_threshold', DEFAULT_CONFIG['match_threshold'])}")
@@ -677,7 +729,14 @@ def main():
         logger.info("=" * 50)
         logger.info("跟踪结果")
         logger.info("=" * 50)
-        if result["was_detected"]:
+        if result["track_mode"] == TRACK_MODE_BATTLESTART:
+            if result["battle_start_detected"]:
+                logger.info(f"进入战斗时间: {result['battle_start_time']}s")
+                logger.info(f"最高亮像素比: {result['battle_start_max_ratio']}")
+            else:
+                logger.info("未在检测时间范围内检测到进入战斗")
+                logger.info(f"  最高亮像素比: {result['battle_start_max_ratio']}")
+        elif result["was_detected"]:
             logger.info(f"首次出现时间: {result['first_appear_time']}s")
             logger.info(f"消失时间: {result['disappear_time']}s")
             logger.info(f"持续可见时长: {result['duration_visible']}s")

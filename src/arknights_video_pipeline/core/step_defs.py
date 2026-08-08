@@ -24,7 +24,7 @@ STEPS: list[StepDef] = [
     StepDef(key="copilot",   method="step_video_to_copilot",  label="视频转作业JSON",      percent=10),
     StepDef(key="formation", method="step_formation_to_text", label="编队配置转文本",      percent=30),
     StepDef(key="actions",   method="step_actions_to_text",   label="操作指令转文本",      percent=50),
-    StepDef(key="track",     method="step_track_startbutton", label="识别开始按钮时间戳",   percent=70),
+    StepDef(key="track",     method="step_track_startbutton", label="识别切换时间戳（开始按钮/进入战斗）", percent=70),
     StepDef(key="compose",   method="step_video_compose",     label="视频合成",           percent=90),
 ]
 

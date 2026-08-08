@@ -613,13 +613,16 @@ def load_actions_text(input_json_path: str, actions_config_path: str) -> str:
 
 
 def get_switch_time(track_result_path: str) -> float:
-    """从track_result.json获取开始按钮消失时间点
+    """从track_result.json获取编队文本的切换时间点
+
+    battlestart 识别模式下取 battle_start_time（进入战斗时间），
+    startbutton 识别模式下取开始按钮消失时间。
 
     Args:
         track_result_path: 跟踪结果文件路径
 
     Returns:
-        编队文本的切换时间（开始按钮消失时间），默认3秒
+        编队文本的切换时间（秒），默认3秒
     """
     if not os.path.exists(track_result_path):
         logger.warning(f"跟踪结果文件不存在: {track_result_path}，编队文本将显示3秒")
@@ -627,6 +630,14 @@ def get_switch_time(track_result_path: str) -> float:
 
     with open(track_result_path, "r", encoding="utf-8") as f:
         result = json.load(f)
+
+    # battlestart 模式：进入战斗时间即切换时间
+    if result.get("track_mode") == "battlestart":
+        battle_time = result.get("battle_start_time")
+        if battle_time is not None and battle_time > 0:
+            return float(battle_time)
+        logger.warning("未检测到进入战斗，编队文本将显示3秒")
+        return 3.0
 
     disappear_time = result.get("disappear_time")
     if disappear_time is not None and disappear_time > 0:

@@ -174,6 +174,7 @@ python main.py --init-config compose
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
+| `track_mode` | string | `"startbutton"` | 识别模式：`startbutton`（开始按钮模板匹配，原行为）/ `battlestart`（战斗开始检测，暂停按钮 ROI 亮像素阈值法，思路与 MAA BattleHasStarted 一致） |
 | `resource_dir` | string | `"resource/StartButton"` | 模板图片目录路径 |
 | `match_threshold` | float | `0.75` | 模板匹配阈值，越高越严格（0.0~1.0） |
 | `scale_range` | array | `[0.5, 1.5]` | 模板缩放范围 [最小, 最大] |
@@ -191,6 +192,18 @@ python main.py --init-config compose
 | `max_workers` | integer | `4` | 并行匹配线程数 |
 | `debug_mode` | boolean | `true` | 调试模式，输出详细匹配信息 |
 | `output_result` | boolean | `true` | 是否输出识别结果文件 |
+
+### battle_start 子配置
+
+`battle_start` 为嵌套对象，仅在 `track_mode = "battlestart"` 时生效（暂停按钮 ROI 亮像素阈值法，无需 StartButton 模板资源）。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|--------|------|--------|------|
+| `time_limit` | integer | `30` | 检测时间限制（秒），仅检测视频前 N 秒；设为 0 或 null 则检测完整视频 |
+| `min_consecutive_frames` | integer | `2` | 最少连续命中采样帧数，低于此数不视为进入战斗 |
+| `debug_mode` | boolean | `true` | 调试模式，输出逐帧亮像素占比诊断信息 |
+
+> **battlestart 模式说明**：进入战斗后屏幕右上角会出现「暂停」按钮，该区域在灰度图中表现为大片亮像素，通过 ROI 亮像素占比阈值判定进入战斗时机。识别结果中的 `battle_start_time`（进入战斗时间）将作为编队文本的切换时间（`get_switch_time` 优先使用该字段）。
 
 ### 配置示例
 

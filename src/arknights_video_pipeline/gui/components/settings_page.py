@@ -828,6 +828,13 @@ class SettingsPage(QWidget):
         self._sub_field_rows[(config_name, field_path)] = row
         return row
 
+    def _on_track_mode_changed(self, mode: str) -> None:
+        """识别模式切换：同步进入战斗检测子区显隐，并广播配置变更"""
+        self.sub_config_changed.emit("track", "track_mode", mode)
+        section = getattr(self, "_track_bs_section", None)
+        if section is not None:
+            section.setVisible(mode == "battlestart")
+
     def _build_track_card(self) -> MaterialCard:
         """Track 配置卡片：开始按钮识别相关参数（17 个字段）"""
         card = MaterialCard(tr("settings.track.title"))
@@ -850,6 +857,14 @@ class SettingsPage(QWidget):
             layout.addWidget(row.widget)
             self._register_sub_row(cn, field_path, row)
             self._tr_labels.append((row.set_label, label_key))
+
+        add("track_mode", build_combo_row(
+            tr("settings.track.track_mode"),
+            items=["startbutton", "battlestart"],
+            default="startbutton",
+            colors=c,
+            on_changed=self._on_track_mode_changed,
+        ), "settings.track.track_mode")
 
         add("resource_dir", build_path_row(
             tr("settings.track.resource_dir"), mode=FileSelector.MODE_DIRECTORY, colors=c,
@@ -906,6 +921,41 @@ class SettingsPage(QWidget):
         add("output_result", build_switch_row(
             tr("settings.track.output_result"), default=True, colors=c,
             on_changed=self._emit_sub(cn, "output_result")), "settings.track.output_result")
+
+        # ── 进入战斗检测子区（track_mode=battlestart 时显示）──
+        self._track_bs_section = QWidget()
+        bs_layout = QVBoxLayout(self._track_bs_section)
+        bs_layout.setContentsMargins(0, 0, 0, 0)
+        bs_layout.setSpacing(16)
+
+        bs_title = QLabel(tr("settings.track.battle_start.title"))
+        bs_title.setFont(self._typo.body_medium)
+        bs_title.setWordWrap(True)
+        self._dim_labels.append(bs_title)
+        bs_layout.addWidget(bs_title)
+        self._tr_labels.append((bs_title.setText, "settings.track.battle_start.title"))
+
+        def add_bs(field_path: str, row: FieldRow, label_key: str) -> None:
+            bs_layout.addWidget(row.widget)
+            self._register_sub_row(cn, field_path, row)
+            self._tr_labels.append((row.set_label, label_key))
+
+        add_bs("battle_start.time_limit", build_int_row(
+            tr("settings.track.battle_start.time_limit"), default=30, minimum=1, maximum=600,
+            colors=c,
+            on_changed=self._emit_sub(cn, "battle_start.time_limit")),
+            "settings.track.battle_start.time_limit")
+        add_bs("battle_start.min_consecutive_frames", build_int_row(
+            tr("settings.track.battle_start.min_consecutive_frames"), default=2, minimum=1, maximum=10,
+            colors=c,
+            on_changed=self._emit_sub(cn, "battle_start.min_consecutive_frames")),
+            "settings.track.battle_start.min_consecutive_frames")
+        add_bs("battle_start.debug_mode", build_switch_row(
+            tr("settings.track.battle_start.debug_mode"), default=True, colors=c,
+            on_changed=self._emit_sub(cn, "battle_start.debug_mode")),
+            "settings.track.battle_start.debug_mode")
+
+        layout.addWidget(self._track_bs_section)
 
         card.add_layout(layout)
         return card
@@ -1519,6 +1569,11 @@ class SettingsPage(QWidget):
         for (config_name, field_path), row in self._sub_field_rows.items():
             value = config_proxy.get_sub(config_name, field_path)
             row.set_value(value, block_signal=True)
+        # 同步识别模式相关的子区显隐
+        mode = config_proxy.get_sub("track", "track_mode")
+        section = getattr(self, "_track_bs_section", None)
+        if section is not None:
+            section.setVisible(mode == "battlestart")
 
     def set_sub_config_enabled(self, enabled: bool) -> None:
         """启用/禁用所有子配置控件（流水线运行期间调用）"""
