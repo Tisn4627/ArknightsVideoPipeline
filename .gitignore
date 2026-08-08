@@ -215,4 +215,9 @@ ArknightsVideoPipeline-*/
 # ================================
 resource/ffmpeg/
 
+# ================================
+# Agent instruction files
+# ================================
+AGENTS.md
+
 
