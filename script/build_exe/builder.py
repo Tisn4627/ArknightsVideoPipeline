@@ -571,13 +571,8 @@ class BuildManager:
         for mod in hidden_imports:
             args.extend(["--hidden-import", mod])
 
-        # recognition 后端代码搜索路径（vendor 于 src/ArknightsVideoRecognition/src，
-        # 不在标准 sys.path，需显式加入 pathex 供 hidden-import 解析）
-        vendored_src = os.path.join(
-            self.config.project_root, "src", "ArknightsVideoRecognition", "src"
-        )
-        if os.path.isdir(vendored_src):
-            args.extend(["--paths", vendored_src])
+        # recognition 后端代码（vendor 于 src/ArknightsVideoRecognition，与父项目包
+        # 平级共存）已由上方 --paths src_dir 覆盖，无需额外 pathex
 
         # 排除模块
         for mod in excludes:

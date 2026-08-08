@@ -23,16 +23,15 @@ from pathlib import Path
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource"
-_VENDORED_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
-_VENDORED_SRC_DIR = _VENDORED_ROOT / "src"
+_SRC_DIR = _PROJECT_ROOT / "src"
 
 if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
 # 确保 vendor 的识别代码可导入（editable 安装则无需）
-# 代码包位于 src/ArknightsVideoRecognition/src/ArknightsVideoRecognition
-if str(_VENDORED_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_VENDORED_SRC_DIR))
+# 代码包位于 src/ArknightsVideoRecognition（与父项目包平级共存于 src/）
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 
 def _import_recognition_pipeline(resource_dir: str | None = None):

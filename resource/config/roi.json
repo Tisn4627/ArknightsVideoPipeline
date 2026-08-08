@@ -1,0 +1,601 @@
+{
+  "BattleDeployDirectionRectMove": {
+    "template": "empty.png",
+    "rectMove": [
+      -48,
+      -48,
+      96,
+      96
+    ]
+  },
+  "BattleOperBoxRectMove": {
+    "template": "empty.png",
+    "rectMove": [
+      0,
+      -50,
+      60,
+      60
+    ]
+  },
+  "BattleOperDetailPageOldFlag": {
+    "baseTask": "BattleOperDetailPageFlag",
+    "template": "empty.png",
+    "roi": [
+      0,
+      385,
+      110,
+      14
+    ]
+  },
+  "BattleOperDetailPageFlag": {
+    "template": "empty.png",
+    "roi": [
+      0,
+      322,
+      110,
+      16
+    ],
+    "specialParams": [
+      100
+    ]
+  },
+  "BattleDroneAvatarData": {
+    "template": "empty.png",
+    "templThreshold": 0.7
+  },
+  "BattleAvatarCoolingData": {
+    "template": "empty.png",
+    "templThreshold": 0.5,
+    "maskRange": [
+      0,
+      50
+    ]
+  },
+  "BattleAvatarDataForFormation": {
+    "template": "empty.png",
+    "templThreshold": 0.6,
+    "rectMove": [
+      15,
+      15,
+      30,
+      30
+    ]
+  },
+  "BattleAvatarDataForVideo": {
+    "baseTask": "BattleAvatarData",
+    "template": "empty.png",
+    "templThreshold": 0.6
+  },
+  "BattleAvatarData": {
+    "template": "empty.png",
+    "templThreshold": 0.8
+  },
+  "BattleFormationOCRNameFlag": {
+    "templThreshold": 0.6,
+    "roi": [
+      88,
+      264,
+      873,
+      354
+    ]
+  },
+  "BattleFormationOperNamesOldVersion": {
+    "baseTask": "BattleFormationOperNames",
+    "text": [],
+    "roi": [
+      30,
+      23,
+      75,
+      15
+    ]
+  },
+  "BattleFormationOperNames": {
+    "baseTask": "CharsNameOcrReplace",
+    "text": [],
+    "roi": [
+      -18,
+      40,
+      122,
+      18
+    ]
+  },
+  "CharsNameOcrReplace": {
+    "algorithm": "OcrDetect",
+    "text": [],
+    "Doc": "该任务的 ocrReplace 被所有涉及干员名的识别任务复用，中文被拆成3字节处理，需要包括号",
+    "fullMatch": true,
+    "ocrReplace": [
+      [
+        "^(?:[<4~]|《|。ぐ)+",
+        ""
+      ],
+      [
+        "^c(?!ast)",
+        ""
+      ],
+      [
+        "^\\^一",
+        ""
+      ],
+      [
+        "^[_<>]*(?=.)",
+        ""
+      ],
+      [
+        "[_<>]*$",
+        ""
+      ],
+      [
+        ".*弦惊.*",
+        "“弦惊”"
+      ],
+      [
+        ".*亚梅塔",
+        "菲亚梅塔"
+      ],
+      [
+        ".*逍遥.*",
+        "“逍遥”"
+      ],
+      [
+        ".*清平.*",
+        "“清平”"
+      ],
+      [
+        ".*打字机.*",
+        "“打字机”"
+      ],
+      [
+        ".*耀阳.*",
+        "“耀阳”"
+      ],
+      [
+        "玛恩.*",
+        "玛恩纳"
+      ],
+      [
+        ".*默德克萨.*",
+        "缄默德克萨斯"
+      ],
+      [
+        ".*芜拉普兰.*",
+        "荒芜拉普兰德"
+      ],
+      [
+        "^持克诺$",
+        "特克诺"
+      ],
+      [
+        "^重岳.+",
+        "重岳"
+      ],
+      [
+        "(麒.+夜刀|.*麟.*夜刀)$",
+        "麒麟R夜刀"
+      ],
+      [
+        ".*龙.*黑角$",
+        "火龙S黑角"
+      ],
+      [
+        "[Uu]-[O0o]f{1,2}icial",
+        "U-Official"
+      ],
+      [
+        ".*威龙陈",
+        "假日威龙陈"
+      ],
+      [
+        "青积",
+        "青枳"
+      ],
+      [
+        ".*烬艾雅法.*",
+        "纯烬艾雅法拉"
+      ],
+      [
+        "^[委泰黍]$",
+        "黍"
+      ],
+      [
+        "^[H夕]$",
+        "夕"
+      ],
+      [
+        "12E",
+        "12F"
+      ],
+      [
+        "归.*幽灵鲨",
+        "归溟幽灵鲨"
+      ],
+      [
+        "(临六$|^临光.*)",
+        "临光"
+      ],
+      [
+        ".*甜蜜狂搅.*",
+        "“甜蜜狂搅”"
+      ],
+      [
+        "^尖端研究成果共享.*",
+        "尖端研究成果共享终端"
+      ],
+      [
+        "^w$",
+        "W"
+      ],
+      [
+        "维获",
+        "维荻"
+      ],
+      [
+        ".*ancet-2",
+        "Lancet-2"
+      ],
+      [
+        "[CcOo0]ast.*le-3",
+        "Castle-3"
+      ],
+      [
+        "phonoR-0",
+        "PhonoR-0"
+      ],
+      [
+        ".*HRM-EX$",
+        "THRM-EX"
+      ],
+      [
+        ".*心斯卡蒂$",
+        "浊心斯卡蒂"
+      ],
+      [
+        "^预备干员-近.*",
+        "预备干员-近战"
+      ],
+      [
+        "^预备干员-术.*",
+        "预备干员-术师"
+      ],
+      [
+        "^预备干员-后.*",
+        "预备干员-后勤"
+      ],
+      [
+        "^预备干员-狙.*",
+        "预备干员-狙击"
+      ],
+      [
+        "^预备干员-重.*",
+        "预备干员-重装"
+      ],
+      [
+        "^折光.*",
+        "折光"
+      ],
+      [
+        "^红集$",
+        "红隼"
+      ],
+      [
+        "小.?满",
+        "小满"
+      ],
+      [
+        ".*夹子.*",
+        "“夹子”"
+      ],
+      [
+        "应泡普卡",
+        "泡普卡"
+      ],
+      [
+        "特米米.+",
+        "特米米"
+      ],
+      [
+        "崖心.+",
+        "崖心"
+      ],
+      [
+        ".*芙利特$",
+        "伊芙利特"
+      ],
+      [
+        "^提非$",
+        "提丰"
+      ],
+      [
+        "^华琳$",
+        "华法琳"
+      ],
+      [
+        "^宝箱的肉.*",
+        "宝箱的肉？"
+      ],
+      [
+        ".*维多利亚$",
+        "维娜·维多利亚"
+      ],
+      [
+        "^盥心$",
+        "塑心"
+      ],
+      [
+        "^(钳|钥)铅$",
+        "钼铅"
+      ],
+      [
+        ".*NFESS-47$",
+        "CONFESS-47"
+      ],
+      [
+        "^焰影苇.*",
+        "焰影苇草"
+      ],
+      [
+        "Miss\\.[Cc]hristine",
+        "Miss.Christine"
+      ],
+      [
+        "^野.{0,2}$",
+        "野鬃"
+      ],
+      [
+        "^(“|”|\\\\|\")?斩(“|”|\\\\|\")?$",
+        "“斩”"
+      ],
+      [
+        "八.*海铃",
+        "八幡海铃"
+      ],
+      [
+        ".*英调香师",
+        "撷英调香师"
+      ],
+      [
+        "矿石.*杀手.*",
+        "矿石“杀手”"
+      ],
+      [
+        ".*涤火杰西卡",
+        "涤火杰西卡"
+      ],
+      [
+        "GALLU.*",
+        "GALLUS²"
+      ],
+      [
+        "凯尔希.*思衡托",
+        "凯尔希·思衡托"
+      ],
+      [
+        ".*反壳龟$",
+        "御龙：反壳龟"
+      ],
+      [
+        ".*影丝蛛$",
+        "御龙：影丝蛛"
+      ],
+      [
+        ".*岩甲兽$",
+        "御龙：岩甲兽"
+      ],
+      [
+        ".*雷狼龙$",
+        "御龙：雷狼龙"
+      ],
+      [
+        "^折娅$",
+        "折桠"
+      ]
+    ]
+  },
+  "BattleSwipeOper": {
+    "algorithm": "JustReturn",
+    "preDelay": 400,
+    "postDelay": 150,
+    "Doc": "pre 是将干员滑动到场上的 duration 系数；post 是设置干员朝向滑动的 duration",
+    "specialParams": [
+      400,
+      100,
+      2,
+      0,
+      300
+    ],
+    "specialParamsDoc": [
+      "设置朝向时的滑动距离",
+      "补偿距离上限",
+      "滑动初速度（平均速度是固定的，初速度快末速度慢相当于一直减速）",
+      "滑动末速度",
+      "将干员滑动到场上的 最小滑动 duration"
+    ]
+  },
+  "BattleUseOper": {
+    "algorithm": "JustReturn",
+    "preDelay": 150,
+    "postDelay": 200,
+    "Doc": "pre 是从点击干员，到干员信息弹出来等待的时间；post 是干员上场，到设置朝向之间等待的时间"
+  },
+  "BattleSkillReady": {
+    "rectMove": [
+      -28,
+      -140,
+      64,
+      64
+    ]
+  },
+  "BattleOperName": {
+    "algorithm": "OcrDetect",
+    "text": [],
+    "fullMatch": true,
+    "roi": [
+      5,
+      177,
+      191,
+      37
+    ],
+    "specialParams_doc": [
+      "bin_threshold",
+      "bin_expansion",
+      "trim_threshold_low",
+      "trim_threshold_high",
+      "收缩时检测图的底部屏蔽高度",
+      "右侧收缩时连续 n 像素低于 bin_thresh"
+    ],
+    "specialParams": [
+      160,
+      4,
+      0,
+      0,
+      0,
+      10
+    ]
+  },
+  "NumberOcrReplace": {
+    "algorithm": "OcrDetect",
+    "isAscii": true,
+    "text": [],
+    "ocrReplace": [
+      [
+        "[Oo]",
+        "0"
+      ],
+      [
+        "[Ii]",
+        "1"
+      ],
+      [
+        "[Ll]",
+        "1"
+      ],
+      [
+        "[\\{\\}\\[\\]]",
+        "1"
+      ],
+      [
+        "B",
+        "8"
+      ],
+      [
+        "台",
+        "8"
+      ],
+      [
+        "十",
+        "+"
+      ],
+      [
+        "萬",
+        "万"
+      ],
+      [
+        "만",
+        "万"
+      ],
+      [
+        "億",
+        "亿"
+      ],
+      [
+        "억",
+        "亿"
+      ],
+      [
+        "^\\.",
+        ""
+      ],
+      [
+        " ",
+        ""
+      ]
+    ]
+  },
+  "BattleCostData": {
+    "baseTask": "NumberOcrReplace",
+    "roi": [
+      1199,
+      494,
+      80,
+      44
+    ],
+    "useRaw": false,
+    "specialParams_doc": "Cost数字变化阈值, 模板匹配, 100=1.0; 正常在 0.997-1 之间波动, 少有0.995; _5->_6 的分数最高, 0.85上下",
+    "specialParams": [
+      98
+    ]
+  },
+  "BattleKillsFlag": {
+    "roi": [
+      150,
+      0,
+      600,
+      70
+    ],
+    "maskRange": [
+      1,
+      255
+    ],
+    "templThreshold": 0.6
+  },
+  "BattleKills": {
+    "algorithm": "OcrDetect",
+    "isAscii": true,
+    "text": [],
+    "roi": [
+      50,
+      0,
+      100,
+      40
+    ],
+    "useRaw": false,
+    "specialParams_doc": "Kill区域变化阈值, 模板匹配, 100=1.0; 正常在 0.997-1 之间波动, 少有0.995; _5->_6 的分数最高, 可达0.94",
+    "specialParams": [
+      98
+    ]
+  },
+  "BattleStageName": {
+    "algorithm": "OcrDetect",
+    "text": [],
+    "roi": [
+      250,
+      435,
+      800,
+      100
+    ],
+    "ocrReplace": [
+      [
+        ".*前顾后",
+        "瞻前顾后"
+      ],
+      [
+        ".*命运的宠儿.*",
+        "“命运的宠儿”"
+      ],
+      [
+        ".*骑士对决.*",
+        "“骑士对决”"
+      ],
+      [
+        "巍峨银.*",
+        "巍峨银凇"
+      ],
+      [
+        "猩红.*道",
+        "猩红甬道"
+      ],
+      [
+        ".*之以利",
+        "啖之以利"
+      ],
+      [
+        "((睁)|(峰))蝶战功",
+        "峥嵘战功"
+      ],
+      [
+        "夕娅忆",
+        "夕娥忆"
+      ]
+    ]
+  }
+}

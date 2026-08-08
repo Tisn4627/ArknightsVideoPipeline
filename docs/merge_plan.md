@@ -15,7 +15,7 @@
 > 2. 子模块方式（§5.3、§6、§8 等章节）保留为历史方案描述，不再适用于当前仓库。
 >    识别资源更新方式：在 Recognition 上游仓库更新后，手动将新资源复制入库并提交。
 > 3. 打包（§9）：`builder.py` 已为 Recognition 代码补 `--hidden-import` 与
->    `--paths src/ArknightsVideoRecognition/src`；`runtime_hook.py` 已设置
+>    `--paths src/ArknightsVideoRecognition`；`runtime_hook.py` 已设置
 >    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
 > 4. 资源自动同步：主仓库新增独立 `.github/workflows/sync-resources.yml`（每周一
 >    08:00 UTC 定时 + 手动触发，直接更新本仓库顶层 resource/ 并自动提交）。
@@ -306,7 +306,7 @@ if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
 # 确保子模块源码可导入（editable 安装则无需）
-# 子模块代码包位于 src/ArknightsVideoRecognition/src/ArknightsVideoRecognition
+# 子模块代码包位于 src/ArknightsVideoRecognition
 _SRC_DIR = _SUBMODULE_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
@@ -613,10 +613,10 @@ pip install -e src/ArknightsVideoRecognition
 - 父项目 `pyproject.toml` 无需声明对子模块的依赖（同 `src/` 下平级共存）
 
 **方式 B：sys.path 注入（免安装）**
-- 由 `recognition_backend.py` 在 import 前将 `src/ArknightsVideoRecognition/src` 加入 `sys.path`（已在 §4.2 代码中实现）
+- 由 `recognition_backend.py` 在 import 前将 `src`（vendor 包 `src/ArknightsVideoRecognition` 的父目录）加入 `sys.path`（已在 §4.2 代码中实现）
 - 适合开发期快速切换；生产部署建议方式 A
 
-> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/ArknightsVideoRecognition/src/ArknightsVideoRecognition/config/settings.py`，其 `parents[3]` 解析到子模块根 `src/ArknightsVideoRecognition/`，默认 `RESOURCE_DIR` 指向 `src/ArknightsVideoRecognition/resource`。**但我们要求资源在顶层 `resource/`**，因此适配层必须显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
+> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/ArknightsVideoRecognition/config/settings.py`，其 `parents[3]` 解析到仓库根，默认 `RESOURCE_DIR` 指向顶层 `resource/`（识别资源已并入）。适配层仍显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
 
 ### 7.3 构建脚本（`script/build_exe/`）
 

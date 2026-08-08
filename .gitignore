@@ -206,18 +206,13 @@ ArknightsVideoPipeline-*/
 # ================================
 # Configuration files
 # ================================
-config/
+# 仅忽略仓库根目录的 config/（用户可编辑配置），
+# 不可用裸 config/ 模式——会误伤 src/ArknightsVideoRecognition/config/ 代码包
+/config/
 
 # ================================
 # FFmpeg release files
 # ================================
 resource/ffmpeg/
 
-# ================================
-# Vendored ArknightsVideoRecognition（原子模块）中的冗余/无关内容
-# 识别资源已直接入库于顶层 resource/（与 font/locales 同层），
-# 因此 vendor 目录内的 resource 副本不入库
-# ================================
-src/ArknightsVideoRecognition/resource/
-src/ArknightsVideoRecognition/tests/
-src/ArknightsVideoRecognition/uv.lock
+

@@ -18,7 +18,7 @@
 # 本地复制入库并手动提交。
 #
 # 识别代码位于 src/ArknightsVideoRecognition/（vendor，原为 git 子模块），
-# 同步脚本即其中的 scripts/update_resources.py 与 scripts/update_character_table.py；
+# 同步脚本即仓库根 script/update_resources.py 与 script/update_character_table.py；
 # 脚本写入顶层 resource/（AVR_RESOURCE_DIR 指向仓库根 resource/）。
 #
 # 触发方式：
@@ -73,7 +73,7 @@ jobs:
 
       - name: 同步 character_table.json / char_roles.json（update_character_table.py 直接下载）
         # update_resources.py 不负责 character_table / char_roles，需单独运行
-        run: python src/ArknightsVideoRecognition/scripts/update_character_table.py
+        run: python script/update_character_table.py
 
       - name: 同步 levels.json / battle_data.json / ocr_config.json / 干员头像 / 重新生成 roi.json
         # update_resources.py 负责从本地克隆仓库复制上述资源，并用 --regen-roi
@@ -81,7 +81,7 @@ jobs:
         # 注意：该脚本也会同步 template / onnx / ocr（在 build_sync_plan 中），
         # 但下面 git add 仅暂存需自动同步的目录，这三类资源不会被提交。
         run: |
-          python src/ArknightsVideoRecognition/scripts/update_resources.py \
+          python script/update_resources.py \
             --resource-dir ${{ github.workspace }}/resource \
             --tilepos-dir /tmp/ArknightsResources \
             --maa-dir /tmp/Maa \

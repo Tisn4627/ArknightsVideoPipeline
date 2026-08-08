@@ -4,7 +4,7 @@
 
 用法::
 
-    python scripts/update_levels.py
+    python script/update_levels.py
 """
 from __future__ import annotations
 

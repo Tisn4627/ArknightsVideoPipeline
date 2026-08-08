@@ -19,7 +19,7 @@ dependencies = [
 arknights-video-recognition = "ArknightsVideoRecognition.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 
 [tool.pytest.ini_options]
 markers = [

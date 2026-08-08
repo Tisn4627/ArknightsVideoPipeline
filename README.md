@@ -91,7 +91,7 @@ pip install -e .
 
 - 本项目代码遵循 [LICENSE](LICENSE) 声明。
 - `resource/` 下的识别资源（`avatar/` `config/` `data/` `ocr/` `onnx/` `template/` `tile/`，模型、地图数据、头像库等）源自
-  `src/ArknightsVideoRecognition/resource/`，遵循其上游（Maa 等）的 **AGPL-3.0** 许可，
+  ArknightsVideoRecognition 上游仓库的 `resource/`，遵循其上游（Maa 等）的 **AGPL-3.0** 许可，
   详见 [NOTICE](NOTICE)。
 - `resource/StartButton/` 开始按钮底板图片由 **Maa** 提供。
 

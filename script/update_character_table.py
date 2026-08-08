@@ -5,7 +5,7 @@ Support/Special/Drone），用于 avatar 匹配时的 role 过滤。
 
 用法::
 
-    python scripts/update_character_table.py
+    python script/update_character_table.py
 """
 from __future__ import annotations
 
