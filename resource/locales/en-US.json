@@ -11,7 +11,7 @@
   "home.background_placeholder": "Background image (style1)",
   "home.style": "Style",
   "home.skip_steps": "Skip steps",
-  "home.skip.copilot": "MAA",
+  "home.skip.copilot": "Video recognition",
   "home.skip.formation": "Formation",
   "home.skip.actions": "Actions",
   "home.skip.track": "Track",
@@ -211,7 +211,6 @@
   "about.app_name": "ArknightsVideoPipeline",
   "about.desc1": "Arknights video processing pipeline GUI",
   "about.desc2": "Built with PyQt6 and Material Design 3",
-  "about.ok": "OK",
 
   "dialog.ok": "OK",
   "dialog.confirm": "Confirm",

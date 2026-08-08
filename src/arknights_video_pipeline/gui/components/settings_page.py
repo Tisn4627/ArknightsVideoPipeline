@@ -1113,14 +1113,9 @@ class SettingsPage(QWidget):
             add(f"{tp}.subtitle_auto_fit", build_switch_row(
                 tr("settings.compose.subtitle_auto_fit"), default=False, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.subtitle_auto_fit")), "settings.compose.subtitle_auto_fit")
-            add(f"{tp}.auto_fit_min_font_size", build_int_row(
-                tr("settings.compose.auto_fit_min_font_size"), default=10, minimum=1, maximum=100, colors=c,
-                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_min_font_size")), "settings.compose.auto_fit_min_font_size")
-            add(f"{tp}.auto_fit_max_font_size", build_int_row(
-                tr("settings.compose.auto_fit_max_font_size"), default=200, minimum=10, maximum=500, colors=c,
-                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_max_font_size")), "settings.compose.auto_fit_max_font_size")
 
         # 逐操作显示（map_overlay）子区域标题（仅 style1：地图操作序号 + 面板当前操作高亮）
+        # 主区仅保留总开关；数字尺寸/字号/颜色与面板高亮等细项已迁至下方高级设置容器。
         if style == "style1":
             map_title = QLabel(tr("settings.compose.map_overlay_title"))
             map_title.setStyleSheet(
@@ -1136,26 +1131,6 @@ class SettingsPage(QWidget):
             add(f"{mp}.enabled", build_switch_row(
                 tr("settings.compose.map_overlay_enabled"), default=False, colors=c,
                 on_changed=self._emit_sub(cn, f"{mp}.enabled")), "settings.compose.map_overlay_enabled")
-            add(f"{mp}.resolution", build_string_row(
-                tr("settings.compose.map_overlay_resolution"), default="1280x720", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.resolution")), "settings.compose.map_overlay_resolution")
-            add(f"{mp}.number_size_mode", build_combo_row(
-                tr("settings.compose.map_overlay_number_size_mode"),
-                items=["approximate", "precise"], default="approximate", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_size_mode")), "settings.compose.map_overlay_number_size_mode")
-            add(f"{mp}.number_font_ratio", build_float_row(
-                tr("settings.compose.map_overlay_number_font_ratio"), default=0.5,
-                minimum=0.1, maximum=1.0, step=0.05, decimals=2, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_font_ratio")), "settings.compose.map_overlay_number_font_ratio")
-            add(f"{mp}.number_color", build_color_row(
-                tr("settings.compose.map_overlay_number_color"), default="#FFD700", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_color")), "settings.compose.map_overlay_number_color")
-            add(f"{mp}.panel_highlight_enabled", build_switch_row(
-                tr("settings.compose.map_overlay_panel_highlight_enabled"), default=True, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_enabled")), "settings.compose.map_overlay_panel_highlight_enabled")
-            add(f"{mp}.panel_highlight_color", build_color_row(
-                tr("settings.compose.map_overlay_panel_highlight_color"), default="#FFD700", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_color")), "settings.compose.map_overlay_panel_highlight_color")
 
         card.add_layout(layout)
 
@@ -1202,6 +1177,12 @@ class SettingsPage(QWidget):
             on_changed=self._emit_sub(cn, f"{tp}.text_color")), "settings.compose.text_color")
 
         if style == "style1":
+            add_adv(f"{tp}.auto_fit_min_font_size", build_int_row(
+                tr("settings.compose.auto_fit_min_font_size"), default=10, minimum=1, maximum=100, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_min_font_size")), "settings.compose.auto_fit_min_font_size")
+            add_adv(f"{tp}.auto_fit_max_font_size", build_int_row(
+                tr("settings.compose.auto_fit_max_font_size"), default=200, minimum=10, maximum=500, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.auto_fit_max_font_size")), "settings.compose.auto_fit_max_font_size")
             add_adv(f"{tp}.auto_fit_available_width", build_nullable_int_row(
                 tr("settings.compose.auto_fit_available_width"), default=None,
                 minimum=1, maximum=3840, colors=c,
@@ -1219,6 +1200,26 @@ class SettingsPage(QWidget):
                 on_changed=self._emit_sub(cn, f"{tp}.bottom_margin")), "settings.compose.bottom_margin")
 
         if style == "style1":
+            add_adv(f"{mp}.number_size_mode", build_combo_row(
+                tr("settings.compose.map_overlay_number_size_mode"),
+                items=["approximate", "precise"], default="approximate", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_size_mode")), "settings.compose.map_overlay_number_size_mode")
+            add_adv(f"{mp}.resolution", build_string_row(
+                tr("settings.compose.map_overlay_resolution"), default="1280x720", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.resolution")), "settings.compose.map_overlay_resolution")
+            add_adv(f"{mp}.number_font_ratio", build_float_row(
+                tr("settings.compose.map_overlay_number_font_ratio"), default=0.5,
+                minimum=0.1, maximum=1.0, step=0.05, decimals=2, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_font_ratio")), "settings.compose.map_overlay_number_font_ratio")
+            add_adv(f"{mp}.number_color", build_color_row(
+                tr("settings.compose.map_overlay_number_color"), default="#FFD700", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.number_color")), "settings.compose.map_overlay_number_color")
+            add_adv(f"{mp}.panel_highlight_enabled", build_switch_row(
+                tr("settings.compose.map_overlay_panel_highlight_enabled"), default=True, colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_enabled")), "settings.compose.map_overlay_panel_highlight_enabled")
+            add_adv(f"{mp}.panel_highlight_color", build_color_row(
+                tr("settings.compose.map_overlay_panel_highlight_color"), default="#FFD700", colors=c,
+                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_color")), "settings.compose.map_overlay_panel_highlight_color")
             add_adv(f"{mp}.number_shadow_enabled", build_switch_row(
                 tr("settings.compose.map_overlay_number_shadow_enabled"), default=True, colors=c,
                 on_changed=self._emit_sub(cn, f"{mp}.number_shadow_enabled")), "settings.compose.map_overlay_number_shadow_enabled")

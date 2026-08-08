@@ -11,7 +11,7 @@
   "home.background_placeholder": "背景图片（style1）",
   "home.style": "样式",
   "home.skip_steps": "跳过步骤",
-  "home.skip.copilot": "MAA识别",
+  "home.skip.copilot": "视频识别",
   "home.skip.formation": "编队文本",
   "home.skip.actions": "操作文本",
   "home.skip.track": "开始按钮识别",
@@ -211,7 +211,6 @@
   "about.app_name": "ArknightsVideoPipeline",
   "about.desc1": "Arknights 视频处理流水线 GUI",
   "about.desc2": "基于 PyQt6 与 Material Design 3 构建",
-  "about.ok": "确定",
 
   "dialog.ok": "确定",
   "dialog.confirm": "确认",

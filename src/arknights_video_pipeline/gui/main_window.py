@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from arknights_video_pipeline.gui.components import (
-    BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
+    AboutPage, BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
     MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage,
 )
 from arknights_video_pipeline.gui.i18n import init_i18n, i18n, tr
@@ -51,7 +51,7 @@ class MainWindow(QMainWindow):
         # GUI 偏好独立管理（config/gui.json），与 pipeline 配置完全解耦
         self._gui_config = GuiConfig(parent=self)
         self._is_dark = self._gui_config.is_dark_theme()
-        self._current_page = 0  # 0=Home, 1=Settings
+        self._current_page = 0  # 0=Home, 1=Settings, 2=Info
         # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
         self._titlebar_applied = False
 
@@ -135,6 +135,23 @@ class MainWindow(QMainWindow):
         )
         self._settings_scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self._settings_scroll)
+
+        # ── Info (About) 页 ──────────────────────────────
+        self._about_page = AboutPage(colors=MaterialColors.light())
+        self._about_scroll = QScrollArea()
+        self._about_scroll.setWidgetResizable(True)
+        self._about_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._about_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._about_scroll.viewport().setObjectName("aboutScrollViewport")
+        self._about_scroll.viewport().setStyleSheet(
+            "QWidget#aboutScrollViewport { background-color: transparent; }"
+        )
+        self._about_scroll.setWidget(self._about_page)
+        self._about_page.setMaximumWidth(
+            self._about_scroll.viewport().width()
+        )
+        self._about_scroll.viewport().installEventFilter(self)
+        self._stack.addWidget(self._about_scroll)
 
         self._build_hero()
         self._build_cards_grid()
@@ -657,21 +674,16 @@ class MainWindow(QMainWindow):
             self._run_btn.setEnabled(bool(paths))
 
     def _on_nav_changed(self, index: int) -> None:
-        # 0=Home, 1=Settings, 2=Info（仅弹出关于对话框，不切换页面）
+        # 0=Home, 1=Settings, 2=Info（完整页面，与主页/设置页同级）
+        self._current_page = index
         if index == 0:
-            self._current_page = 0
             self._stack.setCurrentWidget(self._home_scroll)
         elif index == 1:
-            self._current_page = 1
             # 进入设置页时同步主题开关状态（不触发信号）
             self._settings_page.set_dark(self._is_dark)
             self._stack.setCurrentWidget(self._settings_scroll)
         elif index == 2:
-            self._show_about()
-            # 恢复到原页面选中态，避免 Info 误高亮
-            self._nav_rail.blockSignals(True)
-            self._nav_rail.set_selected(self._current_page)
-            self._nav_rail.blockSignals(False)
+            self._stack.setCurrentWidget(self._about_scroll)
 
     # ── 语言切换 ──────────────────────────────────────────
 
@@ -791,6 +803,9 @@ class MainWindow(QMainWindow):
         # 更新导航栏、设置页与辅助文字颜色
         self._nav_rail.set_colors(colors)
         self._settings_page.set_colors(colors)
+        # 同步刷新关于页配色
+        if getattr(self, "_about_page", None) is not None:
+            self._about_page.set_colors(colors)
         # 同步刷新主页所有卡片的表面色（paintEvent 自绘模式需手动更新）
         for card in (
             getattr(self, "_config_card", None),
@@ -821,14 +836,6 @@ class MainWindow(QMainWindow):
         # apply_titlebar_theme 含 DwmFlush（~15ms），放在最后让 DWM 合成
         # 新帧时主界面已完成重绘，标题栏与主界面同时上屏。
         apply_titlebar_theme(self, dark)
-
-    def _show_about(self) -> None:
-        # 使用自定义 AboutDialog 而非 QMessageBox.about()：
-        # 后者在我们的 Material 主题下 OK 按钮的样式被裁切/遮挡。
-        from arknights_video_pipeline.gui.components.about_dialog import AboutDialog
-        dlg = AboutDialog(colors=self._settings_page.colors, parent=self)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        dlg.exec()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -868,6 +875,11 @@ class MainWindow(QMainWindow):
             vw = self._settings_scroll.viewport().width()
             if vw > 0 and self._settings_page.maximumWidth() != vw:
                 self._settings_page.setMaximumWidth(vw)
+        # 同步 AboutPage 最大宽度（与 SettingsPage 同理）
+        if getattr(self, "_about_scroll", None) is not None:
+            vw = self._about_scroll.viewport().width()
+            if vw > 0 and self._about_page.maximumWidth() != vw:
+                self._about_page.setMaximumWidth(vw)
 
     def eventFilter(self, obj, event) -> bool:
         # 监听 home/settings 滚动视口的尺寸变化（窗口尺寸变化时触发），
@@ -892,6 +904,13 @@ class MainWindow(QMainWindow):
                 vw = self._settings_scroll.viewport().width()
                 if vw > 0:
                     self._settings_page.setMaximumWidth(vw)
+            elif (
+                getattr(self, "_about_scroll", None) is not None
+                and obj is self._about_scroll.viewport()
+            ):
+                vw = self._about_scroll.viewport().width()
+                if vw > 0:
+                    self._about_page.setMaximumWidth(vw)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:

@@ -4,6 +4,7 @@ gui.components - 可复用 UI 组件
 提供符合 Material Design 3 规范的通用控件。
 """
 
+from arknights_video_pipeline.gui.components.about_page import AboutPage
 from arknights_video_pipeline.gui.components.batch_video_list import BatchVideoList
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.log_viewer import LogViewer
@@ -17,6 +18,7 @@ from arknights_video_pipeline.gui.components.settings_page import SettingsPage
 from arknights_video_pipeline.gui.components.step_panel import StepPanel
 
 __all__ = [
+    "AboutPage",
     "BatchVideoList",
     "CardFrame",
     "FileSelector",
