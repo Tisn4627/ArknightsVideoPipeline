@@ -11,7 +11,7 @@
 ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟（Arknights）游戏录像设计。它将视频识别功能（recognition 后端默认 / MAA 后端可选）、OpenCV 模板匹配和 movielite 视频合成库整合为一条完整的处理流水线，从原始视频输入到最终合成视频输出，全程自动化。
 
 > **说明**：Maa 已停止对视频自动识别的维护与支持。本项目的步骤 1 默认使用
-> [ArknightsVideoRecognition](https://github.com/Tisn4627/ArknightsVideoRecognition)
+> [ArknightsVideoRecognition](src/ArknightsVideoRecognition)
 > 子模块（纯 Python 重写的视频转作业 JSON 实现）作为识别后端，不再依赖 MAA 的
 > 视频识别；MAA 调用保留为可选后端（`--backend maa`），可无缝回退。
 
@@ -29,7 +29,7 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 
 | 后端 | 说明 | 依赖 |
 | --- | --- | --- |
-| `recognition`（默认） | 纯 Python 视频识别（[ArknightsVideoRecognition](https://github.com/Tisn4627/ArknightsVideoRecognition) 子模块），自带 214M 模型/地图/头像资源，开箱即用 | 仅 pip 依赖 |
+| `recognition`（默认） | 纯 Python 视频识别（[ArknightsVideoRecognition](src/ArknightsVideoRecognition) 子模块），自带 214M 模型/地图/头像资源，开箱即用 | 仅 pip 依赖 |
 | `maa`（可选回退） | 调用 MAA 项目的 `VideoRecognition` 任务 | 需本地安装 MAA（`--maa-path`） |
 
 切换方式：
@@ -98,7 +98,7 @@ pip install -e .
 ## 感谢
 
 - **Maa** [(MaaAssistantArknights)](https://github.com/MAAAssistantArknights/MAAAssistantArknights) - 提供视频转作业Json功能和开始按钮底板图片
-- **ArknightsVideoRecognition** [(Tisn4627/ArknightsVideoRecognition)](https://github.com/Tisn4627/ArknightsVideoRecognition) - 纯 Python 视频识别后端实现
+- **ArknightsVideoRecognition** ([src/ArknightsVideoRecognition](src/ArknightsVideoRecognition)) - 纯 Python 视频识别后端实现
 
 ## 最后说明
 
