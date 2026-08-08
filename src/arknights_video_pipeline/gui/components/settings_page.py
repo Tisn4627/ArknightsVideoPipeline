@@ -861,7 +861,7 @@ class SettingsPage(QWidget):
         add("track_mode", build_combo_row(
             tr("settings.track.track_mode"),
             items=["startbutton", "battlestart"],
-            default="startbutton",
+            default="battlestart",
             colors=c,
             on_changed=self._on_track_mode_changed,
         ), "settings.track.track_mode")

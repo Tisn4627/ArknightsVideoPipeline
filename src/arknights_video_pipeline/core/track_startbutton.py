@@ -39,7 +39,7 @@ except ImportError:
 
 # 默认配置（video_source 由流水线运行时注入）
 DEFAULT_CONFIG = {
-    "track_mode": TRACK_MODE_STARTBUTTON,  # 识别模式：startbutton=开始按钮 / battlestart=战斗开始
+    "track_mode": TRACK_MODE_BATTLESTART,  # 识别模式：startbutton=开始按钮 / battlestart=战斗开始（默认）
     "resource_dir": "resource/StartButton",
     "match_threshold": 0.75,
     "scale_range": [0.5, 1.5],
