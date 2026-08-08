@@ -15,9 +15,12 @@ core.map_overlay - 逐操作显示（地图操作序号 + 左侧面板当前操�
     - ``approximate``：``get_all_tile_positions`` 求全图最小格宽/格高（最坏情况）
     - ``precise``：对每格 4 角调用 ``world_to_screen_pos`` 投影四边形取最小边长
 
-左侧面板：保持静态全列表，当前执行行以高亮色 + 可选半透明背景框标记（默认无打底、
-无阴影、无过渡，保证高亮行完全不透明地覆盖白色文本），区间为
-[该行操作 video_time, 下一个不同 video_time)；同刻相邻行按行序顺延（末行接管长区间）。
+左侧面板：保持静态全列表，以高亮色 + 可选半透明背景框标记"下一个将要执行"的
+操作行（默认无打底、无阴影、无过渡，保证高亮行完全不透明地覆盖白色文本），
+区间为 [上一个不同 video_time, 该行操作 video_time)，与地图数字规则一致：
+前一个操作执行完毕后立即高亮下一行，避免"当前行"语义下操作间长空窗
+（如部署完成到下一技能开始之间持续高亮已结束的操作）；末行接管
+[最后一个 video_time, 视频结束)。
 """
 
 from __future__ import annotations
@@ -51,7 +54,7 @@ DEFAULT_MAP_OVERLAY_CONFIG: dict[str, Any] = {
     "number_padding": 2,               # 数字与背景框间距
     "number_min_font_size": 8,         # 字号下限
     "fade_duration": 0.15,             # 数字淡入淡出时长（秒）
-    "panel_highlight_enabled": True,   # 左侧面板高亮当前操作
+    "panel_highlight_enabled": True,   # 左侧面板高亮"下一个将要执行"的操作行
     "panel_highlight_color": "#FFD700",
     "panel_highlight_background": "#000000",
     "panel_highlight_bg_alpha": 0.0,   # 高亮背景框不透明度 0~1（默认无打底）
@@ -64,9 +67,6 @@ _PANEL_PADDING = 10
 
 # 最小显示区间（秒）：区间过短会闪帧且难以辨认，直接跳过
 _MIN_INTERVAL = 0.05
-
-# 同刻相邻行组内，非末行的短过渡区间时长（秒）：瞬间操作完成后立即切到下一行高亮
-_SAME_TIMESTAMP_SLICE = 1.0
 
 
 def parse_resolution(resolution: str | None) -> tuple[int, int]:
@@ -412,11 +412,16 @@ def build_panel_highlight_clips(
     font_path: str,
     cfg: dict,
 ) -> list[TextClip]:
-    """构建左侧面板的当前操作高亮 clips（静态全列表 + 当前行高亮）
+    """构建左侧面板的"下一操作"高亮 clips（静态全列表 + 下一个将要执行的行高亮）
 
     高亮行与主文本块逐行对齐：使用相同的字体度量与 padding，每行位置
     按真实行距测量（见 _measure_line_top_offsets），避免等距近似随行数
     累积偏移导致高亮与白色文本错位（残影）。
+
+    区间语义与地图数字一致：行 i 高亮 [上一个不同 video_time, 该行
+    video_time)——上一操作执行完毕后立即预告下一行，不随"当前行"语义
+    在操作间长空窗；同刻行组内仅末行获得区间；末行接管
+    [最后一个 video_time, 视频结束)。
 
     Args:
         lines: 面板每行文本（format_actions_lines 输出，与 timeline 一一对应）
@@ -439,36 +444,29 @@ def build_panel_highlight_clips(
         logger.warning("操作均无有效 video_time，跳过面板高亮")
         return []
 
-    # 区间分配：每行 [start_i, 下一个不同 start)。
-    # 同刻相邻行（如 SkillDaemon 缺 video_time 回退到上一操作时刻）按行序顺延：
-    # 组内最后一行获得长区间（挂机等持续操作），前面的行各获得一个短过渡区间
-    # （瞬间操作完成后立即切到下一行高亮）。
+    # 区间分配（"下一个将要执行"语义）：
+    #   行 i: [prev_distinct, start_i)，prev_distinct 为上一个不同的 start
+    #   （首行为 switch_time）；start_i 与 prev_distinct 相同的同刻组内
+    #   非首行不产生区间（组内末行代表整组）；末行接管
+    #   [最后的不同 start, video_duration)。
     n = len(timeline)
-    starts: list[float] = [float(e["start"]) for e in timeline]
+    starts: list[float] = [0.0] * n
     ends: list[float] = [0.0] * n
-    last_distinct = float(video_duration)
-    i = n - 1
-    while i >= 0:
-        j = i
-        while j > 0 and abs(
-            float(timeline[j - 1]["start"]) - float(timeline[i]["start"])
-        ) < 1e-9:
-            j -= 1
-        group = i - j + 1  # 同刻组行数
-        if group == 1:
-            ends[j] = last_distinct
+    prev_distinct = float(switch_time)
+    for i in range(n):
+        s = float(timeline[i]["start"])
+        if s - prev_distinct >= _MIN_INTERVAL:
+            starts[i] = prev_distinct
+            ends[i] = s
+        if s - prev_distinct > 1e-9:
+            prev_distinct = s
+    last_s = float(timeline[-1]["start"])
+    if float(video_duration) - last_s >= _MIN_INTERVAL:
+        if ends[-1] > 0:
+            starts[-1] = min(starts[-1], last_s)  # 已有预告区间，无缝合并
         else:
-            # 组内 k 行同刻 T：前 k-1 行各分 δ 秒，最后一行接管 [T + (k-1)*δ, last_distinct)
-            span = max(last_distinct - float(timeline[j]["start"]), 0.0)
-            delta = min(_SAME_TIMESTAMP_SLICE, span / (group + 1))
-            for idx in range(group):
-                row = j + idx
-                s = float(timeline[row]["start"]) + idx * delta
-                e = s + delta if idx < group - 1 else last_distinct
-                starts[row] = s
-                ends[row] = e if e - s >= _MIN_INTERVAL else 0.0
-        last_distinct = float(timeline[j]["start"])
-        i = j - 1
+            starts[-1] = last_s
+        ends[-1] = float(video_duration)
 
     font_size = float(text_config.get("font_size", 25)) * float(text_config.get("font_scale", 1))
     measure_canvas = Canvas().font_family(font_path).font_size(font_size).padding(_PANEL_PADDING)

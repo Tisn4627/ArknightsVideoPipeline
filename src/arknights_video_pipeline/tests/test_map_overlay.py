@@ -330,19 +330,22 @@ class TestPanelHighlightClips:
         return ["1.二倍速", "2.部署 遥 ↓", "3.部署 米格鲁 ←", "4.技能 遥"]
 
     def test_intervals_follow_timeline(self):
+        """"下一操作"语义：行 i 高亮 [上一个不同 video_time, 该行 video_time)
+        前一个操作执行完毕后立即预告下一行（与地图数字规则一致）；
+        SpeedUp 与 switch_time 同刻不产生区间，末行接管至视频结束"""
         timeline = build_action_timeline(_make_actions(), switch_time=0.5, video_duration=10)
         clips = build_panel_highlight_clips(
             self._lines(), timeline, switch_time=0.5, video_duration=10,
             text_config={"font_size": 25, "text_x": 50, "text_y": 240},
             font_path=FONT_PATH, cfg={},
         )
-        assert len(clips) == 4
+        assert len(clips) == 3
+        assert [c.text for c in clips] == ["2.部署 遥 ↓", "3.部署 米格鲁 ←", "4.技能 遥"]
         intervals = sorted((c.start, c.start + c.duration) for c in clips)
         assert intervals == [
-            (0.5, 1.0),
-            (1.0, 2.0),
-            (2.0, 3.0),
-            (3.0, 10.0),
+            (0.5, 1.0),   # 行2: 首个操作后立即预告
+            (1.0, 2.0),   # 行3
+            (2.0, 10.0),  # 行4: 预告区间 + 末行接管，无缝合并
         ]
 
     def test_lines_aligned_with_block_text(self):
@@ -370,15 +373,15 @@ class TestPanelHighlightClips:
                 in_text = True
             elif not has and in_text:
                 in_text = False
-        # 单行高亮 clip 的内容顶部（相对 clip 顶部）
+        # 高亮 clip 的内容顶部须与主文本对应行内容顶部重合（≤1px 取整）
         single_top = int(np.where(
             block.render(self._lines()[0]).to_numpy("RGBA")[:, :, 3].max(axis=1) > 0
         )[0][0])
-        positions = sorted(c.position(0) for c in clips)
-        assert len(positions) == len(tops)
-        for i, (px, py) in enumerate(positions):
+        # 新语义下 SpeedUp 行（与 switch_time 同刻）无区间，clips 从第 2 行开始
+        assert [c.text for c in clips] == self._lines()[1:]
+        for i, clip in enumerate(clips, 1):
+            px, py = clip.position(0)
             assert px == 50
-            # 高亮内容顶部 = 240 + tops[i]，须与主文本行内容顶部重合（≤1px 取整）
             assert abs((py + single_top) - (240 + tops[i])) < 1.0
 
     def test_line_count_mismatch_returns_empty(self):
@@ -401,8 +404,9 @@ class TestPanelHighlightClips:
 
     def test_same_timestamp_adjacent_row_not_skipped(self):
         """同刻相邻行（如 SkillDaemon 缺 video_time 回退到上一操作时刻）：
-        按行序顺延 —— 组内最后一行接管长区间（挂机提示），前面的行各获得
-        短过渡区间后立即切换，任何一行都不因零长度区间被跳过"""
+        行 i 高亮 [上一不同 video_time, 该行 video_time)——同刻组内仅末行
+        获得区间（组内非首行零区间不产生 clip），末行接管长区间（挂机提示），
+        任何操作都不会被遗漏展示"""
         actions = [
             {"type": "Deploy", "video_time": 1.0},
             {"type": "Skill", "video_time": 3.0},
@@ -415,14 +419,15 @@ class TestPanelHighlightClips:
         )
         assert len(clips) == 3
         assert clips[0].text == "1.部署"
-        assert abs(clips[0].start - 1.0) < 1e-6
-        assert abs(clips[0].start + clips[0].duration - 3.0) < 1e-6
-        # 同刻组（#2 技能、#3 技能一键）：#2 得 1s 短过渡，之后立即切到 #3
+        assert abs(clips[0].start - 0.5) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 1.0) < 1e-6
+        # 行2 在 [1.0, 3.0) 预告（下一个要执行的是技能）
         assert clips[1].text == "2.技能"
-        assert abs(clips[1].start - 3.0) < 1e-6
-        assert abs(clips[1].duration - 1.0) < 1e-6
+        assert abs(clips[1].start - 1.0) < 1e-6
+        assert abs(clips[1].start + clips[1].duration - 3.0) < 1e-6
+        # 行3（挂机）接管 [3.0, 10.0)
         assert clips[2].text == "3.技能一键"
-        assert abs(clips[2].start - 4.0) < 1e-6
+        assert abs(clips[2].start - 3.0) < 1e-6
         assert abs(clips[2].start + clips[2].duration - 10.0) < 1e-6
 
     def test_default_highlight_has_no_background_or_shadow_or_fade(self):
@@ -433,7 +438,7 @@ class TestPanelHighlightClips:
             text_config={"font_size": 25, "text_x": 50, "text_y": 240},
             font_path=FONT_PATH, cfg={},
         )
-        assert len(clips) == 4
+        assert len(clips) == 3
         for clip in clips:
             style = clip._canvas._style
             assert not style.background_color.was_set  # 无打底
@@ -457,7 +462,7 @@ class TestBuildMapOverlayClips:
             map_cfg={}, text_config={"font_size": 25},
             font_path=FONT_PATH,
         )
-        assert len(clips) == 4  # 只有高亮，无地图数字
+        assert len(clips) == 3  # 只有高亮（SpeedUp 行同刻 switch_time 无区间），无地图数字
         assert all(hasattr(c, "text") for c in clips)
 
     def test_panel_highlight_disabled(self, level):

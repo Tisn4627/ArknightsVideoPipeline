@@ -367,7 +367,7 @@ def compose_video(config):
         else:
             logger.info("  操作文本为空，跳过")
 
-        # 逐操作显示：地图操作序号 + 左侧面板当前操作高亮
+        # 逐操作显示：地图操作序号 + 左侧面板高亮"下一个将要执行"的操作行
         # （需 copilot JSON 含 video_time 扩展字段，缺失时降级为静态文本）
         map_cfg = config.get("map_overlay", {})
         if map_cfg.get("enabled", False):
