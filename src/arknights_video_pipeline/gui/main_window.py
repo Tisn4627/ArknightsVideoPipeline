@@ -734,6 +734,12 @@ class MainWindow(QMainWindow):
             self._show_warning(tr("msg.validation_failed_title"), "\n".join(errors))
             return
 
+        # 将 GUI 中的全部配置（含 track/formation/actions/video_compose 等
+        # 子配置）落盘后再运行：流水线各步骤从磁盘读取子配置，而此前仅在
+        # closeEvent 中 save_all()，本次会话内修改的子配置不会生效
+        # （如开启 style1 逐操作显示后输出视频中缺失对应叠加）。
+        self._config.save_all()
+
         self._batch_list.reset_states()
         self._progress_card.reset()
         self._log_viewer.clear_logs()
