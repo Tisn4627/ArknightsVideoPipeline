@@ -477,7 +477,8 @@ class MainWindow(QMainWindow):
         self._service.file_started.connect(self._batch_list.set_file_running)
         self._service.file_progress.connect(self._batch_list.set_file_progress)
         self._service.file_finished.connect(
-            lambda idx, success, _report: self._batch_list.set_file_finished(idx, success)
+            lambda idx, success, _report, cancelled:
+                self._batch_list.set_file_finished(idx, success, cancelled)
         )
         self._service.overall_progress.connect(self._progress_card.set_progress)
         self._service.log_emitted.connect(self._log_viewer.append)
@@ -729,23 +730,32 @@ class MainWindow(QMainWindow):
             self._show_warning(tr("msg.no_video_title"), tr("msg.no_video_text"))
             return
 
-        errors = self._service.validate_batch(paths)
-        if errors:
-            self._show_warning(tr("msg.validation_failed_title"), "\n".join(errors))
-            return
+        try:
+            errors = self._service.validate_batch(paths)
+            if errors:
+                self._show_warning(
+                    tr("msg.validation_failed_title"), "\n".join(errors)
+                )
+                return
 
-        # 将 GUI 中的全部配置（含 track/formation/actions/video_compose 等
-        # 子配置）落盘后再运行：流水线各步骤从磁盘读取子配置，而此前仅在
-        # closeEvent 中 save_all()，本次会话内修改的子配置不会生效
-        # （如开启 style1 逐操作显示后输出视频中缺失对应叠加）。
-        self._config.save_all()
+            # 将 GUI 中的全部配置（含 track/formation/actions/video_compose 等
+            # 子配置）落盘后再运行：流水线各步骤从磁盘读取子配置，而此前仅在
+            # closeEvent 中 save_all()，本次会话内修改的子配置不会生效
+            # （如开启 style1 逐操作显示后输出视频中缺失对应叠加）。
+            self._config.save_all()
 
-        self._batch_list.reset_states()
-        self._progress_card.reset()
-        self._log_viewer.clear_logs()
-        self._set_running_ui(True)
-        if not self._service.run_pipeline(paths):
+            self._batch_list.reset_states()
+            self._progress_card.reset()
+            self._log_viewer.clear_logs()
+            self._set_running_ui(True)
+            if not self._service.run_pipeline(paths):
+                self._set_running_ui(False)
+        except Exception as exc:
+            # 兜底：任何异常都不应让 UI 卡在"运行中"状态
             self._set_running_ui(False)
+            self._show_critical(
+                tr("msg.completed_errors_title"), f"{type(exc).__name__}: {exc}"
+            )
 
     def _on_cancel(self) -> None:
         self._service.cancel_pipeline()

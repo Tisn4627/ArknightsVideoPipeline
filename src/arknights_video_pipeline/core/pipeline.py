@@ -800,8 +800,9 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--style", "-s",
-        default="style1",
-        help="视频合成风格名称 (默认: style1)。对应 config/video_compose/ 目录下的同名 JSON 文件",
+        default=None,
+        help="视频合成风格名称（未指定时沿用配置中的 video_compose_style，"
+             "默认 style1）。对应 config/video_compose/ 目录下的同名 JSON 文件",
     )
     parser.add_argument(
         "--dry-run",
@@ -995,8 +996,12 @@ def main() -> None:
     for v in args.video:
         videos.append(v if os.path.isabs(v) else os.path.abspath(v))
 
+    # ── 加载配置 ──────────────────────────────────────────
+    config_mgr.load_pipeline_config(args.config)
+
     # ── 背景板图片路径（整批共享） ────────────────────────
-    style = args.style
+    # 未指定 --style 时沿用配置中的 video_compose_style（CLI 参数优先于配置）
+    style = args.style or config_mgr.get_video_compose_style()
     background_image_path = None
     if args.background_image:
         background_image_path = args.background_image
@@ -1009,9 +1014,6 @@ def main() -> None:
             f"支持的图片格式: {', '.join(sorted(SUPPORTED_IMAGE_EXTENSIONS))}\n"
             "用法: python main.py <video...> --background-image <image>"
         )
-
-    # ── 加载配置 ──────────────────────────────────────────
-    config_mgr.load_pipeline_config(args.config)
 
     cli_overrides: dict[str, Any] = {}
     if args.maa_path:
@@ -1034,9 +1036,13 @@ def main() -> None:
         cli_overrides["log_level"] = args.log_level
     if args.no_log_file:
         cli_overrides["log_to_file"] = False
-    # 根据风格名称设置视频合成配置路径
-    cli_overrides["video_compose_style"] = style
-    cli_overrides["video_compose_config"] = f"config/video_compose/{style}.json"
+    if args.style:
+        # 根据风格名称设置视频合成配置路径（仅在显式指定时覆盖用户配置）
+        style_name = args.style
+        cli_overrides["video_compose_style"] = style_name
+        cli_overrides["video_compose_config"] = (
+            f"config/video_compose/{style_name}.json"
+        )
     config_mgr.merge_cli_overrides(cli_overrides)
 
     # 同步 FFmpeg 路径配置到 utils 模块全局（CLI 路径，不经过 ConfigProxy）
@@ -1122,6 +1128,9 @@ def main() -> None:
             )
         except VideoValidationError as exc:
             logger.error(f"视频验证失败，跳过该文件: {exc}")
+            continue
+        except Exception as exc:  # 防御：意外异常不应中断整批
+            logger.error(f"视频验证发生意外错误，跳过该文件: {exc}")
             continue
 
         try:

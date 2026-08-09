@@ -41,7 +41,7 @@ class PipelineService(QObject):
     # ── 单文件级信号（第一个参数始终为文件在队列中的索引） ──
     file_started = pyqtSignal(int, str)                       # index, video_path
     file_progress = pyqtSignal(int, int, str)                 # index, percent, message
-    file_finished = pyqtSignal(int, bool, dict)               # index, success, report
+    file_finished = pyqtSignal(int, bool, dict, bool)  # idx, success, report, cancelled
     step_started = pyqtSignal(int, str, str)                  # index, step_key, step_desc
     step_finished = pyqtSignal(int, str, bool, float, list)   # index, step_key, success, elapsed, warnings
 
@@ -249,7 +249,7 @@ class PipelineService(QObject):
                 )
                 self.file_started.emit(idx, video_path)
                 self.file_progress.emit(idx, 0, "处理失败")
-                self.file_finished.emit(idx, False, {"error": str(exc)})
+                self.file_finished.emit(idx, False, {"error": str(exc)}, False)
                 self._contributions[idx] = 100
                 continue
 
@@ -296,21 +296,23 @@ class PipelineService(QObject):
     def _on_worker_finished(self, idx: int, success: bool,
                             report_dict: dict[str, Any], cancelled: bool) -> None:
         """单个 worker 完成回调"""
+        cancelled = cancelled or self._cancelled
         if success:
             self._success_count += 1
             self._file_percents[idx] = 100
         else:
-            self.file_progress.emit(idx, self._file_percents[idx], "处理失败")
+            message = "已取消" if cancelled else "处理失败"
+            self.file_progress.emit(idx, self._file_percents[idx], message)
         # 无论成功失败，已处理完毕的文件对总体进度贡献 100
         self._contributions[idx] = 100
 
         if success:
             self.file_progress.emit(idx, 100, "已完成")
-        self.file_finished.emit(idx, success, report_dict)
+        self.file_finished.emit(idx, success, report_dict, cancelled)
+        status_text = "处理完成" if success else ("已取消" if cancelled else "处理失败")
         self.log_emitted.emit(
             "INFO" if success else "ERROR",
-            f"[{idx + 1}/{len(self._queue)}] "
-            f"{'处理完成' if success else '处理失败'}: {self._queue[idx]}",
+            f"[{idx + 1}/{len(self._queue)}] {status_text}: {self._queue[idx]}",
         )
 
         # 清理该 worker

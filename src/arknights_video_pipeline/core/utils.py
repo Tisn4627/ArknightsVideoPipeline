@@ -312,6 +312,8 @@ def _run_ffprobe(video_path: str, timeout: int = 60) -> dict[str, Any]:
         raise VideoValidationError(
             f"无法解析ffprobe输出: {video_path}"
         ) from exc
+    except OSError as exc:
+        raise VideoValidationError(f"ffprobe执行失败: {exc}") from exc
 
 
 def _extract_video_stream(probe: dict, video_path: str) -> dict:
@@ -350,15 +352,26 @@ def validate_video_file(video_path: str, timeout: int = 60) -> dict[str, Any]:
     if not os.path.exists(video_path):
         raise VideoValidationError(f"视频文件不存在: {video_path}")
 
-    if os.path.getsize(video_path) == 0:
-        raise VideoValidationError(f"视频文件为空: {video_path}")
+    try:
+        if os.path.getsize(video_path) == 0:
+            raise VideoValidationError(f"视频文件为空: {video_path}")
+    except VideoValidationError:
+        raise
+    except OSError as exc:
+        raise VideoValidationError(f"无法访问视频文件: {video_path}") from exc
 
     probe = _run_ffprobe(video_path, timeout=timeout)
     vs = _extract_video_stream(probe, video_path)
+    try:
+        width = int(vs.get("width", 0))
+        height = int(vs.get("height", 0))
+        duration = float(probe.get("format", {}).get("duration", 0))
+    except (TypeError, ValueError) as exc:
+        raise VideoValidationError(f"无法解析视频文件信息: {video_path}") from exc
     return {
-        "width": int(vs.get("width", 0)),
-        "height": int(vs.get("height", 0)),
-        "duration": float(probe.get("format", {}).get("duration", 0)),
+        "width": width,
+        "height": height,
+        "duration": duration,
         "file_path": video_path,
         "file_size": os.path.getsize(video_path),
     }
@@ -640,10 +653,15 @@ def get_switch_time(track_result_path: str) -> float:
         return 3.0
 
     disappear_time = result.get("disappear_time")
-    if disappear_time is not None and disappear_time > 0:
-        return disappear_time
+    if isinstance(disappear_time, (int, float)) and disappear_time > 0:
+        return float(disappear_time)
 
     # 回退：使用首次出现时间 + 持续时长
-    first_appear = result.get("first_appear_time", 0)
-    duration_visible = result.get("duration_visible", 3.0)
+    # 未检测到按钮时上述字段可能为 None，逐项兜底避免 TypeError
+    first_appear = result.get("first_appear_time")
+    duration_visible = result.get("duration_visible")
+    if not isinstance(first_appear, (int, float)):
+        first_appear = 0
+    if not isinstance(duration_visible, (int, float)) or duration_visible <= 0:
+        duration_visible = 3.0
     return first_appear + duration_visible

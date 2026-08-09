@@ -30,6 +30,7 @@ STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"
 STATUS_SUCCESS = "success"
 STATUS_FAILED = "failed"
+STATUS_CANCELLED = "cancelled"
 
 # 状态码 → 翻译 key
 _STATUS_KEYS: dict[str, str] = {
@@ -37,6 +38,7 @@ _STATUS_KEYS: dict[str, str] = {
     STATUS_RUNNING: "batch.status.running",
     STATUS_SUCCESS: "batch.status.success",
     STATUS_FAILED: "batch.status.failed",
+    STATUS_CANCELLED: "batch.status.cancelled",
 }
 
 
@@ -212,6 +214,7 @@ class BatchVideoRow(QWidget):
             STATUS_RUNNING: c.primary,
             STATUS_SUCCESS: c.success,
             STATUS_FAILED: c.error,
+            STATUS_CANCELLED: c.warning,
         }.get(self._status, c.on_surface_variant)
         return (
             f"color: {color}; font-weight: 500; border: none; background: transparent;"
@@ -223,6 +226,7 @@ class BatchVideoRow(QWidget):
             STATUS_RUNNING: c.primary,
             STATUS_SUCCESS: c.success,
             STATUS_FAILED: c.error,
+            STATUS_CANCELLED: c.warning,
         }.get(self._status, c.primary)
         return (
             "QProgressBar {"
@@ -384,9 +388,13 @@ class BatchVideoList(QWidget):
         if 0 <= index < len(self._rows):
             self._rows[index].set_status(STATUS_RUNNING, percent)
 
-    def set_file_finished(self, index: int, success: bool) -> None:
+    def set_file_finished(self, index: int, success: bool,
+                          cancelled: bool = False) -> None:
         if 0 <= index < len(self._rows):
-            status = STATUS_SUCCESS if success else STATUS_FAILED
+            if cancelled:
+                status = STATUS_CANCELLED
+            else:
+                status = STATUS_SUCCESS if success else STATUS_FAILED
             self._rows[index].set_status(status, None)
 
     # ── 主题 ─────────────────────────────────────────────

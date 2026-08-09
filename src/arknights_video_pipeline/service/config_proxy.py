@@ -83,6 +83,13 @@ class ConfigProxy(QObject):
         # 重新加载子配置（pipeline.json 中的路径可能已变更）
         for name in self._SUB_CONFIG_PATHS:
             self._load_sub_config_into_memory(name)
+        # 重新同步 FFmpeg 配置到 utils 模块全局（重置/重新加载后，
+        # 实际生效值必须与磁盘一致，否则 UI 显示与运行时行为脱节）
+        from arknights_video_pipeline.core.utils import set_ffmpeg_config
+        set_ffmpeg_config(
+            bool(self._config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
+            self._config_mgr.pipeline.get("ffmpeg_path", ""),
+        )
 
     # ── 子配置管理（track/formation/actions/video_compose） ────
 

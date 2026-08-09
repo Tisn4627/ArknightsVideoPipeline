@@ -189,6 +189,7 @@
   "batch.status.running": "Processing",
   "batch.status.success": "Done",
   "batch.status.failed": "Failed",
+  "batch.status.cancelled": "Cancelled",
   "batch.tooltip.up": "Move up",
   "batch.tooltip.down": "Move down",
   "batch.tooltip.delete": "Remove",

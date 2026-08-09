@@ -189,6 +189,7 @@
   "batch.status.running": "处理中",
   "batch.status.success": "已完成",
   "batch.status.failed": "失败",
+  "batch.status.cancelled": "已取消",
   "batch.tooltip.up": "上移",
   "batch.tooltip.down": "下移",
   "batch.tooltip.delete": "移除",
