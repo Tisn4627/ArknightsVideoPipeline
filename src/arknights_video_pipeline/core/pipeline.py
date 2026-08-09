@@ -46,6 +46,7 @@ from arknights_video_pipeline.core.utils import (
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
     ensure_dir,
+    ensure_ffmpeg_in_path,
     format_duration,
     format_file_size,
     load_config,
@@ -851,6 +852,18 @@ def _init_config(module: str) -> list[str]:
         print(f"可用模块: {valid}")
         sys.exit(1)
 
+    # 动态导入 video_compose 会触发 movielite 导入时检查（shutil.which 查找
+    # ffmpeg/ffprobe，缺失时抛 RuntimeError）。在导入前先应用 FFmpeg 路径配置
+    # 并确保其在 PATH 中，避免无系统 FFmpeg、仅配置了 resource/ffmpeg/bin 时
+    # --init-config 或 GUI 重置配置失败（与 build_exe 的 _preapply_ffmpeg_config 对齐）。
+    _cfg_mgr = ConfigManager(PROJECT_ROOT)
+    _cfg_mgr.load_pipeline_config()
+    set_ffmpeg_config(
+        bool(_cfg_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
+        _cfg_mgr.pipeline.get("ffmpeg_path", ""),
+    )
+    ensure_ffmpeg_in_path()
+
     generated: list[str] = []
     for mod_name in modules:
         filename, source_module, attr_name = _MODULE_CONFIGS[mod_name]
@@ -860,7 +873,9 @@ def _init_config(module: str) -> list[str]:
         try:
             mod = importlib.import_module(source_module)
             default_config = getattr(mod, attr_name, {})
-        except (ImportError, AttributeError) as exc:
+        except (ImportError, AttributeError, RuntimeError) as exc:
+            # RuntimeError 防御：movielite 等第三方库在导入时可能因环境
+            # 不满足（如 ffmpeg 缺失）抛 RuntimeError，同样按跳过处理
             print(f"警告: 无法加载 {mod_name} 的默认配置 ({exc})，跳过")
             continue
 

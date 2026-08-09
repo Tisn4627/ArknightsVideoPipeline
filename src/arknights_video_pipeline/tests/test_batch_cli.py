@@ -13,13 +13,14 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from unittest import mock
 
 import pytest
 
 from arknights_video_pipeline.core.exceptions import VideoValidationError
-from arknights_video_pipeline.core.pipeline import build_argparser, main
+from arknights_video_pipeline.core.pipeline import _init_config, build_argparser, main
 
 
 # ── Mock 目标常量（提升可读性） ────────────────────────────
@@ -90,6 +91,45 @@ class TestMainEntrypoint:
             main()
         mock_init.assert_called_once_with("all")
         mock_pipeline_cls.assert_not_called()
+
+
+# ── _init_config FFmpeg 预应用 ─────────────────────────────
+
+
+class TestInitConfigFfmpegPreApply:
+    """验证 _init_config 在导入 video_compose（movielite 导入时检查 ffmpeg）前
+    先应用 FFmpeg 路径配置，并在导入失败时优雅跳过而非崩溃"""
+
+    def test_init_config_compose_writes_config(self, tmp_path, monkeypatch) -> None:
+        """无系统 FFmpeg 时（仅自定义 ffmpeg 目录），--init-config compose 仍可生成"""
+        monkeypatch.setattr(
+            "arknights_video_pipeline.core.pipeline.PROJECT_ROOT", str(tmp_path)
+        )
+        result = _init_config("compose")
+        assert result == [
+            os.path.join(str(tmp_path), "config", "video_compose/style1.json")
+        ]
+        assert os.path.exists(result[0])
+
+    def test_init_config_skips_module_on_import_runtime_error(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """导入时抛 RuntimeError（movielite 检查 ffmpeg 缺失）按跳过处理，不崩溃"""
+        monkeypatch.setattr(
+            "arknights_video_pipeline.core.pipeline.PROJECT_ROOT", str(tmp_path)
+        )
+        with mock.patch(
+            f"{_PIPE}.ensure_ffmpeg_in_path"
+        ) as mock_ensure, \
+             mock.patch(f"{_PIPE}.set_ffmpeg_config") as mock_set, \
+             mock.patch(
+                 f"{_PIPE}.importlib.import_module",
+                 side_effect=RuntimeError("Could not find required command(s): ffmpeg"),
+             ):
+            result = _init_config("all")
+        mock_ensure.assert_called_once()
+        mock_set.assert_called_once()
+        assert result == []
 
 
 # ── 批量执行 ───────────────────────────────────────────────

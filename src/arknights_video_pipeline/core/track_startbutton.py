@@ -24,6 +24,7 @@ from arknights_video_pipeline.core.battlestart import (
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT,
     _no_window_kwargs,
+    ensure_ffmpeg_in_path,
     load_config,
     save_default_config,
 )
@@ -255,6 +256,9 @@ def downscale_video(video_path, target_height=720):
     logger.info(f"视频分辨率 {orig_w}x{orig_h} >= {target_height}p，转码为 {target_w}x{target_height}")
 
     # 使用ffmpeg转码到临时文件
+    # 先确保 ffmpeg 在 PATH 中（自定义 ffmpeg 目录或系统 PATH），
+    # 使本步骤在跳过前置步骤（copilot/track 之前的校验）时也可独立工作
+    ensure_ffmpeg_in_path()
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".mp4", prefix="track_downscaled_")
     os.close(tmp_fd)
 
