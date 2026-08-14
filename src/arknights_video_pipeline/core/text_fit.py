@@ -27,11 +27,20 @@ from dataclasses import dataclass
 from typing import Any
 
 from pictex import Canvas
+from pictex.models import CropMode, FontSmoothing, RenderProps
+from pictex.nodes import TextNode
+
+# 导入即应用 pictex 字体缓存补丁（消除测量循环中的字体重复加载与
+# 内存泄漏，渲染结果不变；幂等）
+from arknights_video_pipeline.core import pictex_compat  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 # 与 video_compose.create_text_clip / map_overlay._PANEL_PADDING 一致的主文本内边距
 PANEL_PADDING = 10
+
+# 宽度/高度测量共用渲染属性（与 Canvas.render 的默认参数一致）
+_MEASURE_PROPS = RenderProps(False, CropMode.NONE, FontSmoothing.SUBPIXEL)
 
 
 def resolve_text_anchor(
@@ -56,12 +65,28 @@ def resolve_text_anchor(
     return x, y
 
 
-def _line_width(canvas: Canvas, text: str) -> int:
+def _text_size(style: Any, padding: int, text: str) -> tuple[int, int]:
+    """测量单节点文本的渲染宽高（含两侧 padding）
+
+    与 ``Canvas.render(text)`` 的 .width/.height 逐像素一致（padding
+    为整数时 ``ceil(pad + 内容宽) == pad + ceil(内容宽)``），但走
+    TextNode 的排版测量路径，跳过光栅化与图像处理——实测快约 12 倍，
+    且不随渲染次数累积内存（配合 pictex_compat 补丁）。
+    """
+    node = TextNode(style, (text,))
+    node.init_render_dependencies(_MEASURE_PROPS)
+    return (
+        node.compute_intrinsic_width() + padding * 2,
+        node.compute_intrinsic_height() + padding * 2,
+    )
+
+
+def _line_width(style: Any, padding: int, text: str) -> int:
     """渲染单行文本的像素宽度（含两侧 padding，与最终渲染一致）"""
-    return canvas.render(text).width
+    return _text_size(style, padding, text)[0]
 
 
-def _wrap_line(canvas: Canvas, line: str, max_width: int) -> list[str]:
+def _wrap_line(style: Any, padding: int, line: str, max_width: int) -> list[str]:
     """将单行文本按可用宽度自动换行
 
     换行规则：
@@ -69,14 +94,14 @@ def _wrap_line(canvas: Canvas, line: str, max_width: int) -> list[str]:
       - 否则贪心逐字符累积，超出宽度时优先回退到段内最后一个空格断行
         （保持英文单词完整），无空格（如纯 CJK）则按字符断行。
     """
-    if _line_width(canvas, line) <= max_width:
+    if _line_width(style, padding, line) <= max_width:
         return [line]
 
     wrapped: list[str] = []
     seg = ""
     for ch in line:
         candidate = seg + ch
-        if _line_width(canvas, candidate) <= max_width:
+        if _line_width(style, padding, candidate) <= max_width:
             seg = candidate
             continue
         # 超宽：优先在段内最后一个空格处断行，保持单词完整
@@ -130,7 +155,9 @@ def fit_actions_lines(
     调用方须用该锚点渲染文本，保证预览/合成/高亮三者对齐。
     """
     font_size = float(text_cfg.get("font_size", 25)) * float(text_cfg.get("font_scale", 1))
+    # 测量用 Style：与 Canvas.render 完全相同的字体/内边距配置
     canvas = Canvas().font_family(font_path).font_size(font_size).padding(padding)
+    style = canvas._style
 
     x_start, y_start = resolve_text_anchor(
         text_x, text_y, max_text_left, max_text_top,
@@ -157,7 +184,7 @@ def fit_actions_lines(
             fitted_lines.append("")
             continue
         wrapped = (
-            _wrap_line(canvas, line, available_width)
+            _wrap_line(style, padding, line, available_width)
             if available_width is not None
             else [line]
         )
@@ -168,14 +195,14 @@ def fit_actions_lines(
     # 2. 高度限制：按操作组从末尾截断，直到文本块高度放得下
     dropped = 0
     if available_height is not None:
-        block_height = canvas.render("\n".join(fitted_lines)).height
+        block_height = _text_size(style, padding, "\n".join(fitted_lines))[1]
         if block_height > available_height:
             # 先按真实行距粗估批量丢弃，再逐组精确收敛（避免长列表逐行渲染）。
             # 注意：render("0").height 含两侧 padding（58px），实际每行增量约为
             # 38px——用两行块差值得出精确增量，避免粗估过度截断
             if fitted_lines:
-                single_height = max(1, canvas.render("0").height)
-                double_height = max(1, canvas.render("0\n0").height)
+                single_height = max(1, _text_size(style, padding, "0")[1])
+                double_height = max(1, _text_size(style, padding, "0\n0")[1])
                 line_increment = max(1, double_height - single_height)
                 bulk = max(0, len(fitted_lines) - (available_height // line_increment))
             else:
@@ -186,7 +213,7 @@ def fit_actions_lines(
                 dropped += 1
                 del fitted_lines[start:]
             while len(line_groups) > 1:
-                block_height = canvas.render("\n".join(fitted_lines)).height
+                block_height = _text_size(style, padding, "\n".join(fitted_lines))[1]
                 if block_height <= available_height:
                     break
                 start, end = line_groups.pop()
