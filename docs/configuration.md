@@ -49,10 +49,8 @@ python main.py --init-config compose
 | `log_to_file` | boolean | `true` | 是否将日志输出到文件 |
 | `log_max_bytes` | integer | `10485760` | 单个日志文件最大字节数（10MB），超过后触发轮转 |
 | `log_backup_count` | integer | `3` | 保留的历史日志文件数量 |
-| `maa_timeout_seconds` | integer | `600` | MAA 识别超时时间（秒）。`copilot_timeout_seconds` 未设置时作为通用超时回退值 |
-| `maa_max_retries` | integer | `2` | MAA 识别最大重试次数。`copilot_max_retries` 未设置时作为通用重试次数回退值 |
-| `copilot_timeout_seconds` | integer | `600` | 识别通用超时时间（秒），两个后端共用；优先于 `maa_timeout_seconds` |
-| `copilot_max_retries` | integer | `2` | 识别通用最大重试次数，两个后端共用；优先于 `maa_max_retries` |
+| `copilot_timeout_seconds` | integer | `600` | 识别统一超时时间（秒），recognition/maa 两后端共用（已合并原 `maa_timeout_seconds`） |
+| `copilot_max_retries` | integer | `2` | 识别统一最大重试次数，recognition/maa 两后端共用（已合并原 `maa_max_retries`） |
 | `formation` | string | `"config/formation.json"` | 编队转文本配置文件路径 |
 | `actions` | string | `"config/actions.json"` | 操作转文本配置文件路径 |
 | `track` | string | `"config/track.json"` | 开始按钮识别配置文件路径 |
@@ -78,8 +76,6 @@ python main.py --init-config compose
         "resource_dir": ""
     },
     "maa_path": "",
-    "maa_timeout_seconds": 600,
-    "maa_max_retries": 2,
     "copilot_timeout_seconds": 600,
     "copilot_max_retries": 2,
     "output_dir": "output",

@@ -441,8 +441,6 @@ class MainWindow(QMainWindow):
         sp.log_to_file_changed.connect(self._config.set_log_to_file)
         sp.log_max_bytes_changed.connect(self._config.set_log_max_bytes)
         sp.log_backup_count_changed.connect(self._config.set_log_backup_count)
-        sp.maa_timeout_changed.connect(self._config.set_maa_timeout)
-        sp.maa_max_retries_changed.connect(self._config.set_maa_max_retries)
         sp.formation_path_changed.connect(self._config.set_formation_path)
         sp.actions_path_changed.connect(self._config.set_actions_path)
         sp.track_path_changed.connect(self._config.set_track_path)
@@ -530,12 +528,10 @@ class MainWindow(QMainWindow):
         # FFmpeg 路径配置：从 pipeline.json 恢复自定义开关与路径
         sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
         sp.set_ffmpeg_path(self._config.ffmpeg_path())
-        # 新增 pipeline.json 字段：日志/MAA 超时/重试/子配置路径
+        # 新增 pipeline.json 字段：日志/统一超时重试/子配置路径
         sp.set_log_to_file(self._config.log_to_file())
         sp.set_log_max_bytes(self._config.log_max_bytes())
         sp.set_log_backup_count(self._config.log_backup_count())
-        sp.set_maa_timeout(self._config.maa_timeout())
-        sp.set_maa_max_retries(self._config.maa_max_retries())
         sp.set_formation_path(self._config.formation_path())
         sp.set_actions_path(self._config.actions_path())
         sp.set_track_path(self._config.track_path())
@@ -631,8 +627,6 @@ class MainWindow(QMainWindow):
             sp.set_log_to_file(self._config.log_to_file())
             sp.set_log_max_bytes(self._config.log_max_bytes())
             sp.set_log_backup_count(self._config.log_backup_count())
-            sp.set_maa_timeout(self._config.maa_timeout())
-            sp.set_maa_max_retries(self._config.maa_max_retries())
             sp.set_formation_path(self._config.formation_path())
             sp.set_actions_path(self._config.actions_path())
             sp.set_track_path(self._config.track_path())

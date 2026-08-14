@@ -36,10 +36,8 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
 
     # === MAA 后端配置（仅 backend=maa 时生效）===
     "maa_path": "",
-    "maa_timeout_seconds": 600,
-    "maa_max_retries": 2,
 
-    # === 通用（两后端共用）===
+    # === 通用（recognition/maa 两后端共用的统一超时与重试）===
     "copilot_timeout_seconds": 600,
     "copilot_max_retries": 2,
 
@@ -223,12 +221,6 @@ class ConfigManager:
         level_str = self.pipeline.get("log_level", "INFO").upper()
         return getattr(logging, level_str, logging.INFO)
 
-    def get_maa_timeout(self) -> int:
-        return self.pipeline.get("maa_timeout_seconds", 600)
-
-    def get_maa_max_retries(self) -> int:
-        return self.pipeline.get("maa_max_retries", 2)
-
     # ── 后端选择（recognition / maa）────────────────────────
 
     def get_copilot_backend(self) -> str:
@@ -236,24 +228,12 @@ class ConfigManager:
         return str(self.pipeline.get("copilot_backend", "recognition")).lower()
 
     def get_copilot_timeout(self) -> int:
-        """获取 copilot 识别通用超时（秒）
-
-        优先 copilot_timeout_seconds，回退 maa_timeout_seconds（兼容旧配置）。
-        """
-        return self.pipeline.get(
-            "copilot_timeout_seconds",
-            self.pipeline.get("maa_timeout_seconds", 600),
-        )
+        """获取 copilot 识别统一超时（秒），recognition/maa 两后端共用"""
+        return self.pipeline.get("copilot_timeout_seconds", 600)
 
     def get_copilot_max_retries(self) -> int:
-        """获取 copilot 识别通用重试次数
-
-        优先 copilot_max_retries，回退 maa_max_retries（兼容旧配置）。
-        """
-        return self.pipeline.get(
-            "copilot_max_retries",
-            self.pipeline.get("maa_max_retries", 2),
-        )
+        """获取 copilot 识别统一重试次数，recognition/maa 两后端共用"""
+        return self.pipeline.get("copilot_max_retries", 2)
 
     def get_recognition_config(self) -> dict[str, Any]:
         """获取 Recognition 后端子配置块（缺失键回退默认值）"""

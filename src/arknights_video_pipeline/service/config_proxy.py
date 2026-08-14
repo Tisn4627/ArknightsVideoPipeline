@@ -249,6 +249,8 @@ class ConfigProxy(QObject):
             )
         self.set("copilot_backend", backend)
 
+    # ── Copilot 统一超时与重试（recognition/maa 两后端共用） ─
+
     def copilot_timeout(self) -> int:
         try:
             return int(self.get("copilot_timeout_seconds", 600))
@@ -390,26 +392,6 @@ class ConfigProxy(QObject):
     def set_log_backup_count(self, n: int) -> None:
         self.set("log_backup_count", int(n))
 
-    # ── MAA 超时与重试 ────────────────────────────────────
-
-    def maa_timeout(self) -> int:
-        try:
-            return int(self.get("maa_timeout_seconds", 600))
-        except (TypeError, ValueError):
-            return 600
-
-    def set_maa_timeout(self, seconds: int) -> None:
-        self.set("maa_timeout_seconds", int(seconds))
-
-    def maa_max_retries(self) -> int:
-        try:
-            return int(self.get("maa_max_retries", 2))
-        except (TypeError, ValueError):
-            return 2
-
-    def set_maa_max_retries(self, n: int) -> None:
-        self.set("maa_max_retries", int(n))
-
     # ── 子配置文件路径（formation/actions/track） ──────────
 
     def formation_path(self) -> str:
@@ -440,7 +422,6 @@ class ConfigProxy(QObject):
         overrides: dict[str, Any] = {}
         for key in ["maa_path", "output_dir", "log_level", "log_to_file",
                     "log_max_bytes", "log_backup_count",
-                    "maa_timeout_seconds", "maa_max_retries",
                     "formation", "actions", "track",
                     "video_compose_style", "video_compose_config",
                     "ffmpeg_custom_enabled", "ffmpeg_path"]:

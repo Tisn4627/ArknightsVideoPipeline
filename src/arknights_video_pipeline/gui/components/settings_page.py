@@ -73,8 +73,6 @@ class SettingsPage(QWidget):
     log_to_file_changed = pyqtSignal(bool)
     log_max_bytes_changed = pyqtSignal(int)
     log_backup_count_changed = pyqtSignal(int)
-    maa_timeout_changed = pyqtSignal(int)
-    maa_max_retries_changed = pyqtSignal(int)
     formation_path_changed = pyqtSignal(str)
     actions_path_changed = pyqtSignal(str)
     track_path_changed = pyqtSignal(str)
@@ -415,7 +413,7 @@ class SettingsPage(QWidget):
 
     def _build_advanced_card(self) -> MaterialCard:
         """全局设置卡片：Copilot 后端 / Output 路径（始终可见）+ MAA 路径 /
-        MAA 超时 / MAA 重试 / Copilot 超时/重试 / 识别参数 / 日志级别 / 日志文件 /
+        统一超时/重试（两后端共用）/ 识别参数 / 日志级别 / 日志文件 /
         子配置文件路径（高级开关打开后可见）。MAA 路径仅在识别后端为 maa 时显示。"""
         card = MaterialCard(tr("settings.global.title"))
         self._tr_labels.append((card.set_title, "settings.global.title"))
@@ -538,29 +536,7 @@ class SettingsPage(QWidget):
         self._pipeline_field_rows["log_backup_count"] = row
         self._tr_labels.append((row.set_label, "settings.global.log_backup_count"))
 
-        # MAA 超时（秒）
-        row = build_int_row(
-            tr("settings.global.maa_timeout"), default=600,
-            minimum=10, maximum=7200, step=10,
-            colors=self._colors,
-            on_changed=self.maa_timeout_changed.emit,
-        )
-        adv_layout.addWidget(row.widget)
-        self._pipeline_field_rows["maa_timeout_seconds"] = row
-        self._tr_labels.append((row.set_label, "settings.global.maa_timeout"))
-
-        # MAA 最大重试次数
-        row = build_int_row(
-            tr("settings.global.maa_retries"), default=2,
-            minimum=0, maximum=10, step=1,
-            colors=self._colors,
-            on_changed=self.maa_max_retries_changed.emit,
-        )
-        adv_layout.addWidget(row.widget)
-        self._pipeline_field_rows["maa_max_retries"] = row
-        self._tr_labels.append((row.set_label, "settings.global.maa_retries"))
-
-        # Copilot 超时（秒）
+        # Copilot 超时（秒）：recognition/maa 两后端共用的统一超时
         row = build_int_row(
             tr("settings.global.copilot_timeout"), default=600,
             minimum=10, maximum=7200, step=10,
@@ -571,7 +547,7 @@ class SettingsPage(QWidget):
         self._pipeline_field_rows["copilot_timeout_seconds"] = row
         self._tr_labels.append((row.set_label, "settings.global.copilot_timeout"))
 
-        # Copilot 最大重试次数
+        # Copilot 最大重试次数：recognition/maa 两后端共用的统一重试
         row = build_int_row(
             tr("settings.global.copilot_retries"), default=2,
             minimum=0, maximum=10, step=1,
@@ -1572,16 +1548,6 @@ class SettingsPage(QWidget):
 
     def set_log_backup_count(self, value: int) -> None:
         row = self._pipeline_field_rows.get("log_backup_count")
-        if row:
-            row.set_value(int(value), block_signal=True)
-
-    def set_maa_timeout(self, value: int) -> None:
-        row = self._pipeline_field_rows.get("maa_timeout_seconds")
-        if row:
-            row.set_value(int(value), block_signal=True)
-
-    def set_maa_max_retries(self, value: int) -> None:
-        row = self._pipeline_field_rows.get("maa_max_retries")
         if row:
             row.set_value(int(value), block_signal=True)
 
