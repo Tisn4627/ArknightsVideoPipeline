@@ -7,6 +7,7 @@
 4. TestBothBounds — 宽高边界同时生效
 5. TestEdgeCases — 非法/退化边界、空行、超长单词
 6. TestPaging — 截断后的分页切换（page_actions_lines）
+7. TestLeftTopBounds — 左/上边界收敛（四边限定）
 
 宽度/高度断言基于 pictex 实测渲染（与合成/预览同一渲染链路）。
 """
@@ -18,7 +19,11 @@ from itertools import pairwise
 
 from pictex import Canvas
 
-from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
+from arknights_video_pipeline.core.text_fit import (
+    fit_actions_lines,
+    page_actions_lines,
+    resolve_text_anchor,
+)
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 
 FONT_PATH = resolve_font_path(
@@ -329,3 +334,89 @@ class TestPaging:
             assert page.t_end <= 60.0 + 1e-6
             assert page.t_end - page.t_start > 0
         assert pages[-1].t_end == 60.0
+
+
+class TestLeftTopBounds:
+    """左/上边界：锚点越过边界时收敛回界内（四边限定）"""
+
+    def test_resolve_text_anchor_no_bounds(self):
+        assert resolve_text_anchor(50, 240) == (50.0, 240.0)
+
+    def test_resolve_text_anchor_left_shifts_right(self):
+        """锚点在左边界左侧时右移到左边界"""
+        assert resolve_text_anchor(50, 240, max_text_left=100) == (100.0, 240.0)
+
+    def test_resolve_text_anchor_top_shifts_down(self):
+        assert resolve_text_anchor(50, 240, max_text_top=300) == (50.0, 300.0)
+
+    def test_resolve_text_anchor_anchor_inside_no_shift(self):
+        """锚点已在界内时左/上边界不生效"""
+        assert resolve_text_anchor(50, 240, 10, 100) == (50.0, 240.0)
+
+    def test_resolve_text_anchor_both(self):
+        assert resolve_text_anchor(50, 240, 100, 300) == (100.0, 300.0)
+
+    def test_left_boundary_narrows_wrap_width(self):
+        """左边界收敛锚点后可用宽度变小：默认宽度下不换行的长行被迫换行"""
+        # 实测宽 190px：默认可用宽 222（272-50）不换行，锚点收敛到 120
+        # 后可用宽 152（272-120），必然换行
+        long_line = "12.撤退 能天使"
+        fitted_plain, _, _ = fit_actions_lines(
+            [long_line], FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, None, TEXT_X, TEXT_Y,
+        )
+        fitted_left, _, _ = fit_actions_lines(
+            [long_line], FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, None, TEXT_X, TEXT_Y,
+            max_text_left=120,
+        )
+        assert len(fitted_plain) == 1  # 默认锚点下无需换行
+        assert len(fitted_left) > 1  # 锚点右移到 120 后必须换行
+        # 换行后的每行（含 padding）都不超出收敛后的可用宽度
+        width = DEFAULT_RIGHT - 120
+        for line in fitted_left:
+            assert _measure_canvas().render(line).width <= width
+
+    def test_top_boundary_increases_truncation(self):
+        """上边界收敛锚点后可用高度变小：截断的操作数增多
+
+        用短行（不触发按字符换行的逐字符渲染，pictex 对该路径
+        在大行量下开销极高）仅验证高度方向的收敛效果。
+        """
+        lines = [f"{i}.技能 能天使" for i in range(1, 31)]
+        _, _, dropped_plain = fit_actions_lines(
+            lines, FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, DEFAULT_BOTTOM, TEXT_X, TEXT_Y,
+        )
+        _, _, dropped_top = fit_actions_lines(
+            lines, FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, DEFAULT_BOTTOM, TEXT_X, TEXT_Y,
+            max_text_top=300,
+        )
+        assert dropped_plain < dropped_top  # 高度从 725 缩到 665，截断更多
+        assert dropped_plain > 0  # 保证对比成立（默认下确有截断）
+
+    def test_anchor_inside_bounds_identical_result(self):
+        """左/上边界在锚点内侧时结果与未配置完全一致"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 31)]
+        kwargs = {
+            "font_path": FONT_PATH, "text_cfg": {"font_size": 25},
+            "max_text_right": DEFAULT_RIGHT, "max_text_bottom": DEFAULT_BOTTOM,
+            "text_x": TEXT_X, "text_y": TEXT_Y,
+        }
+        plain = fit_actions_lines(lines, **kwargs)
+        inside = fit_actions_lines(lines, **kwargs, max_text_left=10, max_text_top=100)
+        assert inside == plain
+
+    def test_paging_respects_top_boundary(self):
+        """分页同样受上边界收敛影响：每页高度都限定在收敛后的范围内"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 41)]
+        vts = [5.0 + i * 2.0 for i in range(40)]
+        pages = page_actions_lines(
+            lines, FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, DEFAULT_BOTTOM, TEXT_X, TEXT_Y,
+            vts, 0.5, 90.0, max_text_top=300,
+        )
+        assert pages is not None
+        for page in pages:
+            assert _block_height(page.lines) <= DEFAULT_BOTTOM - 300

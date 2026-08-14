@@ -270,7 +270,9 @@ python main.py --init-config compose
 | `font_scale` | float | `1` | 字体缩放比例（`subtitle_auto_fit` 启用时自动设为 1） |
 | `text_x` | integer | `50` | 文本 X 坐标偏移 |
 | `text_y` | integer | `240` | 文本 Y 坐标偏移 |
+| `max_text_left` | integer/null | `null` | Actions 文本块左边界（画布绝对 X）。锚点 `text_x` 在其左侧时文本右移收敛到该边界；`null` 表示不限 |
 | `max_text_right` | integer/null | `272` | Actions 文本块右边界（画布绝对 X）。超宽行自动换行，保证右侧不遮挡视频画面；`null` 表示不限 |
+| `max_text_top` | integer/null | `null` | Actions 文本块上边界（画布绝对 Y）。锚点 `text_y` 在其上方时文本下移收敛到该边界；`null` 表示不限 |
 | `max_text_bottom` | integer/null | `965` | Actions 文本块下边界（画布绝对 Y）。自动换行后仍超高时，按操作从末尾截断，保证下侧不遮挡视频画面中的 Tips 提示字样；`null` 表示不限 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
@@ -294,9 +296,11 @@ python main.py --init-config compose
 >   - 字幕与视频重叠：取左侧和右侧区域中较大者
 > - 自动推断的可用宽度不超过输出宽度的 40%
 >
-> **Actions 显示范围限定说明**：`max_text_right` / `max_text_bottom` 用于将 Actions
-> 文本块限定在安全显示范围内（默认右边界 = 视频左边缘 `video_x`，下边界 = 视频底边）。
-> 启用后（任一值非 `null`）：
+> **Actions 显示范围限定说明**：`max_text_left` / `max_text_right` / `max_text_top` /
+> `max_text_bottom` 四条边界围成 Actions 文本可显示区域（默认右边界 = 视频左边缘
+> `video_x`，下边界 = 视频底边，左/上边界不限）。启用后（任一值非 `null`）：
+> - 锚点越过左/上边界时文本右移/下移收敛回界内（预览、合成、地图面板高亮
+>   使用同一收敛锚点，保证三者渲染位置严格一致）；
 > - 超出右边界的文本行自动换行（优先在空格处断行，CJK 按字符断行）；
 > - 换行后文本块高度仍超出下边界时，按整个操作为单位从末尾截断，日志中记录截断数量；
 > - 若截断后操作均带 `video_time`（识别输出时间扩展字段），自动**分页切换**：

@@ -19,7 +19,11 @@ from pictex import Canvas, Shadow
 
 from arknights_video_pipeline.core.exceptions import VideoValidationError
 from arknights_video_pipeline.core.map_overlay import DEFAULT_MAP_OVERLAY_CONFIG
-from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
+from arknights_video_pipeline.core.text_fit import (
+    fit_actions_lines,
+    page_actions_lines,
+    resolve_text_anchor,
+)
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config, validate_video_file,
     resolve_font_path, load_formation_text, load_actions_text, get_switch_time,
@@ -50,12 +54,16 @@ DEFAULT_CONFIG = {
         "text_x": 50,
         "text_y": 240,
         # Actions 文本显示范围限定（画布绝对坐标，null=不限）：
+        # - max_text_left: 文本块左边界，锚点在其左侧时文本右移（不越左界）
         # - max_text_right: 文本块右边界，超出部分自动换行（右侧不遮挡视频画面）
+        # - max_text_top: 文本块上边界，锚点在其上方时文本下移（不越上界）
         # - max_text_bottom: 文本块下边界，仍超高时按操作从末尾截断
         #   （下侧不遮挡视频画面中的 Tips 提示字样）；截断后若操作均带
         #   video_time（识别时间扩展字段），自动分页：页内最后一个操作
         #   完成时切换到尚未进行的操作
+        "max_text_left": None,
         "max_text_right": 272,
+        "max_text_top": None,
         "max_text_bottom": 965,
         "fade_duration": 0.5,
         "shadow_enabled": True,
@@ -361,6 +369,12 @@ def compose_video(config):
         actions_pages = None
         max_text_right = text_config.get("max_text_right")
         max_text_bottom = text_config.get("max_text_bottom")
+        # 左/上边界收敛后的文本锚点（合成、预览、地图高亮共用，
+        # 保证三者渲染位置严格一致）
+        actions_anchor = resolve_text_anchor(
+            text_config.get("text_x", 50), text_config.get("text_y", 240),
+            text_config.get("max_text_left"), text_config.get("max_text_top"),
+        )
         if max_text_right is not None or max_text_bottom is not None:
             input_data = None
             try:
@@ -387,6 +401,8 @@ def compose_video(config):
                         fit_font_path, text_config,
                         max_text_right, max_text_bottom,
                         text_config.get("text_x", 50), text_config.get("text_y", 240),
+                        max_text_left=text_config.get("max_text_left"),
+                        max_text_top=text_config.get("max_text_top"),
                     )
                 )
                 # 分页切换需 video_time 扩展字段（缺失时保持单页静态显示）
@@ -399,6 +415,8 @@ def compose_video(config):
                         max_text_right, max_text_bottom,
                         text_config.get("text_x", 50), text_config.get("text_y", 240),
                         video_times, switch_time, video.duration,
+                        max_text_left=text_config.get("max_text_left"),
+                        max_text_top=text_config.get("max_text_top"),
                     )
                 if actions_pages:
                     # 分页生效：主文本按页切换显示，不再使用单页静态文本
@@ -442,6 +460,8 @@ def compose_video(config):
                         "\n".join(page.lines),
                         page.t_start, page_duration, text_config, PROJECT_ROOT,
                     )
+                    # 左/上边界收敛后的锚点（与 fit_actions_lines 一致）
+                    page_clip.set_position(actions_anchor)
                     clips.append(page_clip)
                     logger.info(
                         f"  操作文本已加载 (第 {i}/{len(actions_pages)} 页, "
@@ -453,6 +473,8 @@ def compose_video(config):
                     actions_clip = create_text_clip(
                         actions_text, switch_time, actions_duration, text_config, PROJECT_ROOT
                     )
+                    # 左/上边界收敛后的锚点（与 fit_actions_lines 一致）
+                    actions_clip.set_position(actions_anchor)
                     clips.append(actions_clip)
                     logger.info(f"  操作文本已加载 ({len(actions_text)}字符)")
         else:

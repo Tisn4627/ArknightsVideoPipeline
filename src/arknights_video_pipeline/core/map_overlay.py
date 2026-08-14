@@ -36,7 +36,10 @@ from movielite import TextClip
 from movielite.vfx import FadeIn, FadeOut
 from pictex import Canvas, Shadow
 
-from arknights_video_pipeline.core.text_fit import ActionsPage
+from arknights_video_pipeline.core.text_fit import (
+    ActionsPage,
+    resolve_text_anchor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -492,8 +495,13 @@ def build_panel_highlight_clips(
     single_height = measure_canvas.render("0").height
     line_height = single_height - 2 * _PANEL_PADDING  # 等距回退用的内在行高
 
-    text_x = float(text_config.get("text_x", 50))
-    text_y = float(text_config.get("text_y", 240))
+    # 左/上边界收敛后的锚点（与 text_fit.fit_actions_lines 一致，
+    # 保证高亮行与主文本严格对齐）
+    text_x, text_y = resolve_text_anchor(
+        float(text_config.get("text_x", 50)),
+        float(text_config.get("text_y", 240)),
+        text_config.get("max_text_left"), text_config.get("max_text_top"),
+    )
 
     clips: list[TextClip] = []
     for i, (group_start, group_end) in enumerate(line_groups):

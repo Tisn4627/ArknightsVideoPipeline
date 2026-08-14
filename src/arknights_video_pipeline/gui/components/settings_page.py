@@ -1163,12 +1163,21 @@ class SettingsPage(QWidget):
                 tr("settings.compose.auto_fit_available_width"), default=None,
                 minimum=1, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.auto_fit_available_width")), "settings.compose.auto_fit_available_width")
-            # Actions 文本显示范围限定（null=不限）：右侧不遮挡视频画面、
-            # 下侧不遮挡视频画面中的 Tips 提示字样
+            # Actions 文本显示范围限定（null=不限）：四条边界围成文本
+            # 可显示区域——左/上边界把越过界线的锚点拉回界内，右/下边界
+            # 控制换行与截断（右侧不遮挡视频画面、下侧不遮挡 Tips）
+            add_adv(f"{tp}.max_text_left", build_nullable_int_row(
+                tr("settings.compose.max_text_left"), default=None,
+                minimum=0, maximum=3840, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.max_text_left")), "settings.compose.max_text_left")
             add_adv(f"{tp}.max_text_right", build_nullable_int_row(
                 tr("settings.compose.max_text_right"), default=272,
                 minimum=0, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.max_text_right")), "settings.compose.max_text_right")
+            add_adv(f"{tp}.max_text_top", build_nullable_int_row(
+                tr("settings.compose.max_text_top"), default=None,
+                minimum=0, maximum=2160, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.max_text_top")), "settings.compose.max_text_top")
             add_adv(f"{tp}.max_text_bottom", build_nullable_int_row(
                 tr("settings.compose.max_text_bottom"), default=965,
                 minimum=0, maximum=2160, colors=c,

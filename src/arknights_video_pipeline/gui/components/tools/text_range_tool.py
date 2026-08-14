@@ -39,7 +39,11 @@ from arknights_video_pipeline.core.actions_to_text import (
     format_actions_lines,
 )
 from arknights_video_pipeline.core.map_overlay import _measure_line_top_offsets
-from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
+from arknights_video_pipeline.core.text_fit import (
+    fit_actions_lines,
+    page_actions_lines,
+    resolve_text_anchor,
+)
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
@@ -84,8 +88,11 @@ _FIELD_SPECS: list[tuple[str, str]] = [
     ("text_overlay.font_scale", "tools.style1_text_range.font_scale"),
     ("text_overlay.text_x", "tools.style1_text_range.text_x"),
     ("text_overlay.text_y", "tools.style1_text_range.text_y"),
-    # 文本显示范围限定（null=不限）：右侧不遮挡视频画面、下侧不遮挡 Tips 提示
+    # 文本显示范围限定（null=不限）：文本块须落在四条边界围成的矩形内。
+    # 左/上边界在锚点越过时把文本拉回界内，右/下边界控制换行与截断
+    ("text_overlay.max_text_left", "tools.style1_text_range.max_text_left"),
     ("text_overlay.max_text_right", "tools.style1_text_range.max_text_right"),
+    ("text_overlay.max_text_top", "tools.style1_text_range.max_text_top"),
     ("text_overlay.max_text_bottom", "tools.style1_text_range.max_text_bottom"),
     ("video_x", "tools.style1_text_range.video_x"),
     ("video_y", "tools.style1_text_range.video_y"),
@@ -153,26 +160,28 @@ class TextRangePreview(QWidget):
         text_x: float,
         text_y: float,
         out_size: tuple[int, int],
+        max_left: int | None = None,
+        max_top: int | None = None,
     ) -> None:
         """设置范围限定边界线（画布坐标），未配置的方向不绘制
 
-        右边界：从文本锚点垂直向下延伸；下边界：从文本锚点水平向右延伸，
-        另一端对齐到另一方向边界或画布边缘。
+        四条边界围成文本可显示区域：左侧/右侧为竖直线段，上侧/下侧为
+        水平线段；端点沿另一方向边界对齐——全部配置时即为完整矩形。
         """
         out_w, out_h = out_size
+        top_y = float(max_top) if max_top is not None else float(text_y)
+        bottom_y = float(max_bottom) if max_bottom is not None else float(out_h)
+        left_x = float(max_left) if max_left is not None else float(text_x)
+        right_x = float(max_right) if max_right is not None else float(out_w)
         lines: list[tuple[QPointF, QPointF]] = []
+        if max_left is not None:
+            lines.append((QPointF(left_x, top_y), QPointF(left_x, bottom_y)))
         if max_right is not None:
-            bottom_y = float(max_bottom) if max_bottom is not None else float(out_h)
-            lines.append((
-                QPointF(float(max_right), float(text_y)),
-                QPointF(float(max_right), bottom_y),
-            ))
+            lines.append((QPointF(right_x, top_y), QPointF(right_x, bottom_y)))
+        if max_top is not None:
+            lines.append((QPointF(left_x, top_y), QPointF(right_x, top_y)))
         if max_bottom is not None:
-            right_x = float(max_right) if max_right is not None else float(out_w)
-            lines.append((
-                QPointF(float(text_x), float(max_bottom)),
-                QPointF(right_x, float(max_bottom)),
-            ))
+            lines.append((QPointF(left_x, bottom_y), QPointF(right_x, bottom_y)))
         self._bounds_lines = lines
         self.update()
 
@@ -501,7 +510,9 @@ class Style1TextRangeTool(ToolView):
             "text_overlay.font_scale": 1.0,
             "text_overlay.text_x": 50,
             "text_overlay.text_y": 240,
+            "text_overlay.max_text_left": None,
             "text_overlay.max_text_right": 272,
+            "text_overlay.max_text_top": None,
             "text_overlay.max_text_bottom": 965,
             "video_x": 272,
             "video_y": 47,
@@ -528,12 +539,14 @@ class Style1TextRangeTool(ToolView):
                 colors=c, on_changed=self._refresh_preview,
             )
         # 范围限定边界：可空整型（开关关闭 = 该方向不限）
-        if field_path == "text_overlay.max_text_right":
+        if field_path in ("text_overlay.max_text_right",
+                          "text_overlay.max_text_left"):
             return build_nullable_int_row(
                 tr(label_key), default=default, minimum=0, maximum=3840,
                 colors=c, on_changed=self._refresh_preview,
             )
-        if field_path == "text_overlay.max_text_bottom":
+        if field_path in ("text_overlay.max_text_bottom",
+                          "text_overlay.max_text_top"):
             return build_nullable_int_row(
                 tr(label_key), default=default, minimum=0, maximum=2160,
                 colors=c, on_changed=self._refresh_preview,
@@ -611,7 +624,9 @@ class Style1TextRangeTool(ToolView):
                 "text_overlay.font_scale": 1.0,
                 "text_overlay.text_x": 50,
                 "text_overlay.text_y": 240,
+                "text_overlay.max_text_left": None,
                 "text_overlay.max_text_right": 272,
+                "text_overlay.max_text_top": None,
                 "text_overlay.max_text_bottom": 965,
                 "video_x": 272,
                 "video_y": 47,
@@ -664,6 +679,8 @@ class Style1TextRangeTool(ToolView):
                 values["text_overlay.max_text_right"],
                 values["text_overlay.max_text_bottom"],
                 text_x, text_y, (out_w, out_h),
+                values["text_overlay.max_text_left"],
+                values["text_overlay.max_text_top"],
             )
             self._update_info(text_rect, line_rects, video_rect, out_w, out_h)
         except Exception as exc:  # noqa: BLE001
@@ -757,8 +774,14 @@ class Style1TextRangeTool(ToolView):
         # 显示范围限定：与视频合成共用 core.text_fit（自动换行 + 末尾截断；
         # 截断后操作均带 video_time 时自动分页，随操作执行切换显示——
         # 预览展示第 1 页，其余页在合成中按 video_time 依次切换）
+        max_left = values["text_overlay.max_text_left"]
         max_right = values["text_overlay.max_text_right"]
+        max_top = values["text_overlay.max_text_top"]
         max_bottom = values["text_overlay.max_text_bottom"]
+        # 左/上边界收敛后的锚点：文本块实际渲染位置（与合成/高亮严格一致）
+        anchor_x, anchor_y = resolve_text_anchor(
+            text_x, text_y, max_left, max_top,
+        )
         video_times = [a.get("video_time") for a in (data.get("actions") or [])]
         page_count = 0
         if len(video_times) == len(lines) and all(
@@ -767,7 +790,8 @@ class Style1TextRangeTool(ToolView):
             pages = page_actions_lines(
                 lines, font_path, text_cfg, max_right, max_bottom,
                 text_x, text_y, video_times, 0.0, 1e9,
-                padding=_PANEL_PADDING,
+                padding=_PANEL_PADDING, max_text_left=max_left,
+                max_text_top=max_top,
             )
             if pages:
                 fitted_lines = pages[0].lines
@@ -777,6 +801,7 @@ class Style1TextRangeTool(ToolView):
             fitted_lines, _line_groups, dropped = fit_actions_lines(
                 lines, font_path, text_cfg, max_right, max_bottom,
                 text_x, text_y, padding=_PANEL_PADDING,
+                max_text_left=max_left, max_text_top=max_top,
             )
         self._last_fit = (
             max_right, max_bottom, dropped,
@@ -785,13 +810,13 @@ class Style1TextRangeTool(ToolView):
         lines = fitted_lines
 
         image, w, h, tops = self._render_text_block(lines, font_path, text_cfg)
-        text_rect = QRectF(text_x, text_y, w, h)
+        text_rect = QRectF(anchor_x, anchor_y, w, h)
 
         line_rects: list[QRectF] = []
         if tops is not None:
             for i, top in enumerate(tops):
                 top_h = (tops[i + 1] - top) if i + 1 < len(tops) else (h - top)
-                line_rects.append(QRectF(text_x, text_y + top, w, top_h))
+                line_rects.append(QRectF(anchor_x, anchor_y + top, w, top_h))
         else:
             # 等距行高回退（与 map_overlay 一致）
             measure_canvas = (
@@ -803,7 +828,8 @@ class Style1TextRangeTool(ToolView):
             line_height = single - 2 * _PANEL_PADDING
             for i in range(len(lines)):
                 line_rects.append(QRectF(
-                    text_x, text_y + _PANEL_PADDING + i * line_height, w, line_height
+                    anchor_x, anchor_y + _PANEL_PADDING + i * line_height,
+                    w, line_height,
                 ))
         return image, text_rect, line_rects
 
