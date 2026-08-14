@@ -19,7 +19,7 @@ from pictex import Canvas, Shadow
 
 from arknights_video_pipeline.core.exceptions import VideoValidationError
 from arknights_video_pipeline.core.map_overlay import DEFAULT_MAP_OVERLAY_CONFIG
-from arknights_video_pipeline.core.text_fit import fit_actions_lines
+from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config, validate_video_file,
     resolve_font_path, load_formation_text, load_actions_text, get_switch_time,
@@ -52,7 +52,9 @@ DEFAULT_CONFIG = {
         # Actions 文本显示范围限定（画布绝对坐标，null=不限）：
         # - max_text_right: 文本块右边界，超出部分自动换行（右侧不遮挡视频画面）
         # - max_text_bottom: 文本块下边界，仍超高时按操作从末尾截断
-        #   （下侧不遮挡视频画面中的 Tips 提示字样）
+        #   （下侧不遮挡视频画面中的 Tips 提示字样）；截断后若操作均带
+        #   video_time（识别时间扩展字段），自动分页：页内最后一个操作
+        #   完成时切换到尚未进行的操作
         "max_text_right": 272,
         "max_text_bottom": 965,
         "fade_duration": 0.5,
@@ -350,10 +352,13 @@ def compose_video(config):
             text_config["font_size"] = auto_font_size
             text_config["font_scale"] = 1
 
-        # Actions 显示范围限定：超宽行自动换行 + 按操作从末尾截断
+        # Actions 显示范围限定：超宽行自动换行 + 按操作从末尾截断；
+        # 截断后若操作均带 video_time，则自动分页——页内最后一个操作
+        # 完成（到达其 video_time）时切换到尚未进行的操作
         # （与 GUI 文本范围预览共用 core.text_fit，保证预览与合成逐字一致）
         actions_fitted_lines = None
         actions_line_groups = None
+        actions_pages = None
         max_text_right = text_config.get("max_text_right")
         max_text_bottom = text_config.get("max_text_bottom")
         if max_text_right is not None or max_text_bottom is not None:
@@ -374,21 +379,44 @@ def compose_video(config):
                         PROJECT_ROOT, text_config.get("font_dir", "resource/font")
                     ),
                 )
+                actions_cfg = load_config(inputs["actions_config"], {})
+                raw_actions_lines = format_actions_lines(input_data, actions_cfg)
                 actions_fitted_lines, actions_line_groups, dropped_count = (
                     fit_actions_lines(
-                        format_actions_lines(input_data, load_config(inputs["actions_config"], {})),
+                        raw_actions_lines,
                         fit_font_path, text_config,
                         max_text_right, max_text_bottom,
                         text_config.get("text_x", 50), text_config.get("text_y", 240),
                     )
                 )
-                if dropped_count:
+                # 分页切换需 video_time 扩展字段（缺失时保持单页静态显示）
+                actions = (input_data or {}).get("actions", [])
+                video_times = [a.get("video_time") for a in actions]
+                if all(isinstance(v, (int, float)) for v in video_times):
+                    actions_pages = page_actions_lines(
+                        raw_actions_lines,
+                        fit_font_path, text_config,
+                        max_text_right, max_text_bottom,
+                        text_config.get("text_x", 50), text_config.get("text_y", 240),
+                        video_times, switch_time, video.duration,
+                    )
+                if actions_pages:
+                    # 分页生效：主文本按页切换显示，不再使用单页静态文本
+                    actions_fitted_lines = None
+                    actions_line_groups = None
+                    actions_text = "\n".join(actions_pages[0].lines)
                     logger.info(
-                        f"  Actions 文本范围限定: 自动换行 + 截断 {dropped_count} 个操作"
+                        f"  Actions 分页显示: 共 {len(actions_pages)} 页，"
+                        f"页内最后一个操作完成时按 video_time 切换到尚未进行的操作"
                     )
                 else:
-                    logger.info("  Actions 文本范围限定: 已自动换行适配边界")
-                actions_text = "\n".join(actions_fitted_lines)
+                    actions_text = "\n".join(actions_fitted_lines)
+                    if dropped_count:
+                        logger.info(
+                            f"  Actions 文本范围限定: 自动换行 + 截断 {dropped_count} 个操作"
+                        )
+                    else:
+                        logger.info("  Actions 文本范围限定: 已自动换行适配边界")
 
         # 生成编队文本
         if formation_text:
@@ -404,13 +432,29 @@ def compose_video(config):
 
         # 生成操作文本
         if actions_text:
-            actions_duration = video_duration - switch_time
-            if actions_duration > 0:
-                actions_clip = create_text_clip(
-                    actions_text, switch_time, actions_duration, text_config, PROJECT_ROOT
-                )
-                clips.append(actions_clip)
-                logger.info(f"  操作文本已加载 ({len(actions_text)}字符)")
+            if actions_pages:
+                # 分页显示：每页一个 TextClip，在页尾操作 video_time 处切换
+                for i, page in enumerate(actions_pages, 1):
+                    page_duration = page.t_end - page.t_start
+                    if page_duration <= 0:
+                        continue
+                    page_clip = create_text_clip(
+                        "\n".join(page.lines),
+                        page.t_start, page_duration, text_config, PROJECT_ROOT,
+                    )
+                    clips.append(page_clip)
+                    logger.info(
+                        f"  操作文本已加载 (第 {i}/{len(actions_pages)} 页, "
+                        f"{len(page.lines)} 行, {page.t_start:.2f}s -> {page.t_end:.2f}s)"
+                    )
+            else:
+                actions_duration = video_duration - switch_time
+                if actions_duration > 0:
+                    actions_clip = create_text_clip(
+                        actions_text, switch_time, actions_duration, text_config, PROJECT_ROOT
+                    )
+                    clips.append(actions_clip)
+                    logger.info(f"  操作文本已加载 ({len(actions_text)}字符)")
         else:
             logger.info("  操作文本为空，跳过")
 
@@ -439,14 +483,21 @@ def compose_video(config):
                 )
             elif actions:
                 # 面板逐行文本：优先复用范围限定后的拟合行（与主操作文本块逐字一致，
-                # 换行展开后每操作对应多行）；未配置范围限定时回退到原始逐操作行
+                # 换行展开后每操作对应多行）；分页显示时逐页构建（pages 参数）；
+                # 未配置范围限定时回退到原始逐操作行
                 actions_cfg = load_config(inputs["actions_config"], {})
-                if actions_fitted_lines is not None:
+                if actions_pages is not None:
+                    lines = format_actions_lines(input_data, actions_cfg)
+                    line_groups = None
+                    overlay_pages = actions_pages
+                elif actions_fitted_lines is not None:
                     lines = actions_fitted_lines
                     line_groups = actions_line_groups
+                    overlay_pages = None
                 else:
                     lines = format_actions_lines(input_data, actions_cfg)
                     line_groups = None
+                    overlay_pages = None
 
                 level = load_level((input_data or {}).get("stage_name", ""))
 
@@ -467,7 +518,7 @@ def compose_video(config):
                     actions, lines, level, switch_time, video.duration,
                     config["video_scale"], config["video_x"], config["video_y"],
                     video_native_size, map_cfg, text_config, map_font_path,
-                    line_groups=line_groups,
+                    line_groups=line_groups, pages=overlay_pages,
                 )
                 clips.extend(overlay_clips)
                 logger.info(f"  逐操作显示已加载 ({len(overlay_clips)} 个叠加片段)")

@@ -1,12 +1,15 @@
 """
-core.text_fit - Style1 Actions 文本显示范围拟合（自动换行 + 末尾截断）
+core.text_fit - Style1 Actions 文本显示范围拟合（自动换行 + 末尾截断 + 分页切换）
 
 将逐操作文本（format_actions_lines 输出）拟合到 text_overlay 配置的
 限定范围内（``max_text_right`` / ``max_text_bottom``，画布绝对坐标）：
   1. 超宽行按字符自动换行（优先在空格处断行，CJK 友好），
      使文本块右边界不超过 ``max_text_right``；
   2. 若换行后文本块高度仍超出 ``max_text_bottom``，
-     按整个操作（换行组）为单位从末尾截断，直到放得下。
+     按整个操作（换行组）为单位从末尾截断，直到放得下；
+  3. 截断后若每个操作均带有 video_time（识别输出的时间扩展字段），
+     自动分页（page_actions_lines）：当页内最后一个操作完成
+     （到达其 video_time）时切换到尚未进行的操作，避免操作被永久丢弃。
 
 本模块仅依赖 pictex（与 create_text_clip / map_overlay 同一渲染链路），
 被视频合成（core.video_compose）与 GUI 文本范围预览工具
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from pictex import Canvas
@@ -129,10 +133,14 @@ def fit_actions_lines(
     if available_height is not None:
         block_height = canvas.render("\n".join(fitted_lines)).height
         if block_height > available_height:
-            # 先按单行高度粗估批量丢弃，再逐组精确收敛（避免长列表逐行渲染）
+            # 先按真实行距粗估批量丢弃，再逐组精确收敛（避免长列表逐行渲染）。
+            # 注意：render("0").height 含两侧 padding（58px），实际每行增量约为
+            # 38px——用两行块差值得出精确增量，避免粗估过度截断
             if fitted_lines:
                 single_height = max(1, canvas.render("0").height)
-                bulk = max(0, len(fitted_lines) - (available_height // single_height))
+                double_height = max(1, canvas.render("0\n0").height)
+                line_increment = max(1, double_height - single_height)
+                bulk = max(0, len(fitted_lines) - (available_height // line_increment))
             else:
                 bulk = 0
             while bulk > 0 and len(line_groups) > 1:
@@ -155,3 +163,119 @@ def fit_actions_lines(
                 )
 
     return fitted_lines, line_groups, dropped
+
+
+@dataclass
+class ActionsPage:
+    """分页显示中的一页操作文本
+
+    Attributes:
+        start: 起始操作序号（全量操作列表索引，含）
+        end: 结束操作序号（全量操作列表索引，不含）
+        lines: 本页拟合后的文本行（自动换行 + 高度截断）
+        line_groups: 本页内每个操作的行号切片（页内相对行号）
+        t_start: 显示开始时间（秒）
+        t_end: 显示结束时间（秒；末页为视频结束）
+    """
+
+    start: int
+    end: int
+    lines: list[str]
+    line_groups: list[tuple[int, int]]
+    t_start: float
+    t_end: float
+
+
+def page_actions_lines(
+    lines: Sequence[str],
+    font_path: str,
+    text_cfg: dict[str, Any],
+    max_text_right: float | None,
+    max_text_bottom: float | None,
+    text_x: float,
+    text_y: float,
+    video_times: Sequence[float],
+    switch_time: float,
+    video_duration: float,
+    padding: int = PANEL_PADDING,
+) -> list[ActionsPage] | None:
+    """超出限定高度时的分页显示（"最后一个显示操作完成时切换"）
+
+    仅当满足以下全部条件时返回分页列表，否则返回 None（保持单页静态显示）：
+      - 配置了高度限定且整表确实发生了末尾截断（放得下无需分页）；
+      - 每个操作均有有效的 video_time（切换时刻 = 页内最后一个操作的
+        video_time，因此必须存在该字段才能分页）。
+
+    分页规则：
+      - 第 1 页自 switch_time 显示；后续每页自前一页末尾操作的
+        video_time 开始（即"最后一个显示的 Actions 完成时切换到
+        尚未进行的 Actions"），末页显示到视频结束；
+      - 每页内容与 fit_actions_lines 相同（超宽换行 + 高度截断），
+        尽可能容纳更多操作；
+      - 页内操作完成时刻不晚于页起点（同刻操作、或操作时刻已超出
+        视频时长）时整页无法显示，跳过这些操作继续分页；
+      - 所有页均为零时长（时间无法前进）时返回 None 回退静态截断。
+
+    Args:
+        lines: format_actions_lines 输出（每个操作一行，与 video_times 对齐）
+        video_times: 每个操作的 video_time（与 lines 一一对应）
+        switch_time: 进入战斗时间
+        video_duration: 视频总时长
+
+    Returns:
+        分页列表（每页含拟合行/行号切片/显示区间），无需分页时返回 None
+    """
+    # 高度限定未生效时不产生截断，无需分页
+    if max_text_bottom is None or float(max_text_bottom) - float(text_y) <= padding * 2:
+        return None
+    if not lines or len(video_times) != len(lines):
+        return None
+    if not all(isinstance(v, (int, float)) for v in video_times):
+        return None
+
+    # 整表未截断时保持单页静态显示（与旧行为一致）
+    _, _, dropped = fit_actions_lines(
+        lines, font_path, text_cfg,
+        max_text_right, max_text_bottom, text_x, text_y, padding,
+    )
+    if dropped == 0:
+        return None
+
+    def _page_lines(
+        start: int, end: int,
+    ) -> tuple[list[str], list[tuple[int, int]]]:
+        return fit_actions_lines(
+            lines[start:end], font_path, text_cfg,
+            max_text_right, max_text_bottom, text_x, text_y, padding,
+        )[:2]
+
+    pages: list[ActionsPage] = []
+    skipped = 0
+    cursor = 0
+    t = float(switch_time)
+    while cursor < len(lines):
+        fitted, groups = _page_lines(cursor, len(lines))
+        end = cursor + len(groups)
+        boundary = max(
+            float(switch_time),
+            min(float(video_duration), float(video_times[end - 1])),
+        )
+        if boundary <= t + 1e-9:
+            # 页时长非正：页内操作完成时刻不晚于页起点（同刻操作、
+            # 或时刻已超出视频时长），整页无法显示——跳过继续分页
+            if end == len(lines):
+                break
+            skipped += end - cursor
+            cursor = end
+            continue
+        t_end = boundary if end < len(lines) else float(video_duration)
+        pages.append(ActionsPage(cursor, end, fitted, groups, t, t_end))
+        cursor = end
+        t = boundary
+
+    if skipped:
+        logger.info(
+            "分页显示: 跳过 %d 个完成时刻不晚于页起点的操作（同刻/超出视频时长）",
+            skipped,
+        )
+    return pages or None

@@ -523,6 +523,48 @@ class TestPanelHighlightClips:
             assert clip.opacity(0) == 1.0
             assert clip.opacity(clip.duration / 2) == 1.0
 
+    def test_t_range_clamps_intervals_without_takeover(self):
+        """分页显示（非末页）：高亮区间裁剪到页时长内，页尾不接管到视频结束"""
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 5.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 8.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            ["1.部署 遥", "2.技能 遥"], timeline, switch_time=0.5, video_duration=10,
+            text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, cfg={}, t_range=(0.5, 8.0),
+        )
+        assert [c.text for c in clips] == ["1.部署 遥", "2.技能 遥"]
+        assert abs(clips[0].start - 0.5) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 5.0) < 1e-6
+        # 页尾操作不接管：区间止于其 video_time（即页切换时刻）
+        assert abs(clips[1].start - 5.0) < 1e-6
+        assert abs(clips[1].start + clips[1].duration - 8.0) < 1e-6
+
+    def test_t_range_last_page_takeover_to_video_end(self):
+        """分页显示（末页，t_end 到达视频结束）：末行预告区间与接管无缝合并"""
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 6.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 8.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            ["1.部署 遥", "2.技能 遥"], timeline, switch_time=5.0, video_duration=10,
+            text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, cfg={}, t_range=(5.0, 10.0),
+        )
+        assert [c.text for c in clips] == ["1.部署 遥", "2.技能 遥"]
+        assert abs(clips[0].start - 5.0) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 6.0) < 1e-6
+        # 末行预告区间 [6.0, 8.0) 与接管 [8.0, 10.0) 无缝合并
+        assert abs(clips[1].start - 6.0) < 1e-6
+        assert abs(clips[1].start + clips[1].duration - 10.0) < 1e-6
+
 
 # ── 顶层入口 ────────────────────────────────────────────
 
@@ -565,3 +607,30 @@ class TestBuildMapOverlayClips:
         assert load_level("not_a_real_stage_xyz") is None
         assert load_level("") is None
         assert load_level(None) is None
+
+    def test_pages_build_per_page_highlight(self):
+        """分页显示：面板高亮按页构建（页内行文本/子时间线/区间裁剪），末页接管"""
+        from arknights_video_pipeline.core.text_fit import ActionsPage
+
+        actions = [
+            {"type": "Deploy", "location": [6, 3], "video_time": 5.0},
+            {"type": "Skill", "location": [6, 3], "video_time": 8.0},
+        ]
+        pages = [
+            ActionsPage(0, 1, ["1.部署 遥"], [(0, 1)], 0.5, 5.0),
+            ActionsPage(1, 2, ["2.技能 遥"], [(0, 1)], 5.0, 10.0),
+        ]
+        clips = build_map_overlay_clips(
+            actions, ["1.部署 遥", "2.技能 遥"], level=None,
+            switch_time=0.5, video_duration=10,
+            video_scale=1.0, video_x=0, video_y=0, video_native_size=None,
+            map_cfg={}, text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, pages=pages,
+        )
+        assert [c.text for c in clips] == ["1.部署 遥", "2.技能 遥"]
+        # 页 1：首操作预告 [0.5, 5.0)，止于页尾 video_time（切换时刻）
+        assert abs(clips[0].start - 0.5) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 5.0) < 1e-6
+        # 页 2（末页）：预告 [5.0, 8.0) 与接管无缝合并至视频结束
+        assert abs(clips[1].start - 5.0) < 1e-6
+        assert abs(clips[1].start + clips[1].duration - 10.0) < 1e-6

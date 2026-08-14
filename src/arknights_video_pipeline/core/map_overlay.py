@@ -20,7 +20,9 @@ core.map_overlay - 逐操作显示（地图操作序号 + 左侧面板当前操�
 区间为 [上一个不同 video_time, 该行操作 video_time)，与地图数字规则一致：
 前一个操作执行完毕后立即高亮下一行，避免"当前行"语义下操作间长空窗
 （如部署完成到下一技能开始之间持续高亮已结束的操作）；末行接管
-[最后一个 video_time, 视频结束)。
+[最后一个 video_time, 视频结束)。文本范围限定发生截断且操作带 video_time
+时（core.text_fit.page_actions_lines），主文本按页切换，面板高亮随页
+独立构建：区间裁剪到页显示区间内，仅末页接管到视频结束。
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ import numpy as np
 from movielite import TextClip
 from movielite.vfx import FadeIn, FadeOut
 from pictex import Canvas, Shadow
+
+from arknights_video_pipeline.core.text_fit import ActionsPage
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +416,7 @@ def build_panel_highlight_clips(
     font_path: str,
     cfg: dict,
     line_groups: Optional[list[tuple[int, int]]] = None,
+    t_range: Optional[tuple[float, float]] = None,
 ) -> list[TextClip]:
     """构建左侧面板的"下一操作"高亮 clips（静态全列表 + 下一个将要执行的行高亮）
 
@@ -431,13 +436,15 @@ def build_panel_highlight_clips(
 
     Args:
         lines: 面板文本行（范围限定后为拟合行，否则为 format_actions_lines 输出）
-        timeline: build_action_timeline 的输出
-        switch_time: 进入战斗时间
+        timeline: build_action_timeline 的输出（分页时为该页对应的子时间线）
+        switch_time: 进入战斗时间（分页时为该页的显示开始时间）
         video_duration: 视频总时长
         text_config: 文本叠加配置（主文本，含最终 font_size/font_scale）
         font_path: 字体绝对路径
         cfg: map_overlay 配置块
         line_groups: 每操作对应的 (start, end) 行号切片；None 时每操作一行
+        t_range: 可选 (t_start, t_end) 显示区间；分页显示时传入，所有高亮
+            区间裁剪到页时长内，且仅当 t_end 到达视频结束时才"末行接管"
 
     Returns:
         高亮 TextClip 列表（可能为空）
@@ -457,7 +464,7 @@ def build_panel_highlight_clips(
     #   行 i: [prev_distinct, start_i)，prev_distinct 为上一个不同的 start
     #   （首行为 switch_time）；start_i 与 prev_distinct 相同的同刻组内
     #   非首行不产生区间（组内末行代表整组）；末行接管
-    #   [最后的不同 start, video_duration)。
+    #   [最后的不同 start, video_duration)（仅单页显示或末页时）。
     n = len(timeline)
     starts: list[float] = [0.0] * n
     ends: list[float] = [0.0] * n
@@ -469,13 +476,14 @@ def build_panel_highlight_clips(
             ends[i] = s
         if s - prev_distinct > 1e-9:
             prev_distinct = s
-    last_s = float(timeline[-1]["start"])
-    if float(video_duration) - last_s >= _MIN_INTERVAL:
-        if ends[-1] > 0:
-            starts[-1] = min(starts[-1], last_s)  # 已有预告区间，无缝合并
-        else:
-            starts[-1] = last_s
-        ends[-1] = float(video_duration)
+    if t_range is None or t_range[1] >= float(video_duration) - 1e-9:
+        last_s = float(timeline[-1]["start"])
+        if float(video_duration) - last_s >= _MIN_INTERVAL:
+            if ends[-1] > 0:
+                starts[-1] = min(starts[-1], last_s)  # 已有预告区间，无缝合并
+            else:
+                starts[-1] = last_s
+            ends[-1] = float(video_duration)
 
     font_size = float(text_config.get("font_size", 25)) * float(text_config.get("font_scale", 1))
     measure_canvas = Canvas().font_family(font_path).font_size(font_size).padding(_PANEL_PADDING)
@@ -491,6 +499,10 @@ def build_panel_highlight_clips(
     for i, (group_start, group_end) in enumerate(line_groups):
         start = starts[i]
         end = ends[i]
+        if t_range is not None:
+            # 分页显示：高亮区间裁剪到当前页的显示区间内
+            start = max(start, t_range[0])
+            end = min(end, t_range[1])
         if end <= 0 or end - start < _MIN_INTERVAL:
             continue
 
@@ -541,6 +553,7 @@ def build_map_overlay_clips(
     text_config: dict,
     font_path: str,
     line_groups: Optional[list[tuple[int, int]]] = None,
+    pages: Optional[list[ActionsPage]] = None,
 ) -> list[TextClip]:
     """逐操作显示入口：构建地图数字 + 面板高亮的全部 clips
 
@@ -550,6 +563,9 @@ def build_map_overlay_clips(
     Args:
         line_groups: 每操作对应的 (start, end) 行号切片（范围限定后
             一个操作对应多行时使用）；None 时每操作一行
+        pages: 分页显示时的页列表（core.text_fit.ActionsPage）；
+            提供时面板高亮按页构建：每页使用页内文本行与子时间线，
+            区间裁剪到页显示区间内；None 时按整表单页构建
 
     Returns:
         所有附加 clips 列表（可能为空）
@@ -571,12 +587,25 @@ def build_map_overlay_clips(
 
     if cfg.get("panel_highlight_enabled", True):
         try:
-            clips.extend(
-                build_panel_highlight_clips(
-                    lines, timeline, switch_time, video_duration, text_config, font_path, cfg,
-                    line_groups=line_groups,
+            if pages:
+                # 分页显示：每页独立构建（文本行/子时间线/显示区间各不相同）
+                for page in pages:
+                    clips.extend(
+                        build_panel_highlight_clips(
+                            page.lines,
+                            timeline[page.start:page.end],
+                            page.t_start, video_duration, text_config, font_path, cfg,
+                            line_groups=page.line_groups,
+                            t_range=(page.t_start, page.t_end),
+                        )
+                    )
+            else:
+                clips.extend(
+                    build_panel_highlight_clips(
+                        lines, timeline, switch_time, video_duration, text_config, font_path, cfg,
+                        line_groups=line_groups,
+                    )
                 )
-            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("左侧面板操作高亮叠加失败: %s", exc)
 

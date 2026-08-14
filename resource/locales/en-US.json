@@ -262,6 +262,7 @@
   "tools.style1_text_range.preview_legend_bound": "Range bounds",
   "tools.style1_text_range.range_wrapped": "Wrapped {n} long line(s) to fit width",
   "tools.style1_text_range.range_truncated": "Truncated {n} action(s) to fit height",
+  "tools.style1_text_range.range_paged": "Total {n} pages: overflow switches at each page's last action video_time",
   "tools.style1_text_range.range_unbounded": "Range limit disabled (right/bottom bounds empty)",
 
   "dialog.ok": "OK",

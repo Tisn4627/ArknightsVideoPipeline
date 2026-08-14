@@ -262,6 +262,7 @@
   "tools.style1_text_range.preview_legend_bound": "范围边界",
   "tools.style1_text_range.range_wrapped": "超宽自动换行 {n} 行",
   "tools.style1_text_range.range_truncated": "高度超限，末尾截断 {n} 个操作",
+  "tools.style1_text_range.range_paged": "共 {n} 页：超出部分在操作完成时按 video_time 自动切换显示",
   "tools.style1_text_range.range_unbounded": "未启用范围限定（右/下边界为空）",
 
   "dialog.ok": "确定",

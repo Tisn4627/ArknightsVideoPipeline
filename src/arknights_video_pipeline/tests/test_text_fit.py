@@ -6,6 +6,7 @@
 3. TestHeightTruncate — 高度超限按操作从末尾截断
 4. TestBothBounds — 宽高边界同时生效
 5. TestEdgeCases — 非法/退化边界、空行、超长单词
+6. TestPaging — 截断后的分页切换（page_actions_lines）
 
 宽度/高度断言基于 pictex 实测渲染（与合成/预览同一渲染链路）。
 """
@@ -13,10 +14,11 @@
 from __future__ import annotations
 
 import os
+from itertools import pairwise
 
 from pictex import Canvas
 
-from arknights_video_pipeline.core.text_fit import fit_actions_lines
+from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 
 FONT_PATH = resolve_font_path(
@@ -227,3 +229,103 @@ class TestEdgeCases:
         canvas = _measure_canvas()
         for line in fitted:
             assert canvas.render(line).width <= 150 - TEXT_X
+
+
+class TestPaging:
+    """page_actions_lines 分页显示（截断后按 video_time 切换）"""
+
+    def _paged(self, lines, vts, duration=90.0, switch=0.5, right=DEFAULT_RIGHT,
+               bottom=DEFAULT_BOTTOM):
+        return page_actions_lines(
+            lines, FONT_PATH, {"font_size": 25}, right, bottom,
+            TEXT_X, TEXT_Y, vts, switch, duration,
+        )
+
+    def test_no_bounds_returns_none(self):
+        assert self._paged(_actions(30), [1.0 + i for i in range(30)],
+                           right=None, bottom=None) is None
+
+    def test_no_truncation_returns_none(self):
+        """放得下时不分页（保持单页静态显示）"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 11)]
+        assert self._paged(lines, [1.0 + i for i in range(10)]) is None
+
+    def test_missing_video_time_returns_none(self):
+        """任一操作缺 video_time 则不分页（切换需要该字段）"""
+        vts = [1.0 + i for i in range(40)]
+        vts[5] = None
+        assert self._paged(_actions(40), vts) is None
+
+    def test_video_time_count_mismatch_returns_none(self):
+        assert self._paged(_actions(40), [1.0] * 39) is None
+
+    def test_empty_lines_returns_none(self):
+        assert self._paged([], []) is None
+
+    def test_pages_cover_all_actions(self):
+        """分页覆盖全部操作、页间无缝衔接、每页不超高、末页到视频结束"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 41)]
+        vts = [5.0 + i * 2.0 for i in range(40)]
+        pages = self._paged(lines, vts)
+        assert pages is not None
+        assert len(pages) >= 2
+        assert abs(pages[0].t_start - 0.5) < 1e-6
+        for a, b in pairwise(pages):
+            assert a.end == b.start  # 无丢失无重叠
+            assert abs(a.t_end - b.t_start) < 1e-6
+        assert pages[-1].end == 40
+        assert abs(pages[-1].t_end - 90.0) < 1e-6
+        for page in pages:
+            assert page.t_end - page.t_start > 0
+            assert _block_height(page.lines) <= DEFAULT_BOTTOM - TEXT_Y
+            assert sum(e - s for s, e in page.line_groups) == len(page.lines)
+
+    def test_switch_at_last_action_video_time(self):
+        """切换时刻 = 页内最后一个操作的 video_time（未到末页时）"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 41)]
+        vts = [5.0 + i * 2.0 for i in range(40)]
+        pages = self._paged(lines, vts)
+        assert pages is not None
+        for page in pages[:-1]:
+            assert abs(page.t_end - vts[page.end - 1]) < 1e-6
+
+    def test_first_page_matches_static_fit(self):
+        """分页首页与单页静态拟合完全一致"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 41)]
+        vts = [5.0 + i * 2.0 for i in range(40)]
+        fitted, groups, _ = fit_actions_lines(
+            lines, FONT_PATH, {"font_size": 25},
+            DEFAULT_RIGHT, DEFAULT_BOTTOM, TEXT_X, TEXT_Y,
+        )
+        pages = self._paged(lines, vts)
+        assert pages is not None
+        assert pages[0].lines == fitted
+        assert pages[0].line_groups == groups
+
+    def test_same_time_actions_skipped(self):
+        """完成时刻不晚于页起点的操作（同刻）整页跳过，不丢后续页"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 41)]
+        # 前 30 个操作同刻 10.0（一页放不下），其后操作时间递增
+        vts = [10.0] * 30 + [20.0 + (i - 30) * 2.0 for i in range(30, 40)]
+        pages = self._paged(lines, vts)
+        assert pages is not None
+        assert len(pages) >= 2
+        # 第 1 页显示到 10.0；同刻操作被跳过；后续页切换时刻严格递增
+        assert abs(pages[0].t_end - 10.0) < 1e-6
+        assert pages[0].end < 30
+        for a, b in pairwise(pages):
+            assert b.start >= a.end  # 无重叠；同刻操作可留在同页（无跳过）
+            assert a.t_end - a.t_start > 0
+            assert b.t_start >= a.t_end - 1e-6
+        assert pages[-1].end == 40
+
+    def test_video_time_clamped_to_video_duration(self):
+        """video_time 超出视频时长时切换时刻被钳制，不产生负时长页"""
+        lines = [f"{i}.技能 能天使" for i in range(1, 40)]
+        vts = [5.0 + i * 2.0 for i in range(39)]  # 末操作 81s > 60s
+        pages = self._paged(lines, vts, duration=60.0)
+        assert pages is not None
+        for page in pages:
+            assert page.t_end <= 60.0 + 1e-6
+            assert page.t_end - page.t_start > 0
+        assert pages[-1].t_end == 60.0

@@ -39,7 +39,7 @@ from arknights_video_pipeline.core.actions_to_text import (
     format_actions_lines,
 )
 from arknights_video_pipeline.core.map_overlay import _measure_line_top_offsets
-from arknights_video_pipeline.core.text_fit import fit_actions_lines
+from arknights_video_pipeline.core.text_fit import fit_actions_lines, page_actions_lines
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
@@ -620,20 +620,33 @@ class Style1TextRangeTool(ToolView):
             "text_color": str(self._get_style1("text_overlay.text_color", "#FFFFFF")),
         }
 
-        # 显示范围限定：与视频合成共用 core.text_fit（自动换行 + 末尾截断），
-        # 保证预览与合成输出逐字一致
-        fitted_lines, _line_groups, dropped = fit_actions_lines(
-            lines, font_path, text_cfg,
-            values["text_overlay.max_text_right"],
-            values["text_overlay.max_text_bottom"],
-            text_x, text_y,
-            padding=_PANEL_PADDING,
-        )
+        # 显示范围限定：与视频合成共用 core.text_fit（自动换行 + 末尾截断；
+        # 截断后操作均带 video_time 时自动分页，随操作执行切换显示——
+        # 预览展示第 1 页，其余页在合成中按 video_time 依次切换）
+        max_right = values["text_overlay.max_text_right"]
+        max_bottom = values["text_overlay.max_text_bottom"]
+        video_times = [a.get("video_time") for a in (data.get("actions") or [])]
+        page_count = 0
+        if len(video_times) == len(lines) and all(
+            isinstance(v, (int, float)) for v in video_times
+        ):
+            pages = page_actions_lines(
+                lines, font_path, text_cfg, max_right, max_bottom,
+                text_x, text_y, video_times, 0.0, 1e9,
+                padding=_PANEL_PADDING,
+            )
+            if pages:
+                fitted_lines = pages[0].lines
+                page_count = len(pages)
+                dropped = 0
+        if page_count == 0:
+            fitted_lines, _line_groups, dropped = fit_actions_lines(
+                lines, font_path, text_cfg, max_right, max_bottom,
+                text_x, text_y, padding=_PANEL_PADDING,
+            )
         self._last_fit = (
-            values["text_overlay.max_text_right"],
-            values["text_overlay.max_text_bottom"],
-            dropped,
-            len(fitted_lines) - len(lines),
+            max_right, max_bottom, dropped,
+            len(fitted_lines) - len(lines), page_count,
         )
         lines = fitted_lines
 
@@ -756,13 +769,17 @@ class Style1TextRangeTool(ToolView):
             else:
                 parts.append(tr("tools.style1_text_range.range_ok"))
                 color = c.success
-            # 范围限定拟合统计（自动换行 / 末尾截断 / 未启用）
-            max_right, max_bottom, dropped, wrapped_extra = getattr(
-                self, "_last_fit", (None, None, 0, 0)
+            # 范围限定拟合统计（自动换行 / 末尾截断 / 分页切换 / 未启用）
+            max_right, max_bottom, dropped, wrapped_extra, page_count = getattr(
+                self, "_last_fit", (None, None, 0, 0, 0)
             )
             if max_right is None and max_bottom is None:
                 parts.append(tr("tools.style1_text_range.range_unbounded"))
             else:
+                if page_count > 1:
+                    parts.append(tr(
+                        "tools.style1_text_range.range_paged", n=page_count
+                    ))
                 if wrapped_extra > 0:
                     parts.append(tr(
                         "tools.style1_text_range.range_wrapped", n=wrapped_extra
