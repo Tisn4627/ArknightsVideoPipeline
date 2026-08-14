@@ -19,10 +19,14 @@ from PyQt6.QtCore import Qt, QRegularExpression
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit,
+    QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit, QDialog,
 )
 
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
+from arknights_video_pipeline.gui.components.material_color_picker import (
+    ColorPickerDialog,
+    ColorSwatchButton,
+)
 from arknights_video_pipeline.gui.components.material_switch import MaterialSwitch
 from arknights_video_pipeline.gui.theme import MaterialColors
 
@@ -469,9 +473,15 @@ def build_color_row(
     colors: MaterialColors | None = None,
     on_changed: Callable[[str], None] | None = None,
 ) -> FieldRow:
-    """颜色输入行：标签 + QLineEdit（#RRGGBB 格式校验）"""
+    """颜色输入行：标签 + 色块预览 + QLineEdit（#RRGGBB 格式校验）
+
+    色块位于输入框左侧，实时预览当前颜色；点击色块弹出 MD3 风格
+    调色盘对话框，选择确认后写回输入框。
+    """
     c = colors or MaterialColors.light()
     container, layout, label_w = _make_row(label, c)
+    swatch = ColorSwatchButton(default, colors=c)
+    layout.addWidget(swatch, 0, Qt.AlignmentFlag.AlignVCenter)
     edit = QLineEdit()
     edit.setText(default)
     edit.setPlaceholderText("#RRGGBB")
@@ -493,10 +503,31 @@ def build_color_row(
         if valid != _is_valid[0]:
             _is_valid[0] = valid
             edit.setStyleSheet(_lineedit_qss(c, error=not valid))
+        if valid:
+            swatch.set_color(text)
         if on_changed and valid:
             on_changed(text)
 
     edit.textChanged.connect(_on_text_changed)
+
+    def _open_picker() -> None:
+        dlg = ColorPickerDialog(
+            initial=swatch.color(), colors=c, parent=container.window()
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            text = dlg.get_color()
+            if not text:
+                return
+            edit.blockSignals(True)
+            edit.setText(text)
+            edit.blockSignals(False)
+            _is_valid[0] = True
+            edit.setStyleSheet(_lineedit_qss(c, error=False))
+            swatch.set_color(text)
+            if on_changed:
+                on_changed(text)
+
+    swatch.clicked.connect(_open_picker)
 
     def set_value(val: Any, block_signal: bool = True) -> None:
         if block_signal:
@@ -505,6 +536,8 @@ def build_color_row(
         edit.setText(text)
         _is_valid[0] = _check_valid(text)
         edit.setStyleSheet(_lineedit_qss(c, error=not _is_valid[0]))
+        if _is_valid[0]:
+            swatch.set_color(text)
         if block_signal:
             edit.blockSignals(False)
 
@@ -516,9 +549,11 @@ def build_color_row(
         c = new_colors
         edit.setStyleSheet(_lineedit_qss(c, error=not _is_valid[0]))
         label_w.setStyleSheet(_dim_label_style(new_colors))
+        swatch.set_colors(new_colors)
 
     def set_enabled(enabled: bool) -> None:
         edit.setEnabled(enabled)
+        swatch.setEnabled(enabled)
 
     return FieldRow(container, set_value, get_value, set_colors, set_enabled,
                     set_label=lambda t, w=label_w: w.setText(t))

@@ -3,6 +3,7 @@ gui.assets.icons.nav_icons - 导航栏 MD3 图标资源加载与着色
 
 提供 24dp MD3 Material Icons (Filled) 资源加载、单色着色与高 DPI 适配，
 避免外部依赖 material-design-icons-master 目录。
+支持 SVG 图标格式，提供更好的缩放性和清晰度。
 """
 from __future__ import annotations
 
@@ -18,14 +19,16 @@ _ICON_ROOT: Path = Path(__file__).parent
 
 # 当前 GUI 主要用作 24dp 导航项；@2x (48px) 在主流 HiDPI 上
 # 渲染效果最佳，避免拉伸锯齿。文件名映射:
-#   home / settings / info  -> Material Design Icons Filled Baseline
-#   info 图标采用与 help 同等密度的 24dp @2x 资源，确保 nav rail 三项
+#   home / settings / tools / info  -> Material Design Icons Filled Baseline
+#   info 图标采用与 help 同等密度的 24dp @2x 资源，确保 nav rail 各项
 #   图标在同一 24dp 网格下渲染尺寸一致、像素对齐。
 # 值为相对 _ICON_ROOT 的子路径（可分布于 nav/、batch/ 等子目录）。
+# 优先使用 SVG 格式，提供更好的缩放性和清晰度。
 _ICON_FILES: dict[str, str] = {
-    "home": "nav/home_24dp_2x.png",
-    "settings": "nav/settings_24dp_2x.png",
-    "info": "nav/info_24dp_2x.png",
+    "home": "svg/home.svg",
+    "settings": "svg/settings.svg",
+    "tools": "svg/tools.svg",
+    "info": "svg/info.svg",
     # 复选框状态图标（Material Symbols Rounded @ 24dp @2x）
     "check_box": "nav/check_box_24dp_2x.png",
     "check_box_outline_blank": "nav/check_box_outline_blank_24dp_2x.png",
@@ -43,17 +46,51 @@ _ICON_FILES: dict[str, str] = {
 
 @functools.lru_cache(maxsize=32)
 def _load_source(name: str) -> QImage | None:
-    """加载原始 ARGB32 资源（带透明通道的黑色形状）。"""
+    """加载原始 ARGB32 资源（带透明通道的黑色形状）。支持 SVG 和 PNG 格式。"""
     rel = _ICON_FILES.get(name)
     if rel is None:
         return None
     path = _ICON_ROOT / rel
     if not path.is_file():
         return None
+    
+    # 处理 SVG 文件
+    if path.suffix.lower() == '.svg':
+        return _load_svg_source(path)
+    
+    # 处理 PNG 文件
     img = QImage(str(path))
     if img.isNull():
         return None
     return img.convertToFormat(QImage.Format.Format_ARGB32)
+
+
+def _load_svg_source(path: Path) -> QImage | None:
+    """从 SVG 文件加载图标源图像。
+    
+    使用 QtSvg 渲染 SVG 为 QImage，确保矢量图形正确缩放。
+    """
+    try:
+        from PyQt6.QtSvg import QSvgRenderer
+        from PyQt6.QtCore import QByteArray
+        
+        renderer = QSvgRenderer(str(path))
+        if not renderer.isValid():
+            return None
+        
+        # 创建固定尺寸的 QImage 用于着色处理
+        image = QImage(24, 24, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter)
+        painter.end()
+        
+        return image
+    except ImportError:
+        # 如果 QtSvg 不可用，回退到 PNG 加载
+        return None
 
 
 def make_icon_pixmap(name: str, color: QColor | str, size_px: int = 24) -> QPixmap | None:

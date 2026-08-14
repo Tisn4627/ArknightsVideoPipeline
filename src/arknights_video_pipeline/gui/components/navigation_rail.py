@@ -5,7 +5,7 @@ gui.components.navigation_rail - Material Design 3 Navigation Rail
 支持浅色/深色主题切换。
 
 图标使用 MD3 24dp Material Icons (Filled)：
-    Home、Settings、Info。图标资源在 gui/assets/icons/nav/，
+    Home、Settings、Tools、Info。图标资源在 gui/assets/icons/nav/，
     加载/着色由 gui.assets.icons.nav_icons 提供。
 """
 
@@ -151,6 +151,7 @@ class NavigationRail(QFrame):
         self._item_specs: list[tuple[str, str]] = [
             ("home", "nav.home"),
             ("settings", "nav.settings"),
+            ("tools", "nav.tools"),
             ("info", "nav.info"),
         ]
 
@@ -161,7 +162,7 @@ class NavigationRail(QFrame):
         # 让 child 自身水平居中（每个 item 宽度固定为 64px = 88-12*2）
         layout.addStretch(0)
 
-        # 三个 MD3 NavigationRail 目的地：Home / Settings / Info
+        # 四个 MD3 NavigationRail 目的地：Home / Settings / Tools / Info
         for icon_name, key in self._item_specs:
             item = NavigationRailItem(icon_name, tr(key), colors=self._colors)
             item.clicked.connect(self._make_handler(len(self._items)))

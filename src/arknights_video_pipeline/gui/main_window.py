@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 
 from arknights_video_pipeline.gui.components import (
     AboutPage, BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
-    MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage,
+    MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage, ToolsPage,
 )
 from arknights_video_pipeline.gui.i18n import init_i18n, i18n, tr
 from arknights_video_pipeline.gui.theme import (
@@ -51,7 +51,7 @@ class MainWindow(QMainWindow):
         # GUI 偏好独立管理（config/gui.json），与 pipeline 配置完全解耦
         self._gui_config = GuiConfig(parent=self)
         self._is_dark = self._gui_config.is_dark_theme()
-        self._current_page = 0  # 0=Home, 1=Settings, 2=Info
+        self._current_page = 0  # 0=Home, 1=Settings, 2=Info, 3=Tools
         # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
         self._titlebar_applied = False
 
@@ -152,6 +152,29 @@ class MainWindow(QMainWindow):
         )
         self._about_scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self._about_scroll)
+
+        # ── Tools 页 ──────────────────────────────────────
+        self._tools_page = ToolsPage(
+            config_proxy=self._config, colors=MaterialColors.light()
+        )
+        # 应用工具配置成功后同步设置页子配置字段行
+        self._tools_page.tool_config_applied.connect(
+            self._on_tool_config_applied
+        )
+        self._tools_scroll = QScrollArea()
+        self._tools_scroll.setWidgetResizable(True)
+        self._tools_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._tools_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._tools_scroll.viewport().setObjectName("toolsScrollViewport")
+        self._tools_scroll.viewport().setStyleSheet(
+            "QWidget#toolsScrollViewport { background-color: transparent; }"
+        )
+        self._tools_scroll.setWidget(self._tools_page)
+        self._tools_page.setMaximumWidth(
+            self._tools_scroll.viewport().width()
+        )
+        self._tools_scroll.viewport().installEventFilter(self)
+        self._stack.addWidget(self._tools_scroll)
 
         self._build_hero()
         self._build_cards_grid()
@@ -669,7 +692,7 @@ class MainWindow(QMainWindow):
             self._run_btn.setEnabled(bool(paths))
 
     def _on_nav_changed(self, index: int) -> None:
-        # 0=Home, 1=Settings, 2=Info（完整页面，与主页/设置页同级）
+        # 0=Home, 1=Settings, 2=Tools, 3=Info（完整页面，与主页/设置页同级）
         self._current_page = index
         if index == 0:
             self._stack.setCurrentWidget(self._home_scroll)
@@ -678,6 +701,8 @@ class MainWindow(QMainWindow):
             self._settings_page.set_dark(self._is_dark)
             self._stack.setCurrentWidget(self._settings_scroll)
         elif index == 2:
+            self._stack.setCurrentWidget(self._tools_scroll)
+        elif index == 3:
             self._stack.setCurrentWidget(self._about_scroll)
 
     # ── 语言切换 ──────────────────────────────────────────
@@ -690,6 +715,10 @@ class MainWindow(QMainWindow):
         """
         if i18n().set_language(lang):
             self._gui_config.set_language(lang)
+
+    def _on_tool_config_applied(self) -> None:
+        """工具页将子配置写入磁盘后，同步设置页子配置字段行"""
+        self._settings_page.load_sub_config_values(self._config)
 
     def _retranslate(self) -> None:
         """语言切换时刷新主页所有静态文本"""
@@ -816,6 +845,9 @@ class MainWindow(QMainWindow):
         # 同步刷新关于页配色
         if getattr(self, "_about_page", None) is not None:
             self._about_page.set_colors(colors)
+        # 同步刷新工具页配色（索引卡片 + 各工具视图）
+        if getattr(self, "_tools_page", None) is not None:
+            self._tools_page.set_colors(colors)
         # 同步刷新主页所有卡片的表面色（paintEvent 自绘模式需手动更新）
         for card in (
             getattr(self, "_config_card", None),
@@ -890,6 +922,11 @@ class MainWindow(QMainWindow):
             vw = self._about_scroll.viewport().width()
             if vw > 0 and self._about_page.maximumWidth() != vw:
                 self._about_page.setMaximumWidth(vw)
+        # 同步 ToolsPage 最大宽度（与 SettingsPage 同理）
+        if getattr(self, "_tools_scroll", None) is not None:
+            vw = self._tools_scroll.viewport().width()
+            if vw > 0 and self._tools_page.maximumWidth() != vw:
+                self._tools_page.setMaximumWidth(vw)
 
     def eventFilter(self, obj, event) -> bool:
         # 监听 home/settings 滚动视口的尺寸变化（窗口尺寸变化时触发），
@@ -921,6 +958,13 @@ class MainWindow(QMainWindow):
                 vw = self._about_scroll.viewport().width()
                 if vw > 0:
                     self._about_page.setMaximumWidth(vw)
+            elif (
+                getattr(self, "_tools_scroll", None) is not None
+                and obj is self._tools_scroll.viewport()
+            ):
+                vw = self._tools_scroll.viewport().width()
+                if vw > 0:
+                    self._tools_page.setMaximumWidth(vw)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:
