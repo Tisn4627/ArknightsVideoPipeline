@@ -270,6 +270,8 @@ python main.py --init-config compose
 | `font_scale` | float | `1` | 字体缩放比例（`subtitle_auto_fit` 启用时自动设为 1） |
 | `text_x` | integer | `50` | 文本 X 坐标偏移 |
 | `text_y` | integer | `240` | 文本 Y 坐标偏移 |
+| `max_text_right` | integer/null | `272` | Actions 文本块右边界（画布绝对 X）。超宽行自动换行，保证右侧不遮挡视频画面；`null` 表示不限 |
+| `max_text_bottom` | integer/null | `965` | Actions 文本块下边界（画布绝对 Y）。自动换行后仍超高时，按操作从末尾截断，保证下侧不遮挡视频画面中的 Tips 提示字样；`null` 表示不限 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
 | `shadow_offset_x` | integer | `2` | 阴影 X 偏移 |
@@ -291,6 +293,15 @@ python main.py --init-config compose
 >   - 字幕在视频右侧（`text_x >= video_x + video_width`）：可用宽度 = `output_width - text_x`
 >   - 字幕与视频重叠：取左侧和右侧区域中较大者
 > - 自动推断的可用宽度不超过输出宽度的 40%
+>
+> **Actions 显示范围限定说明**：`max_text_right` / `max_text_bottom` 用于将 Actions
+> 文本块限定在安全显示范围内（默认右边界 = 视频左边缘 `video_x`，下边界 = 视频底边）。
+> 启用后（任一值非 `null`）：
+> - 超出右边界的文本行自动换行（优先在空格处断行，CJK 按字符断行）；
+> - 换行后文本块高度仍超出下边界时，按整个操作为单位从末尾截断，日志中记录截断数量；
+> - 逐操作显示（`map_overlay`）的面板高亮会与换行后的行结构保持一致；
+> - 该限定仅作用于 Actions 文本，编队文本不受影响。
+> 可通过 GUI「工具 → Style1 文本范围预览」实时调整边界并写入配置。
 
 **style2 text_overlay：**
 

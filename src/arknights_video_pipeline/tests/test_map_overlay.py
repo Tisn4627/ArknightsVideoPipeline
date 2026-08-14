@@ -352,7 +352,6 @@ class TestPanelHighlightClips:
         """高亮行与主文本块逐行对齐：每行内容顶部与主文本多行渲染完全一致
         （按真实行距测量，消除等距近似随行数累积的偏移）"""
         import numpy as np
-
         from pictex import Canvas
 
         text_config = {"font_size": 25, "text_x": 50, "text_y": 240}
@@ -384,13 +383,90 @@ class TestPanelHighlightClips:
             assert px == 50
             assert abs((py + single_top) - (240 + tops[i])) < 1.0
 
-    def test_line_count_mismatch_returns_empty(self):
+    def test_line_groups_exceed_timeline_returns_empty(self):
+        """行数切片超出时间线（配置错误）时跳过面板高亮"""
         timeline = build_action_timeline(_make_actions(), switch_time=0.5, video_duration=10)
         clips = build_panel_highlight_clips(
-            ["只有一行"], timeline, switch_time=0.5, video_duration=10,
+            ["1.二倍速", "2.部署 遥 ↓", "3.部署 米格鲁 ←", "4.技能 遥", "5.撤退 遥"],
+            timeline, switch_time=0.5, video_duration=10,
             text_config={"font_size": 25}, font_path=FONT_PATH, cfg={},
+            line_groups=[(0, 1)] * 5,
         )
         assert clips == []
+
+    def test_wrapped_lines_share_action_interval(self):
+        """范围限定后一个操作换行成多行：组内所有行共享该操作的区间，
+        且与主文本块逐行对齐（按全量拟合行真实行距测量）"""
+        import numpy as np
+        from pictex import Canvas
+
+        lines = ["1.部署 遥 (6,3) ↓", "1.部署 遥 (6,3) ↓ 续", "2.技能 遥"]
+        line_groups = [(0, 2), (2, 3)]
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 1.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 3.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            lines, timeline, switch_time=0.5, video_duration=10,
+            text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, cfg={}, line_groups=line_groups,
+        )
+        assert [c.text for c in clips] == lines
+        # 组 1 的两行共享 [0.5, 1.0) 区间
+        assert abs(clips[0].start - 0.5) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 1.0) < 1e-6
+        assert abs(clips[0].start - clips[1].start) < 1e-6
+        assert abs(clips[0].duration - clips[1].duration) < 1e-6
+        # 组 2（时间线末条）获得 [1.0, 3.0) 预告区间并与末行接管无缝合并为 [1.0, 10.0)
+        assert abs(clips[2].start - 1.0) < 1e-6
+        assert abs(clips[2].start + clips[2].duration - 10.0) < 1e-6
+        # 逐行位置与主文本多行渲染的真实行顶一致（≤1px 取整）
+        block = Canvas().font_family(FONT_PATH).font_size(25).padding(10)
+        alpha = block.render("\n".join(lines)).to_numpy("RGBA")[:, :, 3]
+        tops = []
+        in_text = False
+        for y in range(alpha.shape[0]):
+            has = bool(alpha[y].max() > 0)
+            if has and not in_text:
+                tops.append(y)
+                in_text = True
+            elif not has and in_text:
+                in_text = False
+        single_top = int(np.where(
+            block.render(lines[0]).to_numpy("RGBA")[:, :, 3].max(axis=1) > 0
+        )[0][0])
+        for i, clip in enumerate(clips):
+            px, py = clip.position(0)
+            assert px == 50
+            assert abs((py + single_top) - (240 + tops[i])) < 1.0
+
+    def test_truncated_trailing_actions_not_highlighted(self):
+        """范围限定截断末尾操作后：仅保留的操作获得高亮，且时间线语义不变"""
+        lines = ["1.部署 遥 ↓", "2.技能 遥"]
+        line_groups = [(0, 1), (1, 2)]
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 1.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 3.0},
+                {"type": "Retreat", "location": [6, 3], "video_time": 5.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            lines, timeline, switch_time=0.5, video_duration=10,
+            text_config={"font_size": 25}, font_path=FONT_PATH, cfg={},
+            line_groups=line_groups,
+        )
+        assert [c.text for c in clips] == lines
+        assert abs(clips[0].start - 0.5) < 1e-6
+        assert abs(clips[0].start + clips[0].duration - 1.0) < 1e-6
+        # 末行（组 2，保留的最后一个操作）获得 [1.0, 3.0)；
+        # 时间线末条（被截断操作）的接管区间无对应组，不渲染
+        assert abs(clips[1].start - 1.0) < 1e-6
+        assert abs(clips[1].start + clips[1].duration - 3.0) < 1e-6
 
     def test_all_missing_video_time_returns_empty(self):
         """全部操作缺 video_time 时时间线全落在 switch_time，无有效区间"""

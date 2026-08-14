@@ -411,6 +411,7 @@ def build_panel_highlight_clips(
     text_config: dict,
     font_path: str,
     cfg: dict,
+    line_groups: Optional[list[tuple[int, int]]] = None,
 ) -> list[TextClip]:
     """构建左侧面板的"下一操作"高亮 clips（静态全列表 + 下一个将要执行的行高亮）
 
@@ -423,20 +424,28 @@ def build_panel_highlight_clips(
     在操作间长空窗；同刻行组内仅末行获得区间；末行接管
     [最后一个 video_time, 视频结束)。
 
+    文本范围限定（core.text_fit）将主文本块换行展开后，一个操作可能
+    对应多行：``line_groups`` 提供每个操作的行号切片 ``(start, end)``，
+    组内所有行共享该操作的时间区间；行号超出时间线的组（被截断的
+    操作）不会产生高亮。
+
     Args:
-        lines: 面板每行文本（format_actions_lines 输出，与 timeline 一一对应）
+        lines: 面板文本行（范围限定后为拟合行，否则为 format_actions_lines 输出）
         timeline: build_action_timeline 的输出
         switch_time: 进入战斗时间
         video_duration: 视频总时长
         text_config: 文本叠加配置（主文本，含最终 font_size/font_scale）
         font_path: 字体绝对路径
         cfg: map_overlay 配置块
+        line_groups: 每操作对应的 (start, end) 行号切片；None 时每操作一行
 
     Returns:
         高亮 TextClip 列表（可能为空）
     """
-    if not lines or len(lines) != len(timeline):
-        logger.warning("面板行数与操作数不一致 (%d vs %d)，跳过面板高亮", len(lines), len(timeline))
+    if line_groups is None:
+        line_groups = [(i, i + 1) for i in range(len(lines))]
+    if not lines or not line_groups or len(line_groups) > len(timeline):
+        logger.warning("面板行数与操作数不一致 (%d vs %d)，跳过面板高亮", len(line_groups), len(timeline))
         return []
 
     # 时间线全落在 switch_time（所有操作均缺 video_time）：无有效高亮区间
@@ -479,41 +488,42 @@ def build_panel_highlight_clips(
     text_y = float(text_config.get("text_y", 240))
 
     clips: list[TextClip] = []
-    for i, line in enumerate(lines):
+    for i, (group_start, group_end) in enumerate(line_groups):
         start = starts[i]
         end = ends[i]
         if end <= 0 or end - start < _MIN_INTERVAL:
             continue
 
-        if line_tops is not None:
-            line_offset = line_tops[i] - line_tops[0]
-        else:
-            line_offset = i * line_height
+        for line_idx in range(group_start, min(group_end, len(lines))):
+            if line_tops is not None:
+                line_offset = line_tops[line_idx] - line_tops[0]
+            else:
+                line_offset = line_idx * line_height
 
-        canvas = Canvas().font_family(font_path).font_size(font_size)
-        # 不带阴影与淡入淡出：高亮行必须完全不透明地覆盖下方白色文本，
-        # 阴影/半透明过渡会让白色边缘透出，形成"重影"效果。
-        canvas = canvas.color(cfg.get("panel_highlight_color", "#FFD700"))
-        bg_alpha = float(cfg.get("panel_highlight_bg_alpha", 0.0))
-        if bg_alpha > 0:
-            canvas = canvas.background_color(
-                _with_alpha(
-                    cfg.get("panel_highlight_background", "#000000"),
-                    bg_alpha,
+            canvas = Canvas().font_family(font_path).font_size(font_size)
+            # 不带阴影与淡入淡出：高亮行必须完全不透明地覆盖下方白色文本，
+            # 阴影/半透明过渡会让白色边缘透出，形成"重影"效果。
+            canvas = canvas.color(cfg.get("panel_highlight_color", "#FFD700"))
+            bg_alpha = float(cfg.get("panel_highlight_bg_alpha", 0.0))
+            if bg_alpha > 0:
+                canvas = canvas.background_color(
+                    _with_alpha(
+                        cfg.get("panel_highlight_background", "#000000"),
+                        bg_alpha,
+                    )
                 )
-            )
-        canvas = canvas.padding(_PANEL_PADDING)
+            canvas = canvas.padding(_PANEL_PADDING)
 
-        clip = TextClip(line, start=start, duration=end - start, canvas=canvas)
-        clip.set_position((text_x, text_y + line_offset))
+            clip = TextClip(lines[line_idx], start=start, duration=end - start, canvas=canvas)
+            clip.set_position((text_x, text_y + line_offset))
 
-        fade = float(cfg.get("panel_fade_duration", 0.0))
-        if fade > 0:
-            actual = min(fade, (end - start) / 3)
-            if actual > 0:
-                clip.add_effect(FadeIn(actual))
-                clip.add_effect(FadeOut(actual))
-        clips.append(clip)
+            fade = float(cfg.get("panel_fade_duration", 0.0))
+            if fade > 0:
+                actual = min(fade, (end - start) / 3)
+                if actual > 0:
+                    clip.add_effect(FadeIn(actual))
+                    clip.add_effect(FadeOut(actual))
+            clips.append(clip)
     return clips
 
 
@@ -530,11 +540,16 @@ def build_map_overlay_clips(
     map_cfg: dict,
     text_config: dict,
     font_path: str,
+    line_groups: Optional[list[tuple[int, int]]] = None,
 ) -> list[TextClip]:
     """逐操作显示入口：构建地图数字 + 面板高亮的全部 clips
 
     level 为 None 时仅生成面板高亮（地图数字不可用时优雅降级）；
     各部分构建失败仅记录警告，不影响其余叠加。
+
+    Args:
+        line_groups: 每操作对应的 (start, end) 行号切片（范围限定后
+            一个操作对应多行时使用）；None 时每操作一行
 
     Returns:
         所有附加 clips 列表（可能为空）
@@ -558,7 +573,8 @@ def build_map_overlay_clips(
         try:
             clips.extend(
                 build_panel_highlight_clips(
-                    lines, timeline, switch_time, video_duration, text_config, font_path, cfg
+                    lines, timeline, switch_time, video_duration, text_config, font_path, cfg,
+                    line_groups=line_groups,
                 )
             )
         except Exception as exc:  # noqa: BLE001

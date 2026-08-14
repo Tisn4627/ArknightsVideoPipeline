@@ -19,6 +19,7 @@ from pictex import Canvas, Shadow
 
 from arknights_video_pipeline.core.exceptions import VideoValidationError
 from arknights_video_pipeline.core.map_overlay import DEFAULT_MAP_OVERLAY_CONFIG
+from arknights_video_pipeline.core.text_fit import fit_actions_lines
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT, load_config, save_default_config, validate_video_file,
     resolve_font_path, load_formation_text, load_actions_text, get_switch_time,
@@ -48,6 +49,12 @@ DEFAULT_CONFIG = {
         "font_scale": 1,
         "text_x": 50,
         "text_y": 240,
+        # Actions 文本显示范围限定（画布绝对坐标，null=不限）：
+        # - max_text_right: 文本块右边界，超出部分自动换行（右侧不遮挡视频画面）
+        # - max_text_bottom: 文本块下边界，仍超高时按操作从末尾截断
+        #   （下侧不遮挡视频画面中的 Tips 提示字样）
+        "max_text_right": 272,
+        "max_text_bottom": 965,
         "fade_duration": 0.5,
         "shadow_enabled": True,
         "shadow_offset_x": 2,
@@ -343,6 +350,46 @@ def compose_video(config):
             text_config["font_size"] = auto_font_size
             text_config["font_scale"] = 1
 
+        # Actions 显示范围限定：超宽行自动换行 + 按操作从末尾截断
+        # （与 GUI 文本范围预览共用 core.text_fit，保证预览与合成逐字一致）
+        actions_fitted_lines = None
+        actions_line_groups = None
+        max_text_right = text_config.get("max_text_right")
+        max_text_bottom = text_config.get("max_text_bottom")
+        if max_text_right is not None or max_text_bottom is not None:
+            input_data = None
+            try:
+                with open(input_json, "r", encoding="utf-8") as f:
+                    input_data = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning(f"读取 copilot JSON 失败，跳过 Actions 范围限定: {exc}")
+            if input_data:
+                from arknights_video_pipeline.core.actions_to_text import (
+                    format_actions_lines,
+                )
+
+                fit_font_path = resolve_font_path(
+                    text_config.get("font", "SOURCEHANSANSCN-HEAVY.OTF"),
+                    os.path.join(
+                        PROJECT_ROOT, text_config.get("font_dir", "resource/font")
+                    ),
+                )
+                actions_fitted_lines, actions_line_groups, dropped_count = (
+                    fit_actions_lines(
+                        format_actions_lines(input_data, load_config(inputs["actions_config"], {})),
+                        fit_font_path, text_config,
+                        max_text_right, max_text_bottom,
+                        text_config.get("text_x", 50), text_config.get("text_y", 240),
+                    )
+                )
+                if dropped_count:
+                    logger.info(
+                        f"  Actions 文本范围限定: 自动换行 + 截断 {dropped_count} 个操作"
+                    )
+                else:
+                    logger.info("  Actions 文本范围限定: 已自动换行适配边界")
+                actions_text = "\n".join(actions_fitted_lines)
+
         # 生成编队文本
         if formation_text:
             formation_duration = switch_time
@@ -391,9 +438,15 @@ def compose_video(config):
                     "请开启 识别设置 -> 输出 video_time 扩展字段 后重新识别"
                 )
             elif actions:
-                # 面板逐行文本（与主操作文本块逐字一致）
-                actions_config = load_config(inputs["actions_config"], {})
-                lines = format_actions_lines(input_data, actions_config)
+                # 面板逐行文本：优先复用范围限定后的拟合行（与主操作文本块逐字一致，
+                # 换行展开后每操作对应多行）；未配置范围限定时回退到原始逐操作行
+                actions_cfg = load_config(inputs["actions_config"], {})
+                if actions_fitted_lines is not None:
+                    lines = actions_fitted_lines
+                    line_groups = actions_line_groups
+                else:
+                    lines = format_actions_lines(input_data, actions_cfg)
+                    line_groups = None
 
                 level = load_level((input_data or {}).get("stage_name", ""))
 
@@ -414,6 +467,7 @@ def compose_video(config):
                     actions, lines, level, switch_time, video.duration,
                     config["video_scale"], config["video_x"], config["video_y"],
                     video_native_size, map_cfg, text_config, map_font_path,
+                    line_groups=line_groups,
                 )
                 clips.extend(overlay_clips)
                 logger.info(f"  逐操作显示已加载 ({len(overlay_clips)} 个叠加片段)")

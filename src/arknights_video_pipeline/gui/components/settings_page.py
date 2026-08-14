@@ -1163,6 +1163,16 @@ class SettingsPage(QWidget):
                 tr("settings.compose.auto_fit_available_width"), default=None,
                 minimum=1, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.auto_fit_available_width")), "settings.compose.auto_fit_available_width")
+            # Actions 文本显示范围限定（null=不限）：右侧不遮挡视频画面、
+            # 下侧不遮挡视频画面中的 Tips 提示字样
+            add_adv(f"{tp}.max_text_right", build_nullable_int_row(
+                tr("settings.compose.max_text_right"), default=272,
+                minimum=0, maximum=3840, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.max_text_right")), "settings.compose.max_text_right")
+            add_adv(f"{tp}.max_text_bottom", build_nullable_int_row(
+                tr("settings.compose.max_text_bottom"), default=965,
+                minimum=0, maximum=2160, colors=c,
+                on_changed=self._emit_sub(cn, f"{tp}.max_text_bottom")), "settings.compose.max_text_bottom")
         else:
             add_adv(f"{tp}.max_chars_per_line", build_int_row(
                 tr("settings.compose.max_chars_per_line"), default=20, minimum=1, maximum=200, colors=c,

@@ -23,7 +23,7 @@ import os
 from typing import Any
 
 from pictex import Canvas, Shadow
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -39,6 +39,7 @@ from arknights_video_pipeline.core.actions_to_text import (
     format_actions_lines,
 )
 from arknights_video_pipeline.core.map_overlay import _measure_line_top_offsets
+from arknights_video_pipeline.core.text_fit import fit_actions_lines
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
@@ -51,6 +52,7 @@ from arknights_video_pipeline.gui.components.settings_row_builders import (
     FieldRow,
     build_float_row,
     build_int_row,
+    build_nullable_int_row,
 )
 from arknights_video_pipeline.gui.components.tools.base import ToolView
 from arknights_video_pipeline.gui.i18n import tr
@@ -82,6 +84,9 @@ _FIELD_SPECS: list[tuple[str, str]] = [
     ("text_overlay.font_scale", "tools.style1_text_range.font_scale"),
     ("text_overlay.text_x", "tools.style1_text_range.text_x"),
     ("text_overlay.text_y", "tools.style1_text_range.text_y"),
+    # 文本显示范围限定（null=不限）：右侧不遮挡视频画面、下侧不遮挡 Tips 提示
+    ("text_overlay.max_text_right", "tools.style1_text_range.max_text_right"),
+    ("text_overlay.max_text_bottom", "tools.style1_text_range.max_text_bottom"),
     ("video_x", "tools.style1_text_range.video_x"),
     ("video_y", "tools.style1_text_range.video_y"),
     ("video_scale", "tools.style1_text_range.video_scale"),
@@ -106,6 +111,8 @@ class TextRangePreview(QWidget):
         self._text_image: QImage | None = None
         self._text_rect: QRectF | None = None
         self._line_rects: list[QRectF] | None = None
+        # 范围限定边界线（画布坐标线段），由 set_bounds 注入
+        self._bounds_lines: list[tuple[QPointF, QPointF]] = []
         self.setMinimumHeight(320)
         # paintEvent 始终全量绘制自身像素，声明不透明避免 Windows
         # 拖动/缩放窗口时残留旧像素（文字乱码）
@@ -131,6 +138,36 @@ class TextRangePreview(QWidget):
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
+        self.update()
+
+    def set_bounds(
+        self,
+        max_right: int | None,
+        max_bottom: int | None,
+        text_x: float,
+        text_y: float,
+        out_size: tuple[int, int],
+    ) -> None:
+        """设置范围限定边界线（画布坐标），未配置的方向不绘制
+
+        右边界：从文本锚点垂直向下延伸；下边界：从文本锚点水平向右延伸，
+        另一端对齐到另一方向边界或画布边缘。
+        """
+        out_w, out_h = out_size
+        lines: list[tuple[QPointF, QPointF]] = []
+        if max_right is not None:
+            bottom_y = float(max_bottom) if max_bottom is not None else float(out_h)
+            lines.append((
+                QPointF(float(max_right), float(text_y)),
+                QPointF(float(max_right), bottom_y),
+            ))
+        if max_bottom is not None:
+            right_x = float(max_right) if max_right is not None else float(out_w)
+            lines.append((
+                QPointF(float(text_x), float(max_bottom)),
+                QPointF(right_x, float(max_bottom)),
+            ))
+        self._bounds_lines = lines
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -169,6 +206,15 @@ class TextRangePreview(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(self._video_rect)
+
+        # 范围限定边界线：secondary 虚线（右边界/下边界）
+        if self._bounds_lines:
+            pen = QPen(QColor(c.secondary), pen_w)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for start, end in self._bounds_lines:
+                painter.drawLine(start, end)
 
         # 逐行范围：primary_container 半透明填充
         if self._line_rects:
@@ -337,6 +383,8 @@ class Style1TextRangeTool(ToolView):
             "text_overlay.font_scale": 1.0,
             "text_overlay.text_x": 50,
             "text_overlay.text_y": 240,
+            "text_overlay.max_text_right": 272,
+            "text_overlay.max_text_bottom": 965,
             "video_x": 272,
             "video_y": 47,
             "video_scale": 0.85,
@@ -359,6 +407,17 @@ class Style1TextRangeTool(ToolView):
         if field_path == "text_overlay.font_size":
             return build_int_row(
                 tr(label_key), default=default, minimum=8, maximum=300,
+                colors=c, on_changed=self._refresh_preview,
+            )
+        # 范围限定边界：可空整型（开关关闭 = 该方向不限）
+        if field_path == "text_overlay.max_text_right":
+            return build_nullable_int_row(
+                tr(label_key), default=default, minimum=0, maximum=3840,
+                colors=c, on_changed=self._refresh_preview,
+            )
+        if field_path == "text_overlay.max_text_bottom":
+            return build_nullable_int_row(
+                tr(label_key), default=default, minimum=0, maximum=2160,
                 colors=c, on_changed=self._refresh_preview,
             )
         if field_path in ("text_overlay.text_x", "video_x"):
@@ -394,6 +453,7 @@ class Style1TextRangeTool(ToolView):
             ("tools.style1_text_range.preview_legend_video", "video"),
             ("tools.style1_text_range.preview_legend_text", "text"),
             ("tools.style1_text_range.preview_legend_line", "line"),
+            ("tools.style1_text_range.preview_legend_bound", "bound"),
         ):
             lbl = QLabel(self._legend_html(tr(key), self._legend_color(role, c)))
             lbl.setStyleSheet(
@@ -407,11 +467,13 @@ class Style1TextRangeTool(ToolView):
 
     @staticmethod
     def _legend_color(role: str, c: MaterialColors) -> str:
-        """图例色块按语义取色：video=on_surface_variant / text=primary / line=primary_container"""
+        """图例色块按语义取色：video=on_surface_variant / text=primary / line=primary_container / bound=secondary"""
         if role == "text":
             return c.primary
         if role == "line":
             return c.primary_container
+        if role == "bound":
+            return c.secondary
         return c.on_surface_variant
 
     @staticmethod
@@ -431,6 +493,8 @@ class Style1TextRangeTool(ToolView):
                 "text_overlay.font_scale": 1.0,
                 "text_overlay.text_x": 50,
                 "text_overlay.text_y": 240,
+                "text_overlay.max_text_right": 272,
+                "text_overlay.max_text_bottom": 965,
                 "video_x": 272,
                 "video_y": 47,
                 "video_scale": 0.85,
@@ -470,6 +534,11 @@ class Style1TextRangeTool(ToolView):
         self._preview.set_content(
             bg, (out_w, out_h), video_rect, text_image, text_rect, line_rects,
         )
+        self._preview.set_bounds(
+            values["text_overlay.max_text_right"],
+            values["text_overlay.max_text_bottom"],
+            text_x, text_y, (out_w, out_h),
+        )
         self._update_info(text_rect, line_rects, video_rect, out_w, out_h)
 
     def _load_background(self, out_w: int, out_h: int) -> QPixmap | None:
@@ -499,6 +568,7 @@ class Style1TextRangeTool(ToolView):
         self._last_error = None
         self._last_empty = False
         self._last_demo = False
+        self._last_fit = None
         json_path = self._json_selector.path().strip()
         if not json_path or not os.path.exists(json_path):
             # 未选择 JSON 时用内置示例数据，保证预览始终有内容
@@ -549,6 +619,23 @@ class Style1TextRangeTool(ToolView):
             "shadow_color": str(self._get_style1("text_overlay.shadow_color", "#000000")),
             "text_color": str(self._get_style1("text_overlay.text_color", "#FFFFFF")),
         }
+
+        # 显示范围限定：与视频合成共用 core.text_fit（自动换行 + 末尾截断），
+        # 保证预览与合成输出逐字一致
+        fitted_lines, _line_groups, dropped = fit_actions_lines(
+            lines, font_path, text_cfg,
+            values["text_overlay.max_text_right"],
+            values["text_overlay.max_text_bottom"],
+            text_x, text_y,
+            padding=_PANEL_PADDING,
+        )
+        self._last_fit = (
+            values["text_overlay.max_text_right"],
+            values["text_overlay.max_text_bottom"],
+            dropped,
+            len(fitted_lines) - len(lines),
+        )
+        lines = fitted_lines
 
         image, w, h, tops = self._render_text_block(lines, font_path, text_cfg)
         text_rect = QRectF(text_x, text_y, w, h)
@@ -669,6 +756,22 @@ class Style1TextRangeTool(ToolView):
             else:
                 parts.append(tr("tools.style1_text_range.range_ok"))
                 color = c.success
+            # 范围限定拟合统计（自动换行 / 末尾截断 / 未启用）
+            max_right, max_bottom, dropped, wrapped_extra = getattr(
+                self, "_last_fit", (None, None, 0, 0)
+            )
+            if max_right is None and max_bottom is None:
+                parts.append(tr("tools.style1_text_range.range_unbounded"))
+            else:
+                if wrapped_extra > 0:
+                    parts.append(tr(
+                        "tools.style1_text_range.range_wrapped", n=wrapped_extra
+                    ))
+                if dropped > 0:
+                    parts.append(tr(
+                        "tools.style1_text_range.range_truncated", n=dropped
+                    ))
+                    color = c.warning
             if getattr(self, "_last_demo", False):
                 parts.insert(0, tr("tools.style1_text_range.demo_notice"))
                 color = c.warning
