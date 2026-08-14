@@ -23,7 +23,7 @@ import os
 from typing import Any
 
 from pictex import Canvas, Shadow
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -254,6 +254,12 @@ class Style1TextRangeTool(ToolView):
         self._tr_setters: list[tuple] = []
         self._rows: dict[str, FieldRow] = {}
         self._bg_cache: tuple | None = None  # (path, out_w, out_h, pixmap)
+        # 输入防抖定时器：连续键入只合并为最后一次渲染（pictex 全量
+        # 位图渲染耗时可达数百毫秒，逐字符立即渲染会阻塞界面线程）
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(300)
+        self._refresh_timer.timeout.connect(self._do_refresh_preview)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -511,35 +517,51 @@ class Style1TextRangeTool(ToolView):
     # ── 预览刷新 ──────────────────────────────────────────
 
     def _refresh_preview(self, *args) -> None:
+        """输入行/文件变更后的防抖刷新入口：连续键入合并为一次渲染。
+
+        直接渲染为 pictex 全量位图（数百毫秒级），若每敲一个字符立即
+        执行会阻塞界面线程，导致输入框卡顿、预览更新明显滞后。
+        """
+        self._refresh_timer.start()
+
+    def _do_refresh_preview(self) -> None:
         values = self._current_values()
         out_w = int(values["output_width"])
         out_h = int(values["output_height"])
         text_x = int(values["text_overlay.text_x"])
         text_y = int(values["text_overlay.text_y"])
+        try:
+            # 视频区域矩形
+            video_w = out_w * float(values["video_scale"])
+            video_h = out_h * float(values["video_scale"])
+            video_rect = QRectF(
+                float(values["video_x"]), float(values["video_y"]),
+                video_w, video_h,
+            )
 
-        # 视频区域矩形
-        video_w = out_w * float(values["video_scale"])
-        video_h = out_h * float(values["video_scale"])
-        video_rect = QRectF(
-            float(values["video_x"]), float(values["video_y"]),
-            video_w, video_h,
-        )
+            # 背景板（优先用户选择，回退 pipeline 配置）
+            bg = self._load_background(out_w, out_h)
 
-        # 背景板（优先用户选择，回退 pipeline 配置）
-        bg = self._load_background(out_w, out_h)
-
-        text_image, text_rect, line_rects = self._build_text_overlay(
-            text_x, text_y
-        )
-        self._preview.set_content(
-            bg, (out_w, out_h), video_rect, text_image, text_rect, line_rects,
-        )
-        self._preview.set_bounds(
-            values["text_overlay.max_text_right"],
-            values["text_overlay.max_text_bottom"],
-            text_x, text_y, (out_w, out_h),
-        )
-        self._update_info(text_rect, line_rects, video_rect, out_w, out_h)
+            text_image, text_rect, line_rects = self._build_text_overlay(
+                text_x, text_y
+            )
+            self._preview.set_content(
+                bg, (out_w, out_h), video_rect, text_image, text_rect, line_rects,
+            )
+            self._preview.set_bounds(
+                values["text_overlay.max_text_right"],
+                values["text_overlay.max_text_bottom"],
+                text_x, text_y, (out_w, out_h),
+            )
+            self._update_info(text_rect, line_rects, video_rect, out_w, out_h)
+        except Exception as exc:  # noqa: BLE001
+            # 渲染/瞬时输入状态异常：显示错误信息并清空预览，不中断交互
+            self._last_error = tr(
+                "tools.style1_text_range.range_render_error", msg=str(exc)
+            )
+            self._preview.set_content(None, None, None, None, None, None)
+            self._preview.set_bounds(None, None, 0, 0, (out_w, out_h))
+            self._update_info(None, None, QRectF(), out_w, out_h)
 
     def _load_background(self, out_w: int, out_h: int) -> QPixmap | None:
         path = self._bg_selector.path().strip()
@@ -727,7 +749,7 @@ class Style1TextRangeTool(ToolView):
             color, text = c.error, self._last_error
         elif getattr(self, "_last_empty", False):
             color, text = c.warning, tr("tools.style1_text_range.range_empty")
-        elif text_rect is None or line_rects is None:
+        elif text_rect is None or not line_rects:
             color, text = c.on_surface_variant, tr(
                 "tools.style1_text_range.range_no_input"
             )

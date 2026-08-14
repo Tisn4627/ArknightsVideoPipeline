@@ -248,6 +248,7 @@
   "tools.style1_text_range.range_empty": "Actions text is empty (no actions in JSON)",
   "tools.style1_text_range.range_font_error": "Font load failed: {msg}",
   "tools.style1_text_range.range_json_error": "Actions JSON parse failed: {msg}",
+  "tools.style1_text_range.range_render_error": "Preview render failed: {msg}",
   "tools.style1_text_range.load_style1": "Load from style1.json",
   "tools.style1_text_range.apply": "Apply & write to style1.json",
   "tools.style1_text_range.apply_confirm_title": "Apply configuration",

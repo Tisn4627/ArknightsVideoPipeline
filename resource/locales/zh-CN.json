@@ -248,6 +248,7 @@
   "tools.style1_text_range.range_empty": "操作文本为空（JSON 中没有 actions）",
   "tools.style1_text_range.range_font_error": "字体加载失败: {msg}",
   "tools.style1_text_range.range_json_error": "操作 JSON 解析失败: {msg}",
+  "tools.style1_text_range.range_render_error": "预览渲染失败: {msg}",
   "tools.style1_text_range.load_style1": "从 style1.json 读取",
   "tools.style1_text_range.apply": "应用并写入 style1.json",
   "tools.style1_text_range.apply_confirm_title": "应用配置",
