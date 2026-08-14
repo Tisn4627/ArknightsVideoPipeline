@@ -24,7 +24,7 @@ from typing import Any
 
 from pictex import Canvas, Shadow
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -114,6 +114,12 @@ class TextRangePreview(QWidget):
         # 范围限定边界线（画布坐标线段），由 set_bounds 注入
         self._bounds_lines: list[tuple[QPointF, QPointF]] = []
         self.setMinimumHeight(320)
+        self.setMaximumHeight(1600)
+        # 底部边缘拖拽缩放状态
+        self._dragging = False
+        self._drag_start_y = 0.0
+        self._drag_start_h = 0
+        self.setMouseTracking(True)
         # paintEvent 始终全量绘制自身像素，声明不透明避免 Windows
         # 拖动/缩放窗口时残留旧像素（文字乱码）
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -180,6 +186,9 @@ class TextRangePreview(QWidget):
         painter.setBrush(QColor(c.surface_variant))
         painter.drawRoundedRect(self.rect(), 12, 12)
 
+        # 底部拖拽缩放手柄 + 提示（控件坐标，始终在最上层）
+        self._draw_resize_grip(painter, c)
+
         if self._out_size is None:
             return
         out_w, out_h = self._out_size
@@ -194,22 +203,26 @@ class TextRangePreview(QWidget):
             (self.height() - out_h * scale) / 2,
         )
         painter.scale(scale, scale)
-        pen_w = 2.0 / scale
+        pen_w = 3.0 / scale
 
         if self._bg is not None and not self._bg.isNull():
             painter.drawPixmap(0, 0, out_w, out_h, self._bg)
 
-        # 视频区域：虚线轮廓
+        # 视频区域：粗虚线轮廓 + 角标（对比度高，便于辨识视频范围）
         if self._video_rect is not None:
             pen = QPen(QColor(c.on_surface_variant), pen_w)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(self._video_rect)
+            self._draw_box_label(
+                painter, tr("tools.style1_text_range.preview_label_video"),
+                QColor(c.on_surface_variant), self._video_rect, scale,
+            )
 
         # 范围限定边界线：secondary 虚线（右边界/下边界）
         if self._bounds_lines:
-            pen = QPen(QColor(c.secondary), pen_w)
+            pen = QPen(QColor(c.secondary), 2.5 / scale)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -219,21 +232,120 @@ class TextRangePreview(QWidget):
         # 逐行范围：primary_container 半透明填充
         if self._line_rects:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(c.primary_container))
+            fill = QColor(c.primary_container)
+            fill.setAlpha(70)
+            painter.setBrush(fill)
             for rect in self._line_rects:
                 painter.drawRect(rect)
 
-        # 文本块边界框：primary 描边 + 半透明填充
+        # 文本块边界框：primary 粗描边 + 半透明填充 + 角标
         if self._text_rect is not None:
             fill = QColor(c.primary)
-            fill.setAlpha(40)
+            fill.setAlpha(52)
             painter.setPen(QPen(QColor(c.primary), pen_w))
             painter.setBrush(fill)
             painter.drawRect(self._text_rect)
+            self._draw_box_label(
+                painter, tr("tools.style1_text_range.preview_label_text"),
+                QColor(c.primary), self._text_rect, scale,
+            )
 
         # 真实文本位图（pictex 渲染，所见即所得，置于最上层）
         if self._text_image is not None and self._text_rect is not None:
             painter.drawImage(self._text_rect, self._text_image)
+
+    # ── 缩放拖拽 ──────────────────────────────────────────
+
+    _RESIZE_HANDLE = 14  # 底部边缘判定像素
+    _RESIZE_MIN_H = 320
+    _RESIZE_MAX_H = 1600
+
+    def _near_bottom(self, y: float) -> bool:
+        return y >= self.height() - self._RESIZE_HANDLE
+
+    def _draw_resize_grip(self, painter: QPainter, c: MaterialColors) -> None:
+        """底部右下角绘制三点手柄与提示，标识预览可拖拽缩放"""
+        rect = self.rect()
+        pen = QPen(QColor(c.on_surface_variant), 1)
+        painter.setPen(pen)
+        gx = rect.right() - 20
+        gy = rect.bottom() - 20
+        for i in range(3):
+            y = gy + i * 4
+            painter.drawLine(int(gx), int(y), int(gx + 10 - i * 4), int(y))
+        hint = tr("tools.style1_text_range.preview_resize_hint")
+        font = QFont(self.font())
+        font.setPixelSize(11)
+        painter.setFont(font)
+        painter.drawText(
+            QRectF(rect.right() - 220, rect.bottom() - 32, 196, 26),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            hint,
+        )
+
+    def _draw_box_label(
+        self, painter: QPainter, text: str, color: QColor,
+        box: QRectF, scale: float,
+    ) -> None:
+        """框内左上角标签：solid 底 + 同色描边，覆盖在框上清晰可读"""
+        painter.save()
+        font = QFont(self.font())
+        font.setPixelSize(max(12, int(13 / scale)))
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        w = fm.horizontalAdvance(text) + 12
+        h = fm.height() + 4
+        chip = QRectF(box.x() + 6, box.y() + 6, w, h)
+        fill = QColor(self._colors.surface)
+        fill.setAlpha(230)
+        painter.setPen(QPen(color, 1.5 / scale))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(chip, 4 / scale, 4 / scale)
+        painter.setPen(color)
+        painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+    def mousePressEvent(self, event) -> None:
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._near_bottom(event.position().y())):
+            self._drag_start_y = event.position().y()
+            self._drag_start_h = self.height()
+            self._dragging = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        y = event.position().y()
+        if self._dragging:
+            h = int(self._drag_start_h + (y - self._drag_start_y))
+            h = max(self._RESIZE_MIN_H, min(self._RESIZE_MAX_H, h))
+            self.setFixedHeight(h)
+            event.accept()
+            return
+        if self._near_bottom(y):
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._near_bottom(event.position().y())):
+            # 双击底部还原默认高度（取消固定尺寸，交由布局自然分配）
+            self.setMinimumHeight(self._RESIZE_MIN_H)
+            self.setMaximumHeight(self._RESIZE_MAX_H)
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class Style1TextRangeTool(ToolView):
