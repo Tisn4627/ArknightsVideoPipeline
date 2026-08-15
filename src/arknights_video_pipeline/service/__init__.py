@@ -8,6 +8,13 @@ service - GUI 与 CLI 共享的应用服务层
 from arknights_video_pipeline.service.config_proxy import ConfigProxy
 from arknights_video_pipeline.service.pipeline_service import PipelineService
 from arknights_video_pipeline.service.pipeline_worker import PipelineWorker
+from arknights_video_pipeline.service.recognition_worker import RecognitionWorker
 from arknights_video_pipeline.service.report_model import ReportModel
 
-__all__ = ["ConfigProxy", "PipelineService", "PipelineWorker", "ReportModel"]
+__all__ = [
+    "ConfigProxy",
+    "PipelineService",
+    "PipelineWorker",
+    "RecognitionWorker",
+    "ReportModel",
+]

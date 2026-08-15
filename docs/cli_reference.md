@@ -359,6 +359,43 @@ python main.py video.mp4 -b bg.png --dry-run
 
 ---
 
+### `--recognize-only`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | 布尔标志 |
+| 必填 | 否 |
+| 默认值 | 未指定 |
+| 互斥 | `--copilot-json` |
+
+仅执行视频识别（步骤1），将视频转换为 copilot 作业 JSON 文件，自动跳过编队、操作、跟踪、合成四个步骤。启用时无需背景板图片（即使 style1 也不报错）。
+
+**适用场景**：只需从视频中提取作业 JSON，不需要生成合成视频时使用。
+
+**语义约束**：
+- 与 `--copilot-json` 互斥（前者产出 JSON，后者消费 JSON）；
+- 自动等价于 `--skip-step formation --skip-step actions --skip-step track --skip-step compose`，但更简洁；
+- 与 `--dry-run` 可组合（仅验证不执行）；
+- 与 `--stage` / `--ocr` / `--resolution` 等识别参数可组合。
+
+```bash
+# 仅识别，输出 copilot JSON
+python main.py video.mp4 --recognize-only
+
+# 指定输出目录与关卡
+python main.py video.mp4 --recognize-only -o results/ --stage 2-10
+
+# 批量识别
+python main.py v1.mp4 v2.mp4 --recognize-only -o results/
+
+# 与 dry-run 组合（仅验证）
+python main.py video.mp4 --recognize-only --dry-run
+```
+
+输出文件命名规则与完整流水线一致：`<output_dir>/<video_stem>/recognition_copilot_<video_stem>.json`。
+
+---
+
 ## 完整使用示例
 
 ### 基础用法

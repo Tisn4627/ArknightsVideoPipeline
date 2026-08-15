@@ -859,6 +859,13 @@ def build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="仅验证输入和配置，不执行实际处理",
     )
+    parser.add_argument(
+        "--recognize-only",
+        action="store_true",
+        help="仅执行视频识别（步骤1），输出单一 copilot JSON 文件，"
+             "自动跳过编队/操作/跟踪/合成步骤。启用时无需背景板图片，"
+             "与 --copilot-json 互斥",
+    )
 
     return parser
 
@@ -1087,6 +1094,16 @@ def main() -> None:
             sys.exit(1)
         return
 
+    # ── --recognize-only 与 --copilot-json 互斥 ──────────
+    # 前者是产出 copilot JSON（仅跑步骤1），后者是消费已有 JSON（跳过步骤1），
+    # 两者语义冲突，同时指定会无意义。
+    if args.recognize_only and args.copilot_json:
+        parser.error(
+            "--recognize-only 与 --copilot-json 互斥：\n"
+            "  --recognize-only   仅执行视频识别，输出 copilot JSON\n"
+            "  --copilot-json     使用已有作业 JSON，跳过视频识别"
+        )
+
     # ── 视频路径必须提供（现为列表，支持批量） ────────────
     if not args.video:
         parser.error(
@@ -1109,10 +1126,12 @@ def main() -> None:
         background_image_path = args.background_image
         if not os.path.isabs(background_image_path):
             background_image_path = os.path.abspath(background_image_path)
-    elif style == "style1":
+    elif style == "style1" and not args.recognize_only:
+        # --recognize-only 仅执行识别（步骤1），不涉及视频合成，
+        # 无需背景板图片；其余场景 style1 仍要求背景板图片
         parser.error(
             "style1 需要背景板图片，请使用 --background-image / -b 指定\n"
-            "若不需要背景板图片，可使用 --style style2\n"
+            "若不需要背景板图片，可使用 --style style2 或 --recognize-only\n"
             f"支持的图片格式: {', '.join(sorted(SUPPORTED_IMAGE_EXTENSIONS))}\n"
             "用法: python main.py <video...> --background-image <image>"
         )
@@ -1210,13 +1229,24 @@ def main() -> None:
                 f"{os.path.basename(video_path)} -> {jp}"
             )
 
+    # ── --recognize-only：自动跳过 formation/actions/track/compose ──
+    # 仅执行步骤1（视频转 copilot JSON），输出单一 JSON 文件。
+    # 与用户显式 --skip-step 合并（用户仍可额外指定，但上述四步必跳）。
+    effective_skip_steps: set[str] = set(args.skip_step)
+    if args.recognize_only:
+        effective_skip_steps |= {"formation", "actions", "track", "compose"}
+        logger.info(
+            "--recognize-only 模式：仅执行视频识别，跳过 "
+            "编队/操作/跟踪/合成步骤"
+        )
+
     # ── Dry-run 模式：验证全部视频后返回 ──────────────────
     if args.dry_run:
         logger.info("Dry-run模式：开始验证全部输入")
         logger.info(f"背景板图片: {background_image_path}")
         logger.info(f"识别后端: {config_mgr.get_copilot_backend()}")
         logger.info(f"MAA路径: {config_mgr.get_maa_path()}")
-        logger.info(f"跳过步骤: {args.skip_step}")
+        logger.info(f"跳过步骤: {sorted(effective_skip_steps)}")
         all_ok = True
         for idx, video_path in enumerate(videos, start=1):
             try:
@@ -1265,7 +1295,7 @@ def main() -> None:
                 config_mgr=config_mgr,
                 logger=logger,
                 background_image_path=background_image_path,
-                skip_steps=set(args.skip_step),
+                skip_steps=effective_skip_steps,
                 copilot_json_path=custom_json_map.get(video_path),
             )
             if pipeline.run():
