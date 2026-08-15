@@ -13,6 +13,7 @@ pipeline.py - 明日方舟视频处理流水线 CLI 工具
   python main.py video.mp4 --background-image bg.png
   python main.py video.mp4 -b bg.png --output-dir results --log-level DEBUG
   python main.py video.mp4 --style style2 --skip-step track --skip-step compose
+  python main.py video.mp4 -b bg.png --copilot-json copilot.json
   python main.py --init-config
   python main.py video.mp4 -b bg.png --dry-run
 """
@@ -83,6 +84,7 @@ class Pipeline:
         logger: logging.Logger,
         background_image_path: str | None = None,
         skip_steps: set[str] | None = None,
+        copilot_json_path: str | None = None,
         on_step_start: Callable[[str, str], None] | None = None,
         on_step_finish: Callable[[str, bool, float, list], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
@@ -112,6 +114,11 @@ class Pipeline:
         self.actions_text_path: str | None = None
         self.track_result_path: str | None = None
         self.output_video_path: str | None = None
+
+        # 自定义作业 JSON（由 CLI --copilot-json 或 GUI 每视频绑定传入）：
+        # 非空时步骤1跳过视频识别，直接使用该 JSON，后续步骤照常执行。
+        if copilot_json_path:
+            self.copilot_json_path = os.path.abspath(copilot_json_path)
 
         # 报告
         self.report = PipelineReport(
@@ -200,6 +207,9 @@ class Pipeline:
                     self.copilot_json_path = json_path
                     break
                 except (RuntimeError, TimeoutError, OSError, CopilotBackendError) as exc:
+                    # 配置/环境类错误（retryable=False）重试无意义，直接失败
+                    if isinstance(exc, CopilotBackendError) and not exc.retryable:
+                        raise
                     if attempt < max_retries:
                         self.logger.warning(
                             f"{backend.name}识别第{attempt}次尝试失败: {exc}，正在重试..."
@@ -597,6 +607,35 @@ class Pipeline:
                     self._on_step_finish(step_key, False, 0.0, ["用户取消"])
                 continue
 
+            # 自定义作业 JSON：步骤1（视频识别）跳过，直接使用预设 JSON
+            if (
+                step_key == "copilot"
+                and self.copilot_json_path
+                and os.path.exists(self.copilot_json_path)
+            ):
+                custom_desc = "使用自定义作业JSON"
+                self.logger.info("")
+                self.logger.info("=" * 60)
+                self.logger.info(
+                    f"  步骤 {step_num}/{self.TOTAL_STEPS}: {custom_desc}"
+                )
+                self.logger.info("=" * 60)
+                self.logger.info(
+                    f"自定义作业JSON: {self.copilot_json_path}，跳过视频识别"
+                )
+                if self._on_step_start is not None:
+                    self._on_step_start(step_key, custom_desc)
+                result = StepResult(
+                    name="video_to_copilot",
+                    description=custom_desc,
+                    status=StepStatus.SUCCESS,
+                    output_files=[self.copilot_json_path],
+                )
+                self.report.steps.append(result)
+                if self._on_step_finish is not None:
+                    self._on_step_finish(step_key, True, 0.0, [])
+                continue
+
             # 打印步骤 header
             self._print_step_header(step_num, step_desc)
 
@@ -713,6 +752,8 @@ def build_argparser() -> argparse.ArgumentParser:
   python main.py video.mp4 -b bg.png --output-dir results
   python main.py video.mp4 -b bg.png --maa-path C:/MAA --backend maa --skip-step track
   python main.py video.mp4 -b bg.png --backend recognition --stage 2-10
+  python main.py video.mp4 -b bg.png --copilot-json copilot.json
+  python main.py v1.mp4 v2.mp4 -b bg.png --copilot-json v1.json v2.json
   python main.py video.mp4 -b bg.png --log-level DEBUG --dry-run
   python main.py --init-config
   python main.py --init-config formation
@@ -792,6 +833,15 @@ def build_argparser() -> argparse.ArgumentParser:
         help="跳过指定步骤 (可多次使用)",
     )
     parser.add_argument(
+        "--copilot-json",
+        nargs="*",
+        default=[],
+        help="自定义作业JSON文件路径（.json），可指定多个。绑定后对应视频跳过步骤1（视频识别），"
+             "后续步骤照常执行。仅单个视频+单个JSON时直接绑定；其余情况（多视频或多JSON）"
+             "按文件名（去扩展名，不区分大小写）匹配。多视频的自定义JSON为测试功能，"
+             "建议仅对单个视频文件使用",
+    )
+    parser.add_argument(
         "--init-config",
         nargs="?",
         const="all",
@@ -838,7 +888,10 @@ def _init_config(module: str) -> list[str]:
         module: 模块名 ("all" 生成全部, 或指定单个模块)
 
     Returns:
-        成功生成的文件绝对路径列表（导入失败或未知模块时对应条目被跳过）
+        成功生成的文件绝对路径列表（导入失败时对应条目被跳过）
+
+    Raises:
+        ValueError: 未知模块名（由 CLI/GUI 调用方决定如何展示与退出）
     """
     config_dir = os.path.join(PROJECT_ROOT, "config")
     os.makedirs(config_dir, exist_ok=True)
@@ -849,9 +902,7 @@ def _init_config(module: str) -> list[str]:
         modules = [module]
     else:
         valid = ", ".join(list(_MODULE_CONFIGS.keys()) + ["all"])
-        print(f"错误: 未知模块 '{module}'")
-        print(f"可用模块: {valid}")
-        sys.exit(1)
+        raise ValueError(f"未知模块 '{module}'（可用模块: {valid}）")
 
     # 动态导入 video_compose 会触发 movielite 导入时检查（shutil.which 查找
     # ffmpeg/ffprobe，缺失时抛 RuntimeError）。在导入前先应用 FFmpeg 路径配置
@@ -974,6 +1025,53 @@ def ensure_default_configs() -> list[str]:
 # ══════════════════════════════════════════════════════════
 
 
+def match_custom_copilot_jsons(
+    videos: list[str],
+    json_paths: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """将自定义作业 JSON 文件与视频文件匹配（CLI --copilot-json）
+
+    规则：
+    - 单个视频 + 单个 JSON：直接绑定，无需文件名匹配；
+    - 其余情况（多视频或多 JSON）：按文件名（去扩展名，不区分大小写）
+      匹配，视频 stem 与 JSON stem 相同才绑定；
+    - 未匹配到任何视频的 JSON：警告提示后被忽略。
+
+    Args:
+        videos: 视频文件路径列表（可为相对路径）
+        json_paths: 自定义作业 JSON 路径列表
+
+    Returns:
+        (绑定映射, 提示信息列表)：映射键为视频绝对路径，值为 JSON 绝对路径
+    """
+    videos_abs = [os.path.abspath(v) for v in videos]
+    jsons_abs = [os.path.abspath(j) for j in json_paths]
+
+    if not jsons_abs:
+        return {}, []
+
+    if len(videos_abs) == 1 and len(jsons_abs) == 1:
+        return {videos_abs[0]: jsons_abs[0]}, []
+
+    # 多视频或多 JSON：按文件名匹配，并提示匹配逻辑与测试状态
+    notes: list[str] = [
+        "多视频/多JSON场景下，作业JSON按文件名（去扩展名，不区分大小写）与视频匹配",
+        "多视频的自定义作业JSON为测试功能，建议仅使用单个视频文件",
+    ]
+    mapping: dict[str, str] = {}
+    video_stems = {
+        os.path.splitext(os.path.basename(v))[0].lower(): v for v in videos_abs
+    }
+    for jp in jsons_abs:
+        stem = os.path.splitext(os.path.basename(jp))[0].lower()
+        video = video_stems.get(stem)
+        if video is None:
+            notes.append(f"作业JSON未匹配到任何视频，将被忽略: {jp}")
+        else:
+            mapping[video] = jp
+    return mapping, notes
+
+
 def main() -> None:
     parser = build_argparser()
     args = parser.parse_args()
@@ -982,7 +1080,11 @@ def main() -> None:
 
     # ── 生成默认配置 ──────────────────────────────────────
     if args.init_config is not None:
-        _init_config(args.init_config)
+        try:
+            _init_config(args.init_config)
+        except ValueError as exc:
+            print(f"错误: {exc}")
+            sys.exit(1)
         return
 
     # ── 视频路径必须提供（现为列表，支持批量） ────────────
@@ -1084,6 +1186,30 @@ def main() -> None:
             logger.error(str(exc))
             sys.exit(1)
 
+    # ── 自定义作业 JSON（CLI --copilot-json）──────────────
+    # 校验 JSON 文件并建立「视频 → 作业JSON」绑定，绑定后跳过步骤1识别。
+    custom_json_map: dict[str, str] = {}
+    if args.copilot_json:
+        json_paths: list[str] = []
+        for jp in args.copilot_json:
+            if not os.path.isabs(jp):
+                jp = os.path.abspath(jp)
+            if os.path.splitext(jp)[1].lower() != ".json":
+                parser.error(f"作业JSON必须是 .json 文件: {jp}")
+            if not os.path.exists(jp):
+                parser.error(f"作业JSON文件不存在: {jp}")
+            json_paths.append(jp)
+        custom_json_map, json_notes = match_custom_copilot_jsons(
+            videos, json_paths
+        )
+        for note in json_notes:
+            logger.warning(note)
+        for video_path, jp in custom_json_map.items():
+            logger.info(
+                f"视频绑定自定义作业JSON: "
+                f"{os.path.basename(video_path)} -> {jp}"
+            )
+
     # ── Dry-run 模式：验证全部视频后返回 ──────────────────
     if args.dry_run:
         logger.info("Dry-run模式：开始验证全部输入")
@@ -1140,6 +1266,7 @@ def main() -> None:
                 logger=logger,
                 background_image_path=background_image_path,
                 skip_steps=set(args.skip_step),
+                copilot_json_path=custom_json_map.get(video_path),
             )
             if pipeline.run():
                 success_count += 1

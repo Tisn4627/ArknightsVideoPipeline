@@ -20,27 +20,29 @@ _ICON_ROOT: Path = Path(__file__).parent
 # 当前 GUI 主要用作 24dp 导航项；@2x (48px) 在主流 HiDPI 上
 # 渲染效果最佳，避免拉伸锯齿。文件名映射:
 #   home / settings / tools / info  -> Material Design Icons Filled Baseline
-#   info 图标采用与 help 同等密度的 24dp @2x 资源，确保 nav rail 各项
-#   图标在同一 24dp 网格下渲染尺寸一致、像素对齐。
-# 值为相对 _ICON_ROOT 的子路径（可分布于 nav/、batch/ 等子目录）。
-# 优先使用 SVG 格式，提供更好的缩放性和清晰度。
+#   check_box 系列 / batch 系列      -> Material Icons Rounded @24dp SVG
+#       （源文件统一为 svg/ 目录下的 24x24 SVG，经 QSvgRenderer 渲染 +
+#       alpha 蒙版染色，任意 DPI 下都保持清晰）
+# 值为相对 _ICON_ROOT 的子路径。
 _ICON_FILES: dict[str, str] = {
     "home": "svg/home.svg",
     "settings": "svg/settings.svg",
     "tools": "svg/tools.svg",
     "info": "svg/info.svg",
-    # 复选框状态图标（Material Symbols Rounded @ 24dp @2x）
-    "check_box": "nav/check_box_24dp_2x.png",
-    "check_box_outline_blank": "nav/check_box_outline_blank_24dp_2x.png",
-    "indeterminate_check_box": "nav/indeterminate_check_box_24dp_2x.png",
-    # 批量视频列表图标（Material Icons Rounded @ 24dp @2x，源自
-    # material-design-icons-master/png/<category>/<name>/materialiconsround）
-    "arrow_upward": "batch/arrow_upward_24dp_2x.png",
-    "arrow_downward": "batch/arrow_downward_24dp_2x.png",
-    "delete": "batch/delete_24dp_2x.png",
-    "pending": "batch/pending_24dp_2x.png",
-    "check_circle": "batch/check_circle_24dp_2x.png",
-    "error": "batch/error_24dp_2x.png",
+    # 复选框状态图标（Material Symbols Rounded @ 24dp）
+    "check_box": "svg/check_box.svg",
+    "check_box_outline_blank": "svg/check_box_outline_blank.svg",
+    "indeterminate_check_box": "svg/indeterminate_check_box.svg",
+    # 批量视频列表图标（Material Icons Rounded @ 24dp）
+    "arrow_upward": "svg/arrow_upward.svg",
+    "arrow_downward": "svg/arrow_downward.svg",
+    "delete": "svg/delete.svg",
+    "pending": "svg/pending.svg",
+    "check_circle": "svg/check_circle.svg",
+    "error": "svg/error.svg",
+    # 自定义作业 JSON 图标（Material Symbols Rounded @ 24dp）
+    "note_add": "svg/note_add.svg",
+    "description": "svg/description.svg",
 }
 
 
@@ -72,8 +74,7 @@ def _load_svg_source(path: Path) -> QImage | None:
     """
     try:
         from PyQt6.QtSvg import QSvgRenderer
-        from PyQt6.QtCore import QByteArray
-        
+
         renderer = QSvgRenderer(str(path))
         if not renderer.isValid():
             return None

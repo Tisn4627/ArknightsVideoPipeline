@@ -8,6 +8,7 @@ core.maa_backend - MAA 后端（保留为可选回退）
 
 from __future__ import annotations
 
+from arknights_video_pipeline.core.exceptions import CopilotBackendError
 from arknights_video_pipeline.core.video_to_copilot import (
     validate_maa_path,
     video_to_copilot,
@@ -31,12 +32,17 @@ class MAABackend:
     ) -> str:
         cfg = {**self._config, **(config or {})}
         maa_path = cfg.get("maa_path", "")
-        validate_maa_path(maa_path)
+        try:
+            validate_maa_path(maa_path)
 
-        sub_config = {
-            "maa_path": maa_path,
-            "output_dir": output_dir,
-            # 其余 MAA 子配置透传（不含本层已消费的键）
-            **{k: v for k, v in cfg.items() if k not in ("maa_path", "output_dir")},
-        }
-        return video_to_copilot(video_path, sub_config, timeout=timeout)
+            sub_config = {
+                "maa_path": maa_path,
+                "output_dir": output_dir,
+                # 其余 MAA 子配置透传（不含本层已消费的键）
+                **{k: v for k, v in cfg.items() if k not in ("maa_path", "output_dir")},
+            }
+            return video_to_copilot(video_path, sub_config, timeout=timeout)
+        except (ValueError, FileNotFoundError) as exc:
+            # 配置/路径类错误（如 MAA 路径缺失、MaaCore.dll 不存在等）：
+            # 重试无意义，标记为不可重试让流水线直接失败
+            raise CopilotBackendError(str(exc), retryable=False) from exc

@@ -58,6 +58,7 @@ class PipelineService(QObject):
         self._workers: dict[int, PipelineWorker] = {}
         # 批次状态
         self._queue: list[str] = []          # 待处理视频路径（按用户顺序）
+        self._json_map: dict[int, str | None] = {}  # 文件索引 → 自定义作业JSON（None=未绑定）
         self._next_dispatch_index: int = 0   # 下一个待派发的文件索引
         self._success_count: int = 0
         self._cancelled: bool = False
@@ -73,10 +74,12 @@ class PipelineService(QObject):
 
     # ── 输入校验 ──────────────────────────────────────────
 
-    def validate_batch(self, video_paths: list[str]) -> list[str]:
+    def validate_batch(self, video_paths: list[str],
+                       json_paths: list[str | None] | None = None) -> list[str]:
         """校验批量输入是否可运行，返回错误列表（空表示通过）
 
         背景板图片与 MAA 路径对整批共享，仅校验一次；每个视频单独校验。
+        ``json_paths`` 与 ``video_paths`` 平行对齐，校验绑定的自定义作业 JSON。
         """
         errors: list[str] = []
 
@@ -101,6 +104,19 @@ class PipelineService(QObject):
             except VideoValidationError as exc:
                 errors.append(f"{prefix}{exc}")
 
+        # 自定义作业 JSON：绑定后跳过视频识别，文件必须存在且为 .json
+        if json_paths:
+            for idx, json_path in enumerate(json_paths, start=1):
+                if not json_path:
+                    continue
+                prefix = f"[{idx}] "
+                if not os.path.exists(json_path):
+                    errors.append(f"{prefix}自定义作业JSON文件不存在: {json_path}")
+                    continue
+                ext = os.path.splitext(json_path)[1].lower()
+                if ext != ".json":
+                    errors.append(f"{prefix}自定义作业JSON必须是 .json 文件: {json_path}")
+
         # 背景板图片：style1 必填，整批共享
         if self._config.style() == "style1":
             bg_path = self._config.background_image()
@@ -124,21 +140,19 @@ class PipelineService(QObject):
 
         return errors
 
-    # 保留单文件校验入口（向后兼容，等价于长度为 1 的批量）
-    def validate_inputs(self) -> list[str]:
-        video_path = self._config.video_path()
-        return self.validate_batch([video_path] if video_path else [])
-
     # ── 运行控制 ──────────────────────────────────────────
 
     def is_running(self) -> bool:
         return len(self._workers) > 0
 
-    def run_pipeline(self, video_paths: list[str]) -> bool:
+    def run_pipeline(self, video_paths: list[str],
+                     json_paths: list[str | None] | None = None) -> bool:
         """启动批量流水线。
 
         Args:
             video_paths: 按用户顺序排列的视频路径列表
+            json_paths: 与 video_paths 平行对齐的自定义作业 JSON 路径列表
+                （None 表示该视频未绑定，仍执行视频识别）
 
         Returns:
             True 表示已成功启动；False 表示因校验失败或已有任务运行而未启动。
@@ -146,7 +160,7 @@ class PipelineService(QObject):
         if self.is_running():
             return False
 
-        errors = self.validate_batch(video_paths)
+        errors = self.validate_batch(video_paths, json_paths)
         if errors:
             self.validation_failed.emit(errors)
             return False
@@ -159,6 +173,10 @@ class PipelineService(QObject):
 
         # 初始化批次状态
         self._queue = list(video_paths)
+        self._json_map = {
+            i: (json_paths[i] if json_paths and i < len(json_paths) else None)
+            for i in range(len(self._queue))
+        }
         self._next_dispatch_index = 0
         self._success_count = 0
         self._cancelled = False
@@ -240,6 +258,7 @@ class PipelineService(QObject):
                     config_manager=worker_config,
                     background_image_path=self._config.background_image(),
                     skip_steps=self._config.skip_steps(),
+                    copilot_json_path=self._json_map.get(idx),
                     parent=self,
                 )
             except Exception as exc:
@@ -374,6 +393,7 @@ class PipelineService(QObject):
         self.batch_finished.emit(self._success_count, total, self._cancelled)
         # 重置批次状态（保留 config 不变）
         self._queue = []
+        self._json_map = {}
         self._next_dispatch_index = 0
         self._workers = {}
         self._contributions = []

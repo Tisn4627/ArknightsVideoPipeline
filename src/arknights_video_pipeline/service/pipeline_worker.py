@@ -72,6 +72,7 @@ class PipelineWorker(QThread):
         config_manager: ConfigManager,
         background_image_path: str | None = None,
         skip_steps: set[str] | None = None,
+        copilot_json_path: str | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -79,6 +80,7 @@ class PipelineWorker(QThread):
         self._config_manager = config_manager
         self._background_image_path = background_image_path
         self._skip_steps = skip_steps or set()
+        self._copilot_json_path = copilot_json_path
         self._cancel_event = threading.Event()
         self._log_handler: QtLogHandler | None = None
 
@@ -111,6 +113,7 @@ class PipelineWorker(QThread):
                 logger=logger,
                 background_image_path=self._background_image_path,
                 skip_steps=self._skip_steps,
+                copilot_json_path=self._copilot_json_path,
                 # 通过回调钩子注入步骤事件（替代 monkey-patch，修复 M17）
                 on_step_start=self._on_step_start,
                 on_step_finish=self._on_step_finish,

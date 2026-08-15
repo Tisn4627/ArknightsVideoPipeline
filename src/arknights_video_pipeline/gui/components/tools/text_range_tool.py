@@ -2,7 +2,7 @@
 gui.components.tools.text_range_tool - Style1 左侧文本范围预览工具
 
 功能：
-- 选择 copilot JSON 生成操作文本（与视频合成逐字一致的 format_actions_lines）
+- 输入显示文本内容（每行一行），按行渲染为操作文本
 - 以与 ``video_compose.create_text_clip`` 完全相同的 pictex 参数渲染文本块，
   精确测量显示范围（边界框 + 逐行真实位置，含阴影外溢）
 - 以背景板图片 + 视频区域矩形为参照实时预览，所见即所得地调整字号与位置
@@ -18,7 +18,6 @@ gui.components.tools.text_range_tool - Style1 左侧文本范围预览工具
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -28,21 +27,14 @@ from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from arknights_video_pipeline.core.actions_to_text import (
-    DEFAULT_CONFIG as ACTIONS_DEFAULT_CONFIG,
-)
-from arknights_video_pipeline.core.actions_to_text import (
-    format_actions_lines,
-)
 from arknights_video_pipeline.core.map_overlay import _measure_line_top_offsets
 from arknights_video_pipeline.core.text_fit import (
     fit_actions_lines,
-    page_actions_lines,
-    resolve_text_anchor,
 )
 from arknights_video_pipeline.core.utils import PROJECT_ROOT, resolve_font_path
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
@@ -65,34 +57,15 @@ from arknights_video_pipeline.gui.theme import MaterialColors
 # 与 video_compose.create_text_clip / map_overlay._PANEL_PADDING 一致的主文本内边距
 _PANEL_PADDING = 10
 
-# 未找到任何 copilot JSON 时用于预览的内置示例数据（让工具开箱即可演示排版）
-_DEMO_COPILOT_DATA: dict[str, Any] = {
-    "stage_name": "示例关卡",
-    "opers": [
-        {"name": "能天使"},
-        {"name": "德克萨斯"},
-    ],
-    "actions": [
-        {"type": "Deploy", "name": "能天使", "location": [4, 3], "direction": "Left"},
-        {"type": "Deploy", "name": "德克萨斯", "location": [5, 3], "direction": "Right"},
-        {"type": "Skill", "name": "能天使"},
-        {"type": "Attack", "name": "德克萨斯", "location": [5, 3]},
-        {"type": "Skill", "name": "德克萨斯"},
-        {"type": "Retreat", "name": "能天使"},
-    ],
-}
-
 # 参数行定义：(子配置字段路径, 构建函数, 标签 key)
 _FIELD_SPECS: list[tuple[str, str]] = [
     ("text_overlay.font_size", "tools.style1_text_range.font_size"),
     ("text_overlay.font_scale", "tools.style1_text_range.font_scale"),
     ("text_overlay.text_x", "tools.style1_text_range.text_x"),
     ("text_overlay.text_y", "tools.style1_text_range.text_y"),
-    # 文本显示范围限定（null=不限）：文本块须落在四条边界围成的矩形内。
-    # 左/上边界在锚点越过时把文本拉回界内，右/下边界控制换行与截断
-    ("text_overlay.max_text_left", "tools.style1_text_range.max_text_left"),
+    # 文本显示范围限定（null=不限）：文本块左上角固定 (text_x, text_y)，
+    # 右/下边界围成显示区域——右边界控制换行，下边界控制截断
     ("text_overlay.max_text_right", "tools.style1_text_range.max_text_right"),
-    ("text_overlay.max_text_top", "tools.style1_text_range.max_text_top"),
     ("text_overlay.max_text_bottom", "tools.style1_text_range.max_text_bottom"),
     ("video_x", "tools.style1_text_range.video_x"),
     ("video_y", "tools.style1_text_range.video_y"),
@@ -160,28 +133,37 @@ class TextRangePreview(QWidget):
         text_x: float,
         text_y: float,
         out_size: tuple[int, int],
-        max_left: int | None = None,
-        max_top: int | None = None,
     ) -> None:
-        """设置范围限定边界线（画布坐标），未配置的方向不绘制
+        """设置文本显示范围框（画布坐标），未配置的方向不绘制
 
-        四条边界围成文本可显示区域：左侧/右侧为竖直线段，上侧/下侧为
-        水平线段；端点沿另一方向边界对齐——全部配置时即为完整矩形。
+        文本块左上角固定为 (text_x, text_y)：右/下边界均配置时绘制
+        完整虚线矩形框，仅配置一侧时绘制该侧单线（另一侧沿锚点方向
+        延伸到画布边缘）。
         """
         out_w, out_h = out_size
-        top_y = float(max_top) if max_top is not None else float(text_y)
-        bottom_y = float(max_bottom) if max_bottom is not None else float(out_h)
-        left_x = float(max_left) if max_left is not None else float(text_x)
         right_x = float(max_right) if max_right is not None else float(out_w)
+        bottom_y = float(max_bottom) if max_bottom is not None else float(out_h)
         lines: list[tuple[QPointF, QPointF]] = []
-        if max_left is not None:
-            lines.append((QPointF(left_x, top_y), QPointF(left_x, bottom_y)))
         if max_right is not None:
-            lines.append((QPointF(right_x, top_y), QPointF(right_x, bottom_y)))
-        if max_top is not None:
-            lines.append((QPointF(left_x, top_y), QPointF(right_x, top_y)))
+            lines.append((
+                QPointF(right_x, float(text_y)),
+                QPointF(right_x, bottom_y),
+            ))
         if max_bottom is not None:
-            lines.append((QPointF(left_x, bottom_y), QPointF(right_x, bottom_y)))
+            lines.append((
+                QPointF(float(text_x), bottom_y),
+                QPointF(right_x, bottom_y),
+            ))
+        # 完整框：两侧均配置时补上顶部/左侧边，围成矩形显示区域
+        if max_right is not None and max_bottom is not None:
+            lines.append((
+                QPointF(float(text_x), float(text_y)),
+                QPointF(right_x, float(text_y)),
+            ))
+            lines.append((
+                QPointF(float(text_x), float(text_y)),
+                QPointF(float(text_x), bottom_y),
+            ))
         self._bounds_lines = lines
         self.update()
 
@@ -414,17 +396,22 @@ class Style1TextRangeTool(ToolView):
         card_layout = self._param_card.layout()
         card_layout.setSpacing(12)
 
-        self._json_selector = FileSelector(
-            mode=FileSelector.MODE_OPEN_FILE,
-            label=tr("tools.style1_text_range.input_json"),
-            placeholder=tr("tools.style1_text_range.input_json_placeholder"),
+        self._json_label = QLabel(tr("tools.style1_text_range.input_json"))
+        self._json_label.setStyleSheet(
+            f"color: {c.on_surface_variant}; background: transparent; border: none;"
+            " font-size: 13px;"
         )
-        self._json_selector.set_filter(
-            "JSON files (*.json);;All files (*.*)"
+        self._tr_labels.append((self._json_label.setText, "tools.style1_text_range.input_json"))
+        card_layout.addWidget(self._json_label)
+
+        self._json_editor = QPlainTextEdit()
+        self._json_editor.setPlaceholderText(
+            tr("tools.style1_text_range.input_json_placeholder")
         )
-        self._json_selector.set_colors(c)
-        self._json_selector.path_changed.connect(self._refresh_preview)
-        card_layout.addWidget(self._json_selector)
+        self._json_editor.setFixedHeight(200)
+        self._json_editor.setStyleSheet(self._json_editor_qss(c))
+        self._json_editor.textChanged.connect(self._refresh_preview)
+        card_layout.addWidget(self._json_editor)
 
         self._bg_selector = FileSelector(
             mode=FileSelector.MODE_OPEN_FILE,
@@ -467,30 +454,27 @@ class Style1TextRangeTool(ToolView):
 
         root.addWidget(self._param_card)
 
-        # 自动定位已有 copilot JSON，避免首次打开预览空白
-        self._auto_locate_copilot_json()
         self._refresh_preview()
 
-    # ── copilot JSON 自动定位 ─────────────────────────────
-
-    def _auto_locate_copilot_json(self) -> None:
-        """优先选择项目根的 input.json，其次扫描 output 下流水线
-        生成的 maa_copilot_*.json / recognition_copilot_*.json（最新者）。
-        均无则保持未选择，由示例数据兜底预览。
-        """
-        candidates = [os.path.join(PROJECT_ROOT, "input.json")]
-        out_dir = os.path.join(PROJECT_ROOT, "output")
-        for root, _, files in os.walk(out_dir):
-            for name in files:
-                if name.startswith(("maa_copilot_", "recognition_copilot_")):
-                    candidates.append(os.path.join(root, name))
-        existing = [p for p in candidates if os.path.isfile(p)]
-        if not existing:
-            return
-        newest = max(existing, key=os.path.getmtime)
-        self._json_selector.set_path(newest)
-
     # ── 界面构建辅助 ──────────────────────────────────────
+
+    def _json_editor_qss(self, c: MaterialColors) -> str:
+        """输入框内联样式：与 FileSelector 输入框一致（surface_variant
+        底色、outline_variant 边框、12px 圆角），等宽字体便于编辑文本"""
+        return (
+            "QPlainTextEdit {"
+            f"  background-color: {c.surface_variant};"
+            f"  color: {c.on_surface};"
+            f"  border: 1px solid {c.outline_variant};"
+            f"  border-radius: 12px;"
+            f"  padding: 8px 12px;"
+            "  font-family: Consolas, 'Courier New', monospace;"
+            "  font-size: 13px;"
+            "}"
+            "QPlainTextEdit:focus {"
+            f"  border: 2px solid {c.primary};"
+            "}"
+        )
 
     def _build_section_title(self, label_key: str) -> QLabel:
         c = self._colors
@@ -510,9 +494,7 @@ class Style1TextRangeTool(ToolView):
             "text_overlay.font_scale": 1.0,
             "text_overlay.text_x": 50,
             "text_overlay.text_y": 240,
-            "text_overlay.max_text_left": None,
             "text_overlay.max_text_right": 272,
-            "text_overlay.max_text_top": None,
             "text_overlay.max_text_bottom": 965,
             "video_x": 272,
             "video_y": 47,
@@ -539,14 +521,12 @@ class Style1TextRangeTool(ToolView):
                 colors=c, on_changed=self._refresh_preview,
             )
         # 范围限定边界：可空整型（开关关闭 = 该方向不限）
-        if field_path in ("text_overlay.max_text_right",
-                          "text_overlay.max_text_left"):
+        if field_path == "text_overlay.max_text_right":
             return build_nullable_int_row(
                 tr(label_key), default=default, minimum=0, maximum=3840,
                 colors=c, on_changed=self._refresh_preview,
             )
-        if field_path in ("text_overlay.max_text_bottom",
-                          "text_overlay.max_text_top"):
+        if field_path == "text_overlay.max_text_bottom":
             return build_nullable_int_row(
                 tr(label_key), default=default, minimum=0, maximum=2160,
                 colors=c, on_changed=self._refresh_preview,
@@ -624,9 +604,7 @@ class Style1TextRangeTool(ToolView):
                 "text_overlay.font_scale": 1.0,
                 "text_overlay.text_x": 50,
                 "text_overlay.text_y": 240,
-                "text_overlay.max_text_left": None,
                 "text_overlay.max_text_right": 272,
-                "text_overlay.max_text_top": None,
                 "text_overlay.max_text_bottom": 965,
                 "video_x": 272,
                 "video_y": 47,
@@ -679,8 +657,6 @@ class Style1TextRangeTool(ToolView):
                 values["text_overlay.max_text_right"],
                 values["text_overlay.max_text_bottom"],
                 text_x, text_y, (out_w, out_h),
-                values["text_overlay.max_text_left"],
-                values["text_overlay.max_text_top"],
             )
             self._update_info(text_rect, line_rects, video_rect, out_w, out_h)
         except Exception as exc:  # noqa: BLE001
@@ -715,34 +691,15 @@ class Style1TextRangeTool(ToolView):
     def _build_text_overlay(
         self, text_x: int, text_y: int,
     ) -> tuple[QImage | None, QRectF | None, list[QRectF] | None]:
-        """渲染操作文本块，返回 (文本位图, 边界框, 逐行矩形)"""
+        """渲染文本块（按用户输入逐行），返回 (文本位图, 边界框, 逐行矩形)"""
         self._last_error = None
         self._last_empty = False
-        self._last_demo = False
         self._last_fit = None
-        json_path = self._json_selector.path().strip()
-        if not json_path or not os.path.exists(json_path):
-            # 未选择 JSON 时用内置示例数据，保证预览始终有内容
-            data = _DEMO_COPILOT_DATA
-            self._last_demo = True
-        else:
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
-                self._last_error = tr(
-                    "tools.style1_text_range.range_json_error", msg=str(exc)
-                )
-                return None, None, None
-
-        # actions 配置：默认值 + GUI 内存态（与 load_config 合并行为一致）
-        actions_cfg = dict(ACTIONS_DEFAULT_CONFIG)
-        for key in actions_cfg:
-            value = self._config_proxy.get_sub("actions", key)
-            if value is not None:
-                actions_cfg[key] = value
-
-        lines = format_actions_lines(data, actions_cfg)
+        raw = self._json_editor.toPlainText()
+        if not raw.strip():
+            # 未输入任何内容：预览保持空，不填充示例文本
+            return None, None, None
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
         if not lines:
             self._last_empty = True
             return None, None, None
@@ -772,37 +729,16 @@ class Style1TextRangeTool(ToolView):
         }
 
         # 显示范围限定：与视频合成共用 core.text_fit（自动换行 + 末尾截断；
-        # 截断后操作均带 video_time 时自动分页，随操作执行切换显示——
-        # 预览展示第 1 页，其余页在合成中按 video_time 依次切换）
-        max_left = values["text_overlay.max_text_left"]
+        # 文本输入无 video_time 分页信息，固定按第一页排版展示）
         max_right = values["text_overlay.max_text_right"]
-        max_top = values["text_overlay.max_text_top"]
         max_bottom = values["text_overlay.max_text_bottom"]
-        # 左/上边界收敛后的锚点：文本块实际渲染位置（与合成/高亮严格一致）
-        anchor_x, anchor_y = resolve_text_anchor(
-            text_x, text_y, max_left, max_top,
+        # 文本块左上角固定为 (text_x, text_y)（与合成/高亮严格一致）
+        anchor_x, anchor_y = float(text_x), float(text_y)
+        fitted_lines, _line_groups, dropped = fit_actions_lines(
+            lines, font_path, text_cfg, max_right, max_bottom,
+            text_x, text_y, padding=_PANEL_PADDING,
         )
-        video_times = [a.get("video_time") for a in (data.get("actions") or [])]
         page_count = 0
-        if len(video_times) == len(lines) and all(
-            isinstance(v, (int, float)) for v in video_times
-        ):
-            pages = page_actions_lines(
-                lines, font_path, text_cfg, max_right, max_bottom,
-                text_x, text_y, video_times, 0.0, 1e9,
-                padding=_PANEL_PADDING, max_text_left=max_left,
-                max_text_top=max_top,
-            )
-            if pages:
-                fitted_lines = pages[0].lines
-                page_count = len(pages)
-                dropped = 0
-        if page_count == 0:
-            fitted_lines, _line_groups, dropped = fit_actions_lines(
-                lines, font_path, text_cfg, max_right, max_bottom,
-                text_x, text_y, padding=_PANEL_PADDING,
-                max_text_left=max_left, max_text_top=max_top,
-            )
         self._last_fit = (
             max_right, max_bottom, dropped,
             len(fitted_lines) - len(lines), page_count,
@@ -949,9 +885,6 @@ class Style1TextRangeTool(ToolView):
                         "tools.style1_text_range.range_truncated", n=dropped
                     ))
                     color = c.warning
-            if getattr(self, "_last_demo", False):
-                parts.insert(0, tr("tools.style1_text_range.demo_notice"))
-                color = c.warning
             text = "\n".join(parts)
         self._info_label.setStyleSheet(
             f"color: {color}; background: transparent; border: none;"
@@ -994,7 +927,7 @@ class Style1TextRangeTool(ToolView):
         c = colors
         self._param_card.set_surface_color(c.surface)
         self._preview_card.set_surface_color(c.surface)
-        self._json_selector.set_colors(c)
+        self._json_editor.setStyleSheet(self._json_editor_qss(c))
         self._bg_selector.set_colors(c)
         self._preview.set_colors(c)
         for row in self._rows.values():
@@ -1007,8 +940,7 @@ class Style1TextRangeTool(ToolView):
         self._preview_card.set_title(
             tr("tools.style1_text_range.range_title")
         )
-        self._json_selector.set_label(tr("tools.style1_text_range.input_json"))
-        self._json_selector.set_placeholder(
+        self._json_editor.setPlaceholderText(
             tr("tools.style1_text_range.input_json_placeholder")
         )
         self._bg_selector.set_label(tr("tools.style1_text_range.background"))

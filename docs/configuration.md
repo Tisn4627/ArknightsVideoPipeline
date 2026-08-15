@@ -56,8 +56,6 @@ python main.py --init-config compose
 | `track` | string | `"config/track.json"` | 开始按钮识别配置文件路径 |
 | `video_compose_style` | string | `"style1"` | 视频合成风格名称，对应 `config/video_compose/` 目录下的同名 JSON 文件 |
 | `video_compose_config` | string | `"config/video_compose/style1.json"` | 视频合成配置文件路径 |
-| `video_paths` | array of strings | `[]` | 批量视频文件路径列表，GUI 用于持久化用户在 **Video files** 卡片中添加的视频文件及其顺序。CLI 不读取此字段（CLI 通过位置参数接收视频列表）。每个路径在保存时会被转为绝对路径；空字符串会被过滤。示例：`"video_paths": ["C:/Videos/v1.mp4", "C:/Videos/v2.mp4"]` |
-| `video_path` | string | `""` | 单个视频文件路径（旧字段，**已弃用**，保留以向后兼容）。批量场景请使用 `video_paths`；GUI 与 CLI 现均通过 `video_paths` / 位置参数处理视频列表，不再写入此字段 |
 | `multithreading` | boolean | `false` | 多线程批量处理开关。`false`（默认）时批量任务严格串行执行，一次仅运行一个合成任务，避免 MAA 资源争用；`true` 时按 `max_concurrent` 上限并发派发多个 PipelineWorker。仅在 GUI 批量处理时生效，CLI 不受此字段影响 |
 | `max_concurrent` | integer | `1` | 最大并发视频合成任务数（正整数，范围 1~16）。仅当 `multithreading=true` 时生效；`multithreading=false` 或该值为 1 时退化为完全串行。每个并发任务会拉起独立的 Pipeline 实例及 MAA/ffmpeg 子进程，设置过大可能耗尽 CPU/内存/IO 资源 |
 | `ffmpeg_custom_enabled` | boolean | `true` | FFmpeg 自定义路径开关（**仅 Windows**）。`true`（默认）时将 `ffmpeg_path` 指定的目录加入 PATH 最前面，使该目录中的 ffmpeg.exe / ffprobe.exe 优先于系统已安装的版本；`false` 时使用系统 PATH 中的 FFmpeg。非 Windows 平台忽略此项 |
@@ -88,8 +86,6 @@ python main.py --init-config compose
     "track": "config/track.json",
     "video_compose_style": "style1",
     "video_compose_config": "config/video_compose/style1.json",
-    "video_paths": [],
-    "video_path": "",
     "multithreading": false,
     "max_concurrent": 1,
     "ffmpeg_custom_enabled": true,
@@ -102,7 +98,7 @@ python main.py --init-config compose
 > 直接位于顶层，与 font/locales 同层）。资源缺失时步骤 1 会报错并提示检查资源目录。
 > 详见 [合并方案](docs/merge_plan.md)。
 
-> **`video_paths` 与 `video_path` 说明**：`video_paths`（复数）是批量视频处理引入的新字段，GUI 用于持久化 **Video files** 卡片中的文件列表与顺序，下次启动时自动恢复。`video_path`（单数）为旧字段，保留仅为向后兼容，新版本不再写入；批量场景请统一使用 `video_paths`。CLI 不读取这两个字段，而是通过 `video` 位置参数接收视频列表。
+> **视频列表说明**：GUI **Video files** 卡片中的视频列表**仅保存在当前会话内存中，不持久化**——每次启动 GUI 时列表为空，关闭窗口也不会将队列写入 `pipeline.json`。CLI 通过 `video` 位置参数接收视频列表（`python main.py v1.mp4 v2.mp4 ...`）。旧版配置文件中残留的 `video_paths` / `video_path` 字段会在加载时自动清除，不再生成。
 
 > **多线程说明与风险提示**：`multithreading` 默认关闭，保持串行执行以避免 MAA 资源争用（多个 MAA 实例可能共享同一 ADB 连接或资源目录，并发运行可能互相干扰）。启用前请确认你的任务之间不存在共享资源冲突。每个并发 worker 会获得独立的 `ConfigManager` 快照与独立输出目录（按视频名分目录），不存在中间文件冲突；日志按线程过滤后分别回传到 GUI，不会重复显示。任务失败互不影响——单个 worker 的异常会被捕获并标记为 failed，其余并行任务继续执行。
 
@@ -270,9 +266,7 @@ python main.py --init-config compose
 | `font_scale` | float | `1` | 字体缩放比例（`subtitle_auto_fit` 启用时自动设为 1） |
 | `text_x` | integer | `50` | 文本 X 坐标偏移 |
 | `text_y` | integer | `240` | 文本 Y 坐标偏移 |
-| `max_text_left` | integer/null | `null` | Actions 文本块左边界（画布绝对 X）。锚点 `text_x` 在其左侧时文本右移收敛到该边界；`null` 表示不限 |
 | `max_text_right` | integer/null | `272` | Actions 文本块右边界（画布绝对 X）。超宽行自动换行，保证右侧不遮挡视频画面；`null` 表示不限 |
-| `max_text_top` | integer/null | `null` | Actions 文本块上边界（画布绝对 Y）。锚点 `text_y` 在其上方时文本下移收敛到该边界；`null` 表示不限 |
 | `max_text_bottom` | integer/null | `965` | Actions 文本块下边界（画布绝对 Y）。自动换行后仍超高时，按操作从末尾截断，保证下侧不遮挡视频画面中的 Tips 提示字样；`null` 表示不限 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
@@ -296,11 +290,10 @@ python main.py --init-config compose
 >   - 字幕与视频重叠：取左侧和右侧区域中较大者
 > - 自动推断的可用宽度不超过输出宽度的 40%
 >
-> **Actions 显示范围限定说明**：`max_text_left` / `max_text_right` / `max_text_top` /
-> `max_text_bottom` 四条边界围成 Actions 文本可显示区域（默认右边界 = 视频左边缘
-> `video_x`，下边界 = 视频底边，左/上边界不限）。启用后（任一值非 `null`）：
-> - 锚点越过左/上边界时文本右移/下移收敛回界内（预览、合成、地图面板高亮
->   使用同一收敛锚点，保证三者渲染位置严格一致）；
+> **Actions 显示范围限定说明**：`max_text_right` / `max_text_bottom` 与文本锚点
+> `(text_x, text_y)` 围成 Actions 文本可显示区域（默认右边界 = 视频左边缘
+> `video_x`，下边界 = 视频底边；文本块左上角固定为 `(text_x, text_y)`）。
+> 启用后（任一值非 `null`）：
 > - 超出右边界的文本行自动换行（优先在空格处断行，CJK 按字符断行）；
 > - 换行后文本块高度仍超出下边界时，按整个操作为单位从末尾截断，日志中记录截断数量；
 > - 若截断后操作均带 `video_time`（识别输出时间扩展字段），自动**分页切换**：

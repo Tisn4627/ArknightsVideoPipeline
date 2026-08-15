@@ -43,9 +43,13 @@ python main.py video.mp4 -b bg.png --stage 2-10
 
 # 回退到 MAA 后端
 python main.py video.mp4 -b bg.png --backend maa --maa-path C:/MAA
+
+# 使用现成的作业 JSON（跳过视频识别，其余步骤照常执行）
+python main.py video.mp4 -b bg.png --copilot-json copilot.json
 ```
 
 配置文件中通过 `copilot_backend` 键切换，详见 [配置说明](docs/configuration.md)。
+`--copilot-json` 支持多视频按文件名匹配绑定，详见 [CLI 参考](docs/cli_reference.md) 与 [快速入门](docs/quick_start_cli.md)。
 
 ## 克隆与资源
 

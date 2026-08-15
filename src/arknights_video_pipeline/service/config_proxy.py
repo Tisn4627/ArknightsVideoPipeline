@@ -43,8 +43,13 @@ class ConfigProxy(QObject):
     def __init__(self, project_dir: str = PROJECT_ROOT, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._project_dir = project_dir
+        # 视频列表仅保存在当前会话，不持久化到磁盘（启动时始终为空）
+        self._session_video_paths: list[str] = []
         self._config_mgr = ConfigManager(project_dir)
         self._config_mgr.load_pipeline_config()
+        # 清除旧版配置文件中的残留键，避免 save_all() 将其写回磁盘
+        self._config_mgr.pipeline.pop("video_paths", None)
+        self._config_mgr.pipeline.pop("video_path", None)
         # 同步 FFmpeg 路径配置到 utils 模块全局（GUI 启动时）
         from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(
@@ -83,6 +88,9 @@ class ConfigProxy(QObject):
         # 重新加载子配置（pipeline.json 中的路径可能已变更）
         for name in self._SUB_CONFIG_PATHS:
             self._load_sub_config_into_memory(name)
+        # 清除旧版配置文件中的残留键，避免 save_all() 将其写回磁盘
+        self._config_mgr.pipeline.pop("video_paths", None)
+        self._config_mgr.pipeline.pop("video_path", None)
         # 重新同步 FFmpeg 配置到 utils 模块全局（重置/重新加载后，
         # 实际生效值必须与磁盘一致，否则 UI 显示与运行时行为脱节）
         from arknights_video_pipeline.core.utils import set_ffmpeg_config
@@ -162,18 +170,13 @@ class ConfigProxy(QObject):
 
     # ── 业务字段便捷访问 ──────────────────────────────────
 
-    def video_path(self) -> str:
-        return self.get("video_path", "")
-
-    def set_video_path(self, path: str) -> None:
-        self.set("video_path", os.path.abspath(path) if path else "")
-
     def video_paths(self) -> list[str]:
-        """批量视频路径列表（GUI 批量处理用）"""
-        return list(self.get("video_paths", []))
+        """批量视频路径列表（仅当前会话，不持久化）"""
+        return list(self._session_video_paths)
 
     def set_video_paths(self, paths: list[str]) -> None:
-        self.set("video_paths", [os.path.abspath(p) for p in paths if p])
+        self._session_video_paths = [os.path.abspath(p) for p in paths if p]
+        self.config_changed.emit("video_paths", self._session_video_paths)
 
     def background_image(self) -> str:
         return self.get("background_image", "")

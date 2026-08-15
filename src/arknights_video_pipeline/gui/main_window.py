@@ -10,12 +10,11 @@ gui.main_window - 主窗口
 
 from __future__ import annotations
 
-from typing import Any
-
 from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QScrollArea, QComboBox, QCheckBox,
+    QScrollArea, QComboBox,
     QApplication, QLabel, QFrame, QStackedWidget,
 )
 
@@ -316,7 +315,7 @@ class MainWindow(QMainWindow):
 
         主页的 skip_group 原先使用硬编码 ``background-color: #FFFFFF``，
         在深色模式下会形成刺眼的白色块。这里将容器底色改为与卡片
-        surface 一致（亮色为白、暗色为 #1C1B1F），标题文字使用
+        surface 一致（亮色为 #FFFBFE、暗色为 #141218），标题文字使用
         on_surface_variant，复选框则调用 set_colors() 同步 indicator
         与 label 颜色。
         """
@@ -533,9 +532,7 @@ class MainWindow(QMainWindow):
             for key, cb in self._skip_checkboxes.items():
                 cb.setChecked(key in skip_steps)
 
-            # 从配置恢复视频路径列表
-            self._batch_list.clear()
-            self._batch_list.add_paths(self._config.video_paths())
+            # 视频列表不持久化：每次启动为空，不从此处恢复
         finally:
             for ctrl in controls:
                 ctrl.blockSignals(False)
@@ -622,13 +619,11 @@ class MainWindow(QMainWindow):
                     self._style_combo.setCurrentIndex(index)
                 self._on_style_changed(style)
 
-                # 主页控件同步刷新：背景图 / Skip 复选框 / 视频列表
+                # 主页控件同步刷新：背景图 / Skip 复选框（视频列表不持久化，保持会话状态）
                 self._bg_selector.set_path(self._config.background_image())
                 skip_steps = self._config.skip_steps()
                 for key, cb in self._skip_checkboxes.items():
                     cb.setChecked(key in skip_steps)
-                self._batch_list.clear()
-                self._batch_list.add_paths(self._config.video_paths())
             finally:
                 for ctrl in controls:
                     ctrl.blockSignals(False)
@@ -753,8 +748,11 @@ class MainWindow(QMainWindow):
             self._show_warning(tr("msg.no_video_title"), tr("msg.no_video_text"))
             return
 
+        # 与视频列表平行对齐的自定义作业 JSON 路径（None=未绑定，仍执行识别）
+        json_paths = self._batch_list.json_paths()
+
         try:
-            errors = self._service.validate_batch(paths)
+            errors = self._service.validate_batch(paths, json_paths)
             if errors:
                 self._show_warning(
                     tr("msg.validation_failed_title"), "\n".join(errors)
@@ -771,7 +769,7 @@ class MainWindow(QMainWindow):
             self._progress_card.reset()
             self._log_viewer.clear_logs()
             self._set_running_ui(True)
-            if not self._service.run_pipeline(paths):
+            if not self._service.run_pipeline(paths, json_paths):
                 self._set_running_ui(False)
         except Exception as exc:
             # 兜底：任何异常都不应让 UI 卡在"运行中"状态

@@ -17,6 +17,7 @@ from arknights_video_pipeline.gui.assets.app_icon import (
     load_app_icon,
 )
 from arknights_video_pipeline.gui.theme import MaterialStyle, MaterialTypography
+from arknights_video_pipeline.gui.theme.font_manager import FontManager
 
 
 class _WheelGuard(QObject):
@@ -56,6 +57,9 @@ def create_application(argv: list[str]) -> QApplication:
     # 应用官方图标：作用于所有窗口标题栏、任务栏与 Alt-Tab 切换视图
     app.setWindowIcon(load_app_icon())
 
+    # 注册内置字体（Roboto / Noto Sans SC），缺失时静默回退系统字体
+    FontManager.load()
+
     # 应用 Material Design 3 主题
     style = MaterialStyle(typography=MaterialTypography())
     style.apply(app)
@@ -88,7 +92,7 @@ def main() -> int:
     from arknights_video_pipeline.service import ConfigProxy
 
     try:
-        app = create_application(sys.argv)
+        create_application(sys.argv)
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()

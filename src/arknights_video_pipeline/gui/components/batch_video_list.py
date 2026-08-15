@@ -11,11 +11,11 @@ from __future__ import annotations
 import os
 from typing import List
 
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QPoint
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QProgressBar,
-    QPushButton, QSizePolicy, QFrame,
+    QPushButton, QSizePolicy, QFrame, QMenu,
 )
 
 from arknights_video_pipeline.core.utils import SUPPORTED_VIDEO_EXTENSIONS
@@ -57,6 +57,7 @@ class BatchVideoRow(QWidget):
         self._colors = colors
         self._status = STATUS_PENDING
         self._percent = 0
+        self._json_path: str | None = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -104,10 +105,14 @@ class BatchVideoRow(QWidget):
         self._status_label.setStyleSheet(self._status_text_qss())
         layout.addWidget(self._status_label)
 
-        # 上移 / 下移 / 删除按钮
+        # 自定义作业JSON / 上移 / 下移 / 删除按钮
+        self._json_btn = self._make_icon_btn(
+            "note_add", tr("batch.tooltip.json.add")
+        )
         self._up_btn = self._make_icon_btn("arrow_upward", tr("batch.tooltip.up"))
         self._down_btn = self._make_icon_btn("arrow_downward", tr("batch.tooltip.down"))
         self._del_btn = self._make_icon_btn("delete", tr("batch.tooltip.delete"))
+        layout.addWidget(self._json_btn)
         layout.addWidget(self._up_btn)
         layout.addWidget(self._down_btn)
         layout.addWidget(self._del_btn)
@@ -125,6 +130,7 @@ class BatchVideoRow(QWidget):
         self._up_btn.setEnabled(editable)
         self._down_btn.setEnabled(editable)
         self._del_btn.setEnabled(editable)
+        self._json_btn.setEnabled(editable)
 
     def set_status(self, status: str, percent: int | None = None) -> None:
         self._status = status
@@ -152,6 +158,7 @@ class BatchVideoRow(QWidget):
     def refresh_translations(self) -> None:
         """语言切换时刷新状态文本与按钮 tooltip"""
         self._status_label.setText(_status_text(self._status))
+        self._refresh_json_btn()
         self._up_btn.setToolTip(tr("batch.tooltip.up"))
         self._down_btn.setToolTip(tr("batch.tooltip.down"))
         self._del_btn.setToolTip(tr("batch.tooltip.delete"))
@@ -170,6 +177,7 @@ class BatchVideoRow(QWidget):
             pix = make_icon_pixmap(name, colors.on_surface_variant, 18)
             if pix is not None:
                 btn.setIcon(QIcon(pix))
+        self._refresh_json_btn()
         self._refresh_status_icon()
 
     # ── 信号入口（由 BatchVideoList 连接） ────────────────
@@ -182,6 +190,38 @@ class BatchVideoRow(QWidget):
 
     def delete_button(self) -> QPushButton:
         return self._del_btn
+
+    def json_button(self) -> QPushButton:
+        return self._json_btn
+
+    # ── 自定义作业 JSON ──────────────────────────────────
+
+    @property
+    def json_path(self) -> str | None:
+        """已绑定的自定义作业 JSON 路径（None 表示未绑定）"""
+        return self._json_path
+
+    def set_json_path(self, path: str | None) -> None:
+        """绑定/移除自定义作业 JSON，并刷新按钮状态显示"""
+        self._json_path = path
+        self._refresh_json_btn()
+
+    def _refresh_json_btn(self) -> None:
+        """按绑定状态刷新 JSON 按钮的图标、颜色与 tooltip"""
+        if self._json_path:
+            icon_name = "description"
+            color = self._colors.primary
+            tooltip = tr(
+                "batch.tooltip.json.set", path=self._json_path
+            )
+        else:
+            icon_name = "note_add"
+            color = self._colors.on_surface_variant
+            tooltip = tr("batch.tooltip.json.add")
+        pix = make_icon_pixmap(icon_name, color, 18)
+        if pix is not None:
+            self._json_btn.setIcon(QIcon(pix))
+        self._json_btn.setToolTip(tooltip)
 
     # ── 内联样式 ──────────────────────────────────────────
 
@@ -332,6 +372,13 @@ class BatchVideoList(QWidget):
     def video_paths(self) -> list[str]:
         return [row.video_path for row in self._rows]
 
+    def json_paths(self) -> list[str | None]:
+        """与 video_paths() 平行对齐的自定义作业 JSON 路径列表（None=未绑定）
+
+        仅本次会话有效，不持久化到配置文件。
+        """
+        return [row.json_path for row in self._rows]
+
     def add_paths(self, paths: list[str]) -> None:
         added = False
         for p in paths:
@@ -348,6 +395,9 @@ class BatchVideoList(QWidget):
             row.up_button().clicked.connect(lambda _, r=row: self._move_up(r))
             row.down_button().clicked.connect(lambda _, r=row: self._move_down(r))
             row.delete_button().clicked.connect(lambda _, r=row: self._remove(r))
+            row.json_button().clicked.connect(
+                lambda _, r=row: self._on_json_clicked(r)
+            )
             self._rows.append(row)
             self._list_layout.addWidget(row)
             added = True
@@ -439,6 +489,37 @@ class BatchVideoList(QWidget):
             event.ignore()
 
     # ── 内部 ─────────────────────────────────────────────
+
+    def _on_json_clicked(self, row: BatchVideoRow) -> None:
+        """自定义作业 JSON 按钮点击处理
+
+        未绑定：弹出文件对话框选择 JSON；
+        已绑定：弹出菜单选择「更换 JSON」或「移除 JSON」。
+        """
+        if row.json_path:
+            menu = QMenu(self)
+            replace_act = menu.addAction(tr("batch.tooltip.json.replace"))
+            remove_act = menu.addAction(tr("batch.tooltip.json.remove"))
+            chosen = menu.exec(self._json_pos(row.json_button()))
+            if chosen is replace_act:
+                self._pick_json_for_row(row)
+            elif chosen is remove_act:
+                row.set_json_path(None)
+        else:
+            self._pick_json_for_row(row)
+
+    def _pick_json_for_row(self, row: BatchVideoRow) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("batch.json_open_title"), "",
+            "Copilot JSON (*.json);;All files (*.*)",
+        )
+        if path:
+            row.set_json_path(path)
+
+    def _json_pos(self, btn: QPushButton) -> QPoint:
+        """计算 JSON 按钮在屏幕上的位置，用于弹出菜单"""
+        return btn.mapToGlobal(QPoint(0, btn.height()))
 
     def _on_add_clicked(self) -> None:
         from PyQt6.QtWidgets import QFileDialog

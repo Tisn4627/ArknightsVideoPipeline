@@ -39,7 +39,24 @@ class MaterialTypography:
 
     @staticmethod
     def _default_family() -> str:
-        return "Roboto, Google Sans, Segoe UI, Microsoft YaHei UI, Noto Sans SC, Arial, sans-serif"
+        """默认字体回退链
+
+        内置字体（Roboto / Noto Sans SC，见 ``font_manager.FontManager``）
+        注册成功后置于链首；中文最终回退 Windows 的 Microsoft YaHei 与
+        macOS 的 PingFang SC，保证无内置字体时仍可正确显示中文。
+        """
+        from arknights_video_pipeline.gui.theme.font_manager import FontManager
+
+        base = (
+            "Roboto, Google Sans, Segoe UI, Microsoft YaHei UI, "
+            "Noto Sans SC, Arial, sans-serif"
+        )
+        registered = FontManager.available_families()
+        if registered:
+            # 已注册族名前置（可变字体族名即 "Roboto" / "Noto Sans SC"），
+            # 重复族名无害：QFont.setFamilies 按序匹配第一个可用的。
+            return ", ".join(registered) + ", " + base
+        return base
 
     def _font(self, size: int, weight: int = QFont.Weight.Normal,
               letter_spacing: int = 0) -> QFont:

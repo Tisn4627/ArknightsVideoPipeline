@@ -2,11 +2,10 @@
 core.text_fit - Style1 Actions 文本显示范围拟合（自动换行 + 末尾截断 + 分页切换）
 
 将逐操作文本（format_actions_lines 输出）拟合到 text_overlay 配置的
-限定范围内（``max_text_left`` / ``max_text_right`` / ``max_text_top`` /
-``max_text_bottom``，画布绝对坐标）：
-  1. 左/上边界生效时锚点向内收敛（文本块不得越过左/上边界），
-     超宽行按字符自动换行（优先在空格处断行，CJK 友好），
-     使文本块右边界不超过 ``max_text_right``；
+限定范围内（``max_text_right`` / ``max_text_bottom``，画布绝对坐标）：
+  1. 文本块左上角固定为 ``text_x`` / ``text_y``，超宽行按字符自动换行
+     （优先在空格处断行，CJK 友好），使文本块右边界不超过
+     ``max_text_right``；
   2. 若换行后文本块高度仍超出 ``max_text_bottom``，
      按整个操作（换行组）为单位从末尾截断，直到放得下；
   3. 截断后若每个操作均带有 video_time（识别输出的时间扩展字段），
@@ -41,28 +40,6 @@ PANEL_PADDING = 10
 
 # 宽度/高度测量共用渲染属性（与 Canvas.render 的默认参数一致）
 _MEASURE_PROPS = RenderProps(False, CropMode.NONE, FontSmoothing.SUBPIXEL)
-
-
-def resolve_text_anchor(
-    text_x: float,
-    text_y: float,
-    max_text_left: float | None = None,
-    max_text_top: float | None = None,
-) -> tuple[float, float]:
-    """计算文本块实际左上角锚点：左/上边界生效时锚点向内收敛
-
-    文本块锚点默认即 text_x / text_y；配置了左边界且锚点在其左侧时
-    锚点右移到左边界（文本不得越过左边界），配置了上边界且锚点在其
-    上方时锚点下移到上边界（文本不得越过上边界）。
-    预览、合成、地图面板高亮均须使用同一锚点，保证三者严格对齐。
-    """
-    x = float(text_x)
-    y = float(text_y)
-    if max_text_left is not None:
-        x = max(x, float(max_text_left))
-    if max_text_top is not None:
-        y = max(y, float(max_text_top))
-    return x, y
 
 
 def _text_size(style: Any, padding: int, text: str) -> tuple[int, int]:
@@ -126,8 +103,6 @@ def fit_actions_lines(
     text_x: float,
     text_y: float,
     padding: int = PANEL_PADDING,
-    max_text_left: float | None = None,
-    max_text_top: float | None = None,
 ) -> tuple[list[str], list[tuple[int, int]], int]:
     """将逐操作文本行拟合到限定范围内
 
@@ -139,10 +114,6 @@ def fit_actions_lines(
         max_text_bottom: 文本块下边界（画布绝对 Y，None/<=锚点 Y 时不限高度）
         text_x / text_y: 文本块左上角锚点（画布绝对坐标）
         padding: 单行内边距（与 create_text_clip / map_overlay._PANEL_PADDING 一致）
-        max_text_left: 文本块左边界（画布绝对 X，锚点在其左侧时右移收敛，
-            None/<=锚点 X 时不生效）
-        max_text_top: 文本块上边界（画布绝对 Y，锚点在其上方时下移收敛，
-            None/<=锚点 Y 时不生效）
 
     Returns:
         (fitted_lines, line_groups, dropped_count)：
@@ -151,17 +122,16 @@ def fit_actions_lines(
           （供 map_overlay 面板高亮按操作复用时间区间）
         - dropped_count: 因高度限制被截断的操作数
 
-    文本块实际位置由 ``resolve_text_anchor`` 计算（左/上边界收敛后的锚点），
-    调用方须用该锚点渲染文本，保证预览/合成/高亮三者对齐。
+    文本块左上角固定为 (text_x, text_y)，调用方须按该锚点渲染文本，
+    保证预览/合成/高亮三者对齐。
     """
     font_size = float(text_cfg.get("font_size", 25)) * float(text_cfg.get("font_scale", 1))
     # 测量用 Style：与 Canvas.render 完全相同的字体/内边距配置
     canvas = Canvas().font_family(font_path).font_size(font_size).padding(padding)
     style = canvas._style
 
-    x_start, y_start = resolve_text_anchor(
-        text_x, text_y, max_text_left, max_text_top,
-    )
+    x_start = float(text_x)
+    y_start = float(text_y)
 
     available_width = None
     if max_text_right is not None and float(max_text_right) - x_start > padding * 2:
@@ -262,8 +232,6 @@ def page_actions_lines(
     switch_time: float,
     video_duration: float,
     padding: int = PANEL_PADDING,
-    max_text_left: float | None = None,
-    max_text_top: float | None = None,
 ) -> list[ActionsPage] | None:
     """超出限定高度时的分页显示（"最后一个显示操作完成时切换"）
 
@@ -276,8 +244,8 @@ def page_actions_lines(
       - 第 1 页自 switch_time 显示；后续每页自前一页末尾操作的
         video_time 开始（即"最后一个显示的 Actions 完成时切换到
         尚未进行的 Actions"），末页显示到视频结束；
-      - 每页内容与 fit_actions_lines 相同（超宽换行 + 高度截断，
-        左/上边界同样生效），尽可能容纳更多操作；
+      - 每页内容与 fit_actions_lines 相同（超宽换行 + 高度截断），
+        尽可能容纳更多操作；
       - 页内操作完成时刻不晚于页起点（同刻操作、或操作时刻已超出
         视频时长）时整页无法显示，跳过这些操作继续分页；
       - 所有页均为零时长（时间无法前进）时返回 None 回退静态截断。
@@ -287,12 +255,11 @@ def page_actions_lines(
         video_times: 每个操作的 video_time（与 lines 一一对应）
         switch_time: 进入战斗时间
         video_duration: 视频总时长
-        max_text_left / max_text_top: 左/上边界，与 fit_actions_lines 一致
 
     Returns:
         分页列表（每页含拟合行/行号切片/显示区间），无需分页时返回 None
     """
-    _, y_start = resolve_text_anchor(text_x, text_y, max_text_left, max_text_top)
+    y_start = float(text_y)
     # 高度限定未生效时不产生截断，无需分页
     if max_text_bottom is None or float(max_text_bottom) - y_start <= padding * 2:
         return None
@@ -305,7 +272,6 @@ def page_actions_lines(
     _, _, dropped = fit_actions_lines(
         lines, font_path, text_cfg,
         max_text_right, max_text_bottom, text_x, text_y, padding,
-        max_text_left, max_text_top,
     )
     if dropped == 0:
         return None
@@ -316,7 +282,6 @@ def page_actions_lines(
         return fit_actions_lines(
             lines[start:end], font_path, text_cfg,
             max_text_right, max_text_bottom, text_x, text_y, padding,
-            max_text_left, max_text_top,
         )[:2]
 
     pages: list[ActionsPage] = []

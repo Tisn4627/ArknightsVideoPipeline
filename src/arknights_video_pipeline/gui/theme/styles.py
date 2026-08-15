@@ -10,6 +10,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QApplication
 
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
+from arknights_video_pipeline.gui.theme.palette import apply_palette
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
 
 
@@ -350,11 +351,154 @@ class MaterialStyle:
             background-color: {c.surface_variant};
             color: {c.on_surface_variant};
         }}
+
+        /* ── MD3 覆盖补齐：数值输入 / 提示 / 列表 / 表格 / 标签页 ── */
+
+        QSpinBox, QDoubleSpinBox {{
+            background-color: {c.surface_variant};
+            color: {c.on_surface};
+            border: 1px solid {c.outline_variant};
+            border-radius: 12px;
+            padding: 8px 12px;
+            min-height: 20px;
+        }}
+
+        QSpinBox:focus, QDoubleSpinBox:focus {{
+            border: 2px solid {c.primary};
+        }}
+
+        QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            background-color: {c.surface_variant};
+            color: {c.on_surface_variant};
+        }}
+
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+            width: 20px;
+            border: none;
+            background-color: transparent;
+        }}
+
+        QToolTip {{
+            background-color: {c.surface};
+            color: {c.on_surface};
+            border: 1px solid {c.outline_variant};
+            border-radius: 4px;
+            padding: 4px 8px;
+        }}
+
+        QListWidget, QTreeWidget, QTableWidget, QListView, QTableView {{
+            background-color: {c.surface};
+            color: {c.on_surface};
+            border: 1px solid {c.outline_variant};
+            border-radius: 8px;
+            padding: 4px;
+            outline: none;
+        }}
+
+        QListWidget::item, QTreeWidget::item {{
+            padding: 6px 12px;
+            border-radius: 4px;
+        }}
+
+        QListWidget::item:selected, QTreeWidget::item:selected {{
+            background-color: {c.primary_container};
+            color: {c.on_primary_container};
+        }}
+
+        QListWidget::item:hover, QTreeWidget::item:hover {{
+            background-color: {c.surface_variant};
+        }}
+
+        QHeaderView::section {{
+            background-color: {c.surface_variant};
+            color: {c.on_surface_variant};
+            border: none;
+            border-bottom: 1px solid {c.outline_variant};
+            padding: 8px 12px;
+            font-weight: 500;
+        }}
+
+        QTableWidget {{
+            gridline-color: {c.outline_variant};
+            selection-background-color: {c.primary_container};
+            selection-color: {c.on_primary_container};
+        }}
+
+        QTabWidget::pane {{
+            background-color: {c.surface};
+            border: 1px solid {c.outline_variant};
+            border-radius: 8px;
+            top: -1px;
+        }}
+
+        QTabBar::tab {{
+            background-color: transparent;
+            color: {c.on_surface_variant};
+            border: none;
+            border-radius: 20px;
+            padding: 8px 20px;
+            font-weight: 500;
+        }}
+
+        QTabBar::tab:selected {{
+            background-color: {c.primary_container};
+            color: {c.on_primary_container};
+        }}
+
+        QTabBar::tab:hover {{
+            background-color: {c.surface_variant};
+        }}
+
+        QRadioButton {{
+            spacing: 8px;
+            color: {c.on_surface};
+        }}
+
+        QRadioButton::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 2px solid {c.outline};
+            border-radius: 9px;
+            background-color: {c.surface};
+        }}
+
+        QRadioButton::indicator:checked {{
+            border: 5px solid {c.primary};
+            background-color: {c.surface};
+        }}
+
+        QRadioButton:disabled {{
+            color: {c.on_surface_variant};
+        }}
+
+        QSlider::groove:horizontal {{
+            height: 4px;
+            border-radius: 2px;
+            background-color: {c.surface_variant};
+        }}
+
+        QSlider::sub-page:horizontal {{
+            border-radius: 2px;
+            background-color: {c.primary};
+        }}
+
+        QSlider::handle:horizontal {{
+            width: 18px;
+            height: 18px;
+            margin: -7px 0;
+            border-radius: 9px;
+            background-color: {c.primary};
+            border: 2px solid {c.surface};
+        }}
         """
         MaterialStyle._qss_cache[cache_key] = qss
         return qss
 
     def apply(self, app: QApplication) -> None:
+        # QPalette 兜底（QSS 优先于 Palette）：让未被 QSS 覆盖的原生
+        # 控件（系统对话框等）底色符合 MD3 Token；Window 固定为 surface。
+        apply_palette(self.colors)
         app.setStyleSheet(self.generate_qss())
         app.setFont(self.typography.body_medium)
 

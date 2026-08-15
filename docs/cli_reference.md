@@ -41,7 +41,7 @@ python main.py v1.mp4 v2.mp4 v3.mp4 -b bg.png
 - 多个视频按命令行中的顺序依次处理；
 - 某个文件失败时跳过该文件，继续处理后续文件，不中断整批；
 - 退出码：仅当全部文件成功时为 `0`，任意文件失败或输入验证失败时为 `1`；
-- 共享选项（`--background-image`、`--maa-path`、`--output-dir`、`--style`、`--log-level`、`--skip-step`）作用于整批视频；
+- 共享选项（`--background-image`、`--maa-path`、`--output-dir`、`--style`、`--log-level`、`--skip-step`、`--copilot-json`）作用于整批视频；
 - 多文件运行时，日志文件写入到基础输出目录（`output/`）；单文件运行时仍写入到该视频的输出子目录（`output/<video_name>/`，保持向后兼容）；
 - `--dry-run` 会一次性验证全部视频后退出。
 
@@ -247,6 +247,40 @@ python main.py video.mp4 -b bg.png --skip-step track --skip-step compose
 python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --skip-step track --skip-step compose
 ```
 
+### `--copilot-json`
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | 路径列表（可指定多个） |
+| 必填 | 否 |
+| 默认值 | 无（全部视频执行步骤1识别） |
+
+提供现成的作业 JSON 文件，绑定后对应视频**跳过步骤 1（视频识别）**，编队文本、操作文本、开始按钮识别与视频合成等后续步骤照常执行。适用于已有作业 JSON、无需重新识别的场景。
+
+文件需为 `.json` 且必须存在，否则程序直接报错退出。
+
+绑定规则：
+
+| 视频数 | JSON 数 | 规则 |
+|--------|---------|------|
+| 1 | 1 | 直接绑定该 JSON |
+| 任意（除上） | 任意 | 按文件名（去扩展名，不区分大小写）匹配，视频名与 JSON 名相同才绑定 |
+
+未匹配到任何视频的 JSON 会被忽略并给出警告；未绑定 JSON 的视频仍执行正常视频识别。
+
+> **注意**：多视频场景下使用自定义作业 JSON 属于**测试功能**，建议仅对单个视频文件使用。
+
+```bash
+# 单视频 + 单 JSON：直接绑定
+python main.py video.mp4 -b bg.png --copilot-json copilot.json
+
+# 多视频 + 多 JSON：按文件名匹配（video1.json → video1.mp4，video2.json → video2.mp4）
+python main.py video1.mp4 video2.mp4 -b bg.png --copilot-json video1.json video2.json
+
+# 与 --skip-step 配合：跳过步骤1的同时使用自定义 JSON（后续步骤仍正常读取）
+python main.py video.mp4 -b bg.png --skip-step copilot --copilot-json copilot.json
+```
+
 ### `--init-config`
 
 | 属性 | 值 |
@@ -414,6 +448,7 @@ python main.py video.mp4 -b bg.png --log-level DEBUG --no-log-file
   - `--style` / `-s`：视频合成风格
   - `--log-level`：日志级别
   - `--skip-step`：跳过的步骤
+  - `--copilot-json`：自定义作业 JSON（按文件名匹配绑定到各视频，绑定后跳过步骤1识别）
 - **日志文件**：多文件运行时，日志写入到基础输出目录（`output/pipeline.log`）；单文件运行时仍写入到该视频的输出子目录（`output/<video_name>/pipeline.log`，保持向后兼容）；
 - **`--dry-run`**：一次性验证全部视频文件后退出，不会执行实际处理。
 
@@ -432,6 +467,9 @@ python main.py v1.mp4 v2.mp4 v3.mp4 -b bg.png --dry-run
 # 批量处理并跳过部分步骤
 python main.py v1.mp4 v2.mp4 -b bg.png \
     --skip-step track --skip-step compose --output-dir results
+
+# 批量处理并为各视频绑定自定义作业 JSON（按文件名匹配，跳过步骤1识别）
+python main.py v1.mp4 v2.mp4 -b bg.png --copilot-json v1.json v2.json
 ```
 
 > **提示**：单文件调用 `python main.py video.mp4 -b bg.png` 等价于长度为 1 的批量，行为与旧版完全一致。
@@ -484,3 +522,12 @@ error: 请提供背景板图片文件路径 (--background-image / -b)
 ```
 [ERROR] ffprobe未找到，请确保ffmpeg已安装并在PATH中
 ```
+
+### 作业 JSON 文件不存在或格式错误
+
+```
+error: 作业JSON文件不存在: xxx.json
+error: 作业JSON必须是 .json 文件: xxx.txt
+```
+
+> 使用 `--copilot-json` 时，指定的文件必须存在且为 `.json` 扩展名，否则程序直接报错退出。

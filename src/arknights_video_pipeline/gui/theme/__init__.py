@@ -8,6 +8,11 @@ gui.theme - Material Design 3 主题系统
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.styles import MaterialStyle
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
+from arknights_video_pipeline.gui.theme.palette import (
+    apply_palette,
+    build_palette,
+)
+from arknights_video_pipeline.gui.theme.font_manager import FontManager
 from arknights_video_pipeline.gui.theme.button_qss import (
     filled_button_qss,
     outlined_button_qss,
@@ -22,6 +27,9 @@ __all__ = [
     "MaterialColors",
     "MaterialStyle",
     "MaterialTypography",
+    "apply_palette",
+    "build_palette",
+    "FontManager",
     "filled_button_qss",
     "outlined_button_qss",
     "apply_titlebar_theme",

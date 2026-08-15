@@ -160,7 +160,7 @@ class TestSetEditable:
     """验证 set_editable 方法"""
 
     def test_set_editable_disables_buttons(self, qapp) -> None:
-        """set_editable(False) 禁用所有行的上移/下移/删除按钮以及 Add/Clear 按钮"""
+        """set_editable(False) 禁用所有行的上移/下移/删除/JSON按钮以及 Add/Clear 按钮"""
         bl = _make_list(qapp)
         bl.add_paths(["a.mp4", "b.mp4"])
         bl.set_editable(False)
@@ -168,6 +168,7 @@ class TestSetEditable:
             assert not row.up_button().isEnabled()
             assert not row.down_button().isEnabled()
             assert not row.delete_button().isEnabled()
+            assert not row.json_button().isEnabled()
         assert not bl._add_btn.isEnabled()
         assert not bl._clear_btn.isEnabled()
 
@@ -292,3 +293,125 @@ class TestThemeAndCount:
         assert "3" in bl._count_label.text()
         bl.clear()
         assert "0" in bl._count_label.text()
+
+
+# ── 自定义作业 JSON ────────────────────────────────────────
+
+
+class TestCustomCopilotJson:
+    """验证每行自定义作业 JSON 按钮的绑定、状态显示与交互"""
+
+    def test_json_paths_default_none(self, qapp) -> None:
+        """未绑定时 json_paths() 返回与行数平行的 None 列表"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4", "b.mp4"])
+        assert bl.json_paths() == [None, None]
+
+    def test_set_json_path_updates_state(self, qapp) -> None:
+        """绑定 JSON 后 json_paths() 与按钮 tooltip 同步更新"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        btn = row.json_button()
+        assert row.json_path is None
+        row.set_json_path("C:/x/job.json")
+        assert row.json_path == "C:/x/job.json"
+        assert bl.json_paths() == ["C:/x/job.json"]
+        assert "job.json" in btn.toolTip()
+        # 移除绑定后恢复未绑定状态
+        row.set_json_path(None)
+        assert row.json_path is None
+        assert bl.json_paths() == [None]
+
+    def test_json_button_click_unbound_opens_dialog(self, qapp, tmp_path) -> None:
+        """未绑定时点击 JSON 按钮弹出文件对话框并绑定所选文件"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        jp = str(tmp_path / "job.json")
+        with mock.patch(
+            "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+            return_value=(jp, ""),
+        ):
+            bl._on_json_clicked(row)
+        assert row.json_path == jp
+
+    def test_json_button_click_dialog_cancelled_no_change(self, qapp) -> None:
+        """文件对话框取消时不改变绑定"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        with mock.patch(
+            "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+            return_value=("", ""),
+        ):
+            bl._on_json_clicked(row)
+        assert row.json_path is None
+
+    def test_json_button_click_bound_replace(self, qapp, tmp_path) -> None:
+        """已绑定时菜单选择「更换JSON」弹出文件对话框并替换"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        row.set_json_path("C:/x/old.json")
+        new_jp = str(tmp_path / "new.json")
+        replace_act = mock.MagicMock()
+        remove_act = mock.MagicMock()
+        with mock.patch(
+            "PyQt6.QtWidgets.QMenu.addAction"
+        ) as mock_add, \
+             mock.patch("PyQt6.QtWidgets.QMenu.exec") as mock_exec, \
+             mock.patch(
+                 "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+                 return_value=(new_jp, ""),
+             ):
+            mock_add.side_effect = [replace_act, remove_act]
+            mock_exec.return_value = replace_act
+            bl._on_json_clicked(row)
+        assert row.json_path == new_jp
+
+    def test_json_button_click_bound_remove(self, qapp) -> None:
+        """已绑定时菜单选择「移除JSON」解除绑定"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        row.set_json_path("C:/x/job.json")
+        replace_act = mock.MagicMock()
+        remove_act = mock.MagicMock()
+        with mock.patch(
+            "PyQt6.QtWidgets.QMenu.addAction"
+        ) as mock_add, \
+             mock.patch("PyQt6.QtWidgets.QMenu.exec") as mock_exec:
+            mock_add.side_effect = [replace_act, remove_act]
+            mock_exec.return_value = remove_act
+            bl._on_json_clicked(row)
+        assert row.json_path is None
+
+    def test_json_button_click_bound_menu_dismissed(self, qapp) -> None:
+        """已绑定时菜单被取消（exec 返回 None）不改变绑定"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        row.set_json_path("C:/x/job.json")
+        replace_act = mock.MagicMock()
+        remove_act = mock.MagicMock()
+        with mock.patch(
+            "PyQt6.QtWidgets.QMenu.addAction"
+        ) as mock_add, \
+             mock.patch("PyQt6.QtWidgets.QMenu.exec", return_value=None):
+            mock_add.side_effect = [replace_act, remove_act]
+            bl._on_json_clicked(row)
+        assert row.json_path == "C:/x/job.json"
+
+    def test_json_button_click_wired_in_add_paths(self, qapp, tmp_path) -> None:
+        """add_paths 后 JSON 按钮点击直接触发绑定流程"""
+        bl = _make_list(qapp)
+        bl.add_paths(["a.mp4"])
+        row = bl._rows[0]
+        jp = str(tmp_path / "job.json")
+        with mock.patch(
+            "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+            return_value=(jp, ""),
+        ):
+            row.json_button().click()
+        assert row.json_path == jp

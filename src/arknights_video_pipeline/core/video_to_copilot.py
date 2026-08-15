@@ -257,8 +257,9 @@ def run_maa_recognition(maa_path, video_path, timeout=None):
             if timeout and (time.time() - start_time) > timeout:
                 try:
                     asst.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # 停止失败不应掩盖超时错误，但需记录以便排查资源释放问题
+                    logger.warning(f"MAA识别超时，停止任务失败: {exc}")
                 raise TimeoutError(f"MAA识别超时({timeout}s)")
             time.sleep(0.5)
 

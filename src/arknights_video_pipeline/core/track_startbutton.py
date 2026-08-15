@@ -131,8 +131,13 @@ def match_single_template(frame_gray, scaled_list, threshold, early_stop=1.0):
     return best_val, best_loc, best_scale
 
 
-def match_templates_parallel(frame_gray, templates, scaled_cache, config):
-    """并行多模板匹配，返回 (best_match_dict, best_confidence)"""
+def match_templates_parallel(frame_gray, templates, scaled_cache, config, executor=None):
+    """多模板匹配，返回 (best_match_dict, best_confidence)
+
+    executor 为调用方创建的复用线程池（推荐：整个检测循环共用同一个线程池，
+    避免每采样帧创建/销毁）；为 None 时内部临时创建（兼容独立调用场景）。
+    模板数量 ≤2 时直接串行，避免线程开销。
+    """
     threshold = config.get("match_threshold", DEFAULT_CONFIG["match_threshold"])
     early_stop = config.get("early_stop_threshold", 0.92)
     max_workers = config.get("max_workers", 4)
@@ -158,11 +163,13 @@ def match_templates_parallel(frame_gray, templates, scaled_cache, config):
                 }
         return best_match, best_val
 
-    # 多模板并行匹配
-    futures = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # 多模板并行匹配：优先复用调用方传入的线程池（未传入时临时创建）
+    own_executor = executor is None
+    pool = executor if executor is not None else ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {}
         for tname, timg in templates:
-            future = executor.submit(
+            future = pool.submit(
                 match_single_template,
                 frame_gray, scaled_cache[tname], threshold, early_stop
             )
@@ -181,8 +188,10 @@ def match_templates_parallel(frame_gray, templates, scaled_cache, config):
                     "scale": round(float(scale), 3),
                     "size": (int(w * scale), int(h * scale))
                 }
-
-    return best_match, best_val
+        return best_match, best_val
+    finally:
+        if own_executor:
+            pool.shutdown(wait=True)
 
 
 def extract_roi(frame_gray, last_location, last_size, frame_size, config):
@@ -380,6 +389,8 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
     # 打开视频（使用降分辨率后的路径）
     cap = cv2.VideoCapture(downscaled_path)
     pbar = None
+    # 多模板并行匹配时复用的线程池（整个检测循环共用，避免每帧创建/销毁）
+    executor = None
     try:
         if not cap.isOpened():
             logger.error(f"无法打开视频文件: {downscaled_path}")
@@ -487,6 +498,10 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                 logger.info(f"  {tname}: 缩放因子 {', '.join(scales)}")
         logger.info("")
 
+        # 多模板并行匹配时创建一次线程池，检测循环内复用（仅在模板数 >2 时创建）
+        if len(templates) > 2:
+            executor = ThreadPoolExecutor(max_workers=config.get("max_workers", 4))
+
         # 计算需要处理的帧数（仅在检测时间范围内）
         processed_frames = len(range(0, detection_end_frame, sample_interval))
 
@@ -552,8 +567,8 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                     frame_gray, last_location, last_size, (frame_h, frame_w), config
                 )
 
-            # 执行匹配
-            match, raw_confidence = match_templates_parallel(search_frame, templates, scaled_cache, config)
+            # 执行匹配（复用检测循环共用的线程池）
+            match, raw_confidence = match_templates_parallel(search_frame, templates, scaled_cache, config, executor)
 
             # 记录全局最佳置信度
             if raw_confidence > global_best_confidence:
@@ -688,6 +703,8 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
         if pbar is not None:
             pbar.close()
         cap.release()
+        if executor is not None:
+            executor.shutdown(wait=True)
 
 
 def main():

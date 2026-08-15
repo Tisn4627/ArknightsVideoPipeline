@@ -59,7 +59,7 @@ def _colors_for(colors: MaterialColors) -> dict[str, str]:
     启发式（surface 越深则视为深色主题），保证与 ``MaterialColors``
     的暗/亮工厂方法保持一致。
     """
-    # 浅色 surface 为 #FFFFFF，深色 surface 为 #1C1B1F
+    # 浅色 surface 为 #FFFBFE，深色 surface 为 #141218
     # 这里以 surface 颜色的 R+G+B 总和判断（与 MaterialColors 实际取值
     # 解耦，避免遗漏手动构造的 colors 实例）。
     surface = colors.surface.lstrip("#")

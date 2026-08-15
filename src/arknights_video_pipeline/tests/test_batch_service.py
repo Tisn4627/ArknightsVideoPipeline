@@ -76,6 +76,47 @@ class TestValidateBatch:
         errors = service.validate_batch([str(bad_file)])
         assert any("不受支持的视频格式" in e for e in errors)
 
+    def test_validate_batch_missing_bound_json(self, qapp, tmp_path) -> None:
+        """绑定的自定义作业 JSON 不存在时返回对应错误"""
+        service = PipelineService(_make_config_proxy())
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        missing = str(tmp_path / "missing.json")
+        with mock.patch(
+            "arknights_video_pipeline.service.pipeline_service.validate_video_file",
+            return_value={},
+        ):
+            errors = service.validate_batch([str(video)], [missing])
+        assert any("自定义作业JSON文件不存在" in e for e in errors)
+
+    def test_validate_batch_non_json_bound_file(self, qapp, tmp_path) -> None:
+        """绑定的自定义文件非 .json 扩展名时返回对应错误"""
+        service = PipelineService(_make_config_proxy())
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        txt = tmp_path / "a.txt"
+        txt.write_text("{}", encoding="utf-8")
+        with mock.patch(
+            "arknights_video_pipeline.service.pipeline_service.validate_video_file",
+            return_value={},
+        ):
+            errors = service.validate_batch([str(video)], [str(txt)])
+        assert any("必须是 .json 文件" in e for e in errors)
+
+    def test_validate_batch_valid_bound_json_passes(self, qapp, tmp_path) -> None:
+        """绑定的 JSON 存在且为 .json 时校验通过"""
+        service = PipelineService(_make_config_proxy())
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        jp = tmp_path / "a.json"
+        jp.write_text("{}", encoding="utf-8")
+        with mock.patch(
+            "arknights_video_pipeline.service.pipeline_service.validate_video_file",
+            return_value={},
+        ):
+            errors = service.validate_batch([str(video)], [str(jp)])
+        assert errors == []
+
 
 # ── run_pipeline 调度 ──────────────────────────────────────
 
@@ -155,6 +196,42 @@ class TestRunPipelineScheduling:
         # 仅文件 1 的 worker 被创建，文件 2 未启动
         assert mock_worker_cls.call_count == 1
         assert batch_events[-1] == (1, 3, True)
+
+
+# ── 自定义作业 JSON ────────────────────────────────────────
+
+
+class TestCustomCopilotJson:
+    """验证自定义作业 JSON 路径的透传"""
+
+    def test_run_pipeline_forwards_json_to_worker(self, qapp) -> None:
+        """run_pipeline 将绑定的 JSON 路径传给 PipelineWorker"""
+        service = PipelineService(_make_config_proxy())
+        with mock.patch(_WORKER) as mock_worker_cls, \
+             mock.patch.object(service, "validate_batch", return_value=[]):
+            service.run_pipeline(["a.mp4"], ["C:/json/a.json"])
+        _, kwargs = mock_worker_cls.call_args
+        assert kwargs["copilot_json_path"] == "C:/json/a.json"
+
+    def test_run_pipeline_forwards_none_json_for_unbound(self, qapp) -> None:
+        """未绑定 JSON 的视频传给 worker 的 copilot_json_path 为 None"""
+        service = PipelineService(_make_config_proxy())
+        with mock.patch(_WORKER) as mock_worker_cls, \
+             mock.patch.object(service, "validate_batch", return_value=[]):
+            service.run_pipeline(["a.mp4", "b.mp4"], [None, "C:/json/b.json"])
+            # 串行模式：先派发文件1，完成后才派发文件2
+            service._on_worker_finished(0, True, {}, False)
+        assert mock_worker_cls.call_args_list[0].kwargs["copilot_json_path"] is None
+        assert mock_worker_cls.call_args_list[1].kwargs["copilot_json_path"] == \
+            "C:/json/b.json"
+
+    def test_run_pipeline_without_json_paths_backward_compatible(self, qapp) -> None:
+        """不传 json_paths 时行为与旧版一致（全部 None）"""
+        service = PipelineService(_make_config_proxy())
+        with mock.patch(_WORKER) as mock_worker_cls, \
+             mock.patch.object(service, "validate_batch", return_value=[]):
+            service.run_pipeline(["a.mp4"])
+        assert mock_worker_cls.call_args_list[0].kwargs["copilot_json_path"] is None
 
 
 # ── 总体进度 ───────────────────────────────────────────────

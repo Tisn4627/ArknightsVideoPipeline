@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -43,6 +44,9 @@ _FFMPEG_CUSTOM_PATH: str = ""
 # 标记配置的 FFmpeg 目录是否已加入 PATH，避免重复追加导致 PATH 增长。
 # set_ffmpeg_config() 重置为 False，使下次 ensure_ffmpeg_in_path() 重新应用。
 _FFMPEG_PATH_APPLIED: bool = False
+# 保护 _FFMPEG_PATH_APPLIED 与 PATH 修改的互斥锁：GUI 批量并发 worker
+# 首次调用 ensure_ffmpeg_in_path() 时避免竞态导致重复追加或漏应用。
+_FFMPEG_PATH_LOCK = threading.Lock()
 
 
 def set_ffmpeg_config(custom_enabled: bool, custom_path: str) -> None:
@@ -87,14 +91,15 @@ def ensure_ffmpeg_in_path() -> None:
     global _FFMPEG_PATH_APPLIED
 
     # 应用配置的 FFmpeg 目录（仅执行一次，配置变更时由 set_ffmpeg_config 重置标志）
-    if not _FFMPEG_PATH_APPLIED:
-        ffmpeg_dir = _get_effective_ffmpeg_dir()
-        if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
-            current = os.environ.get("PATH", "")
-            parts = current.split(os.pathsep)
-            if ffmpeg_dir not in parts:
-                os.environ["PATH"] = ffmpeg_dir + os.pathsep + current
-        _FFMPEG_PATH_APPLIED = True
+    with _FFMPEG_PATH_LOCK:
+        if not _FFMPEG_PATH_APPLIED:
+            ffmpeg_dir = _get_effective_ffmpeg_dir()
+            if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
+                current = os.environ.get("PATH", "")
+                parts = current.split(os.pathsep)
+                if ffmpeg_dir not in parts:
+                    os.environ["PATH"] = ffmpeg_dir + os.pathsep + current
+            _FFMPEG_PATH_APPLIED = True
 
     if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return

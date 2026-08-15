@@ -29,11 +29,15 @@ from arknights_video_pipeline.gui.theme import (
 class _BaseMessageDialog(QDialog):
     """带圆形 icon + 标题 + 描述 + 按钮的 Material 风格 dialog。"""
 
-    def __init__(self, title: str, text: str, icon_text: str, icon_bg: str,
+    def __init__(self, title: str, text: str, icon_text: str,
+                 icon_role: str = "secondary",
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._colors = colors or MaterialColors.light()
+        # icon 背景角色："secondary" 或 "error"，色值取自主题 Token，
+        # 主题切换时随 set_colors 刷新（不再硬编码十六进制）。
+        self._icon_role = icon_role
         self.setWindowTitle(title)
         self.setModal(True)
         # 显式最小尺寸 + 适配内容高度，按钮不会被裁切
@@ -63,11 +67,7 @@ class _BaseMessageDialog(QDialog):
         icon.setObjectName("msgIcon")
         icon.setFixedSize(40, 40)
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(
-            f"background-color: {icon_bg}; color: #FFFFFF;"
-            " border: none; border-radius: 20px;"
-            " font-size: 20px; font-weight: 600;"
-        )
+        icon.setStyleSheet(self._icon_qss())
         header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
@@ -114,9 +114,25 @@ class _BaseMessageDialog(QDialog):
         raise NotImplementedError
 
     # ── 主题同步 ─────────────────────────────────────────
+    def _icon_qss(self) -> str:
+        """icon 圆形背景 QSS：按角色取 Token 色，文字用 on_* 保证对比度"""
+        c = self._colors
+        if self._icon_role == "error":
+            bg, fg = c.error, c.on_error
+        else:
+            bg, fg = c.secondary, c.on_secondary
+        return (
+            f"background-color: {bg}; color: {fg};"
+            " border: none; border-radius: 20px;"
+            " font-size: 20px; font-weight: 600;"
+        )
+
     def _apply_colors(self) -> None:
         c = self._colors
         self._card.set_surface_color(c.surface)
+        icon = self.findChild(QLabel, "msgIcon")
+        if icon is not None:
+            icon.setStyleSheet(self._icon_qss())
         for lbl in self.findChildren(QLabel):
             if lbl.objectName() == "msgTitle":
                 lbl.setStyleSheet(
@@ -166,7 +182,7 @@ class InfoDialog(_BaseMessageDialog):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             title=title, text=text,
-            icon_text="i", icon_bg="#6750A4",  # secondary 主色
+            icon_text="i", icon_role="secondary",
             colors=colors, parent=parent,
         )
 
@@ -192,7 +208,7 @@ class WarningDialog(_BaseMessageDialog):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             title=title, text=text,
-            icon_text="!", icon_bg="#B3261E",  # error 红
+            icon_text="!", icon_role="error",
             colors=colors, parent=parent,
         )
 
@@ -230,7 +246,7 @@ class ConfirmDialog(_BaseMessageDialog):
         self._cancel_text = cancel_text or tr("dialog.cancel")
         super().__init__(
             title=title, text=text,
-            icon_text="?", icon_bg="#6750A4",
+            icon_text="?", icon_role="secondary",
             colors=colors, parent=parent,
         )
 

@@ -79,3 +79,50 @@ class TestSubConfigPersistence:
             )
         )
         assert _load_compose(compose_path)["map_overlay"]["enabled"] is True
+
+
+class TestVideoPathsSessionOnly:
+    """视频列表仅保存在当前会话内存，不持久化到磁盘"""
+
+    def test_video_paths_not_persisted_to_disk(self, qapp, tmp_path) -> None:
+        """set_video_paths 后 save_all() 落盘，pipeline.json 不含 video_paths/video_path"""
+        proxy = ConfigProxy(project_dir=str(tmp_path))
+        proxy.set_video_paths([str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")])
+        proxy.save_all()
+
+        with open(
+            os.path.join(str(tmp_path), "config", "pipeline.json"),
+            encoding="utf-8",
+        ) as f:
+            disk = json.load(f)
+        assert "video_paths" not in disk
+        assert "video_path" not in disk
+
+    def test_fresh_instance_starts_empty(self, qapp, tmp_path) -> None:
+        """新建 ConfigProxy 实例的视频列表始终为空（不恢复上次会话）"""
+        proxy = ConfigProxy(project_dir=str(tmp_path))
+        proxy.set_video_paths([str(tmp_path / "a.mp4")])
+        proxy.save_all()
+
+        new_proxy = ConfigProxy(project_dir=str(tmp_path))
+        assert new_proxy.video_paths() == []
+
+    def test_legacy_residual_keys_cleared_on_load(self, qapp, tmp_path) -> None:
+        """磁盘存在旧版 video_paths/video_path 残留时，加载后从内存清除且不再写回"""
+        config_dir = os.path.join(str(tmp_path), "config")
+        os.makedirs(config_dir, exist_ok=True)
+        path = os.path.join(config_dir, "pipeline.json")
+        legacy = {
+            "video_paths": [str(tmp_path / "old.mp4")],
+            "video_path": str(tmp_path / "old.mp4"),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(legacy, f)
+
+        proxy = ConfigProxy(project_dir=str(tmp_path))
+        assert proxy.video_paths() == []
+        proxy.save_all()
+        with open(path, encoding="utf-8") as f:
+            disk = json.load(f)
+        assert "video_paths" not in disk
+        assert "video_path" not in disk

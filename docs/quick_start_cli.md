@@ -273,6 +273,26 @@ python main.py video.mp4 -b bg.png --skip-step copilot --skip-step formation --s
 python main.py video.mp4 --style style2 --skip-step copilot --skip-step formation --skip-step actions --skip-step track
 ```
 
+### 使用自定义作业 JSON（跳过视频识别）
+
+已有现成的作业 JSON 时，可通过 `--copilot-json` 直接使用，跳过耗时的步骤 1 视频识别，编队文本、操作文本、开始按钮识别与视频合成等后续步骤照常执行：
+
+```bash
+# 单视频 + 单 JSON：直接绑定
+python main.py video.mp4 -b bg.png --copilot-json copilot.json
+
+# 多视频 + 多 JSON：按文件名匹配（video1.json → video1.mp4，video2.json → video2.mp4）
+python main.py video1.mp4 video2.mp4 -b bg.png --copilot-json video1.json video2.json
+```
+
+绑定规则：
+
+- **单视频 + 单 JSON**：直接绑定，无需文件名匹配；
+- **其余情况**（多视频或多 JSON）：按文件名（去扩展名，不区分大小写）匹配，未匹配到任何视频的 JSON 会被忽略并给出警告，未绑定 JSON 的视频仍执行正常识别；
+- 指定的 JSON 文件必须存在且为 `.json` 扩展名，否则程序直接报错退出。
+
+> **注意**：多视频场景下使用自定义作业 JSON 属于**测试功能**，建议仅对单个视频文件使用。
+
 ### 启用字幕自适应（style1）
 
 在 `config/video_compose/style1.json` 中将 `subtitle_auto_fit` 设为 `true`，系统将根据视频尺寸自动计算最大字体大小：

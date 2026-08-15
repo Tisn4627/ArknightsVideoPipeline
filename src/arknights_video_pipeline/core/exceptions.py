@@ -44,8 +44,20 @@ class MAARecognitionError(PipelineError):
 
 
 class CopilotBackendError(PipelineError):
-    """视频转 copilot 后端（recognition / maa）调用失败"""
-    pass
+    """视频转 copilot 后端（recognition / maa）调用失败
+
+    retryable=False 表示配置/环境类错误（如 MAA 路径缺失、资源不存在），
+    重试无意义，流水线应直接失败；默认 True（识别执行类失败可重试）。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        step_name: str = "",
+        retryable: bool = True,
+    ) -> None:
+        self.retryable = retryable
+        super().__init__(message, step_name)
 
 
 class ConfigError(PipelineError):

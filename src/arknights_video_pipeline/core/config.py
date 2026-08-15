@@ -52,8 +52,6 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "video_compose_style": "style1",
     "video_compose_config": "config/video_compose/style1.json",
     "skip_steps": [],
-    "video_path": "",
-    "video_paths": [],
     # 合成背景图（仅 style1 使用）；必须存在于默认配置中，
     # 否则重置 pipeline.json 后该键不会写回磁盘，旧值残留在内存与输入框。
     "background_image": "",

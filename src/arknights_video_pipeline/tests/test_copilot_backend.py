@@ -121,6 +121,22 @@ class TestStepBackendSelection:
         assert exc_info.value.step_name == "video_to_copilot"
         assert isinstance(exc_info.value.cause, CopilotBackendError)
 
+    def test_non_retryable_error_fails_immediately(self, tmp_path) -> None:
+        """retryable=False 的配置类错误不重试，直接失败"""
+        pipe, cfg = self._make_pipeline(tmp_path)
+        cfg.pipeline["copilot_backend"] = "recognition"
+        cfg.pipeline["copilot_max_retries"] = 3
+        fake = FakeBackend({})
+        fake.recognize = mock.Mock(
+            side_effect=CopilotBackendError("MAA路径未配置", retryable=False)
+        )
+        with mock.patch(_FACTORY, return_value=fake):
+            with pytest.raises(Exception) as exc_info:
+                pipe.step_video_to_copilot()
+        assert isinstance(exc_info.value.cause, CopilotBackendError)
+        # 配置类错误：仅调用一次，不做无意义的重试
+        assert fake.recognize.call_count == 1
+
     def test_invalid_retries_config(self, tmp_path) -> None:
         """copilot_max_retries < 1 直接报错"""
         pipe, cfg = self._make_pipeline(tmp_path)
