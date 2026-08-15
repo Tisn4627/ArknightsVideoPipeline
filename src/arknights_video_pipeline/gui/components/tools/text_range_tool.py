@@ -495,7 +495,7 @@ class Style1TextRangeTool(ToolView):
             "text_overlay.text_x": 50,
             "text_overlay.text_y": 240,
             "text_overlay.max_text_right": 272,
-            "text_overlay.max_text_bottom": 965,
+            "text_overlay.max_text_bottom": 865,
             "video_x": 272,
             "video_y": 47,
             "video_scale": 0.85,
@@ -605,7 +605,7 @@ class Style1TextRangeTool(ToolView):
                 "text_overlay.text_x": 50,
                 "text_overlay.text_y": 240,
                 "text_overlay.max_text_right": 272,
-                "text_overlay.max_text_bottom": 965,
+                "text_overlay.max_text_bottom": 865,
                 "video_x": 272,
                 "video_y": 47,
                 "video_scale": 0.85,
@@ -613,8 +613,9 @@ class Style1TextRangeTool(ToolView):
                 "output_height": 1080,
             }.get(field_path)
             value = self._get_style1(field_path, default)
-            if value is not None:
-                self._rows[field_path].set_value(value, block_signal=True)
+            # 配置值原样回显（None=不限 对应可空行的开关关闭态；
+            # 非可空行内部容错为默认值），编辑不写盘，仅点击"应用"时保存
+            self._rows[field_path].set_value(value, block_signal=True)
 
     def _current_values(self) -> dict[str, Any]:
         return {path: row.get_value() for path, row in self._rows.items()}

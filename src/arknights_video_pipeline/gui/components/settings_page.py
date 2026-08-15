@@ -1171,7 +1171,7 @@ class SettingsPage(QWidget):
                 minimum=0, maximum=3840, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.max_text_right")), "settings.compose.max_text_right")
             add_adv(f"{tp}.max_text_bottom", build_nullable_int_row(
-                tr("settings.compose.max_text_bottom"), default=965,
+                tr("settings.compose.max_text_bottom"), default=865,
                 minimum=0, maximum=2160, colors=c,
                 on_changed=self._emit_sub(cn, f"{tp}.max_text_bottom")), "settings.compose.max_text_bottom")
         else:

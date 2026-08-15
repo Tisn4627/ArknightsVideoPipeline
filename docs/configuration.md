@@ -267,7 +267,7 @@ python main.py --init-config compose
 | `text_x` | integer | `50` | 文本 X 坐标偏移 |
 | `text_y` | integer | `240` | 文本 Y 坐标偏移 |
 | `max_text_right` | integer/null | `272` | Actions 文本块右边界（画布绝对 X）。超宽行自动换行，保证右侧不遮挡视频画面；`null` 表示不限 |
-| `max_text_bottom` | integer/null | `965` | Actions 文本块下边界（画布绝对 Y）。自动换行后仍超高时，按操作从末尾截断，保证下侧不遮挡视频画面中的 Tips 提示字样；`null` 表示不限 |
+| `max_text_bottom` | integer/null | `865` | Actions 文本块下边界（画布绝对 Y）。自动换行后仍超高时，按操作从末尾截断，保证下侧不遮挡视频画面中的 Tips 提示字样；`null` 表示不限 |
 | `fade_duration` | float | `0.5` | 淡入淡出持续时间（秒） |
 | `shadow_enabled` | boolean | `true` | 是否启用文字阴影 |
 | `shadow_offset_x` | integer | `2` | 阴影 X 偏移 |

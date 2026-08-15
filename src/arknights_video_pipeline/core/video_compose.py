@@ -60,7 +60,7 @@ DEFAULT_CONFIG = {
         #   video_time（识别时间扩展字段），自动分页：页内最后一个操作
         #   完成时切换到尚未进行的操作
         "max_text_right": 272,
-        "max_text_bottom": 965,
+        "max_text_bottom": 865,
         "fade_duration": 0.5,
         "shadow_enabled": True,
         "shadow_offset_x": 2,

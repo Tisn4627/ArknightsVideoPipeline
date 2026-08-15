@@ -80,6 +80,9 @@ class ToolDialog(QDialog):
         self._scroll.viewport().setAutoFillBackground(False)
 
         self._view = view_cls(config_proxy=config_proxy, colors=self._colors)
+        # 进入工具视图：通知工具从配置文件（如 style1.json）加载参数值。
+        # 工具内编辑只改内存与预览，写盘仅在用户点击"应用/写入"按钮时进行
+        self._view.on_entered()
         self._scroll.setWidget(self._view)
         root.addWidget(self._scroll, 1)
 
