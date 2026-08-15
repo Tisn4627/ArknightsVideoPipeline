@@ -11,11 +11,11 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from ArknightsVideoRecognition.config.settings import DEFAULT_RESOLUTION, MINIMUM_REQUIRED
-from ArknightsVideoRecognition.copilot.builder import CopilotJob
-from ArknightsVideoRecognition.formation import FormationAnalyzer
-from ArknightsVideoRecognition.ocr.engine import OcrEngine, OcrSource
-from ArknightsVideoRecognition.video.frames import VideoFrames
+from arknights_video_recognition.config.settings import DEFAULT_RESOLUTION, MINIMUM_REQUIRED
+from arknights_video_recognition.copilot.builder import CopilotJob
+from arknights_video_recognition.formation import FormationAnalyzer
+from arknights_video_recognition.ocr.engine import OcrEngine, OcrSource
+from arknights_video_recognition.video.frames import VideoFrames
 
 TEST_DIR = Path("/workspace/test")
 DEBUG_DIR = Path("/workspace/debug")

@@ -8,14 +8,14 @@
 
 > **实施调整说明（相对原方案）**：
 > 1. 原方案的"Git submodule + `script/sync_recognition_resources.py` 同步资源"已改为
->    **彻底 vendor**：`src/ArknightsVideoRecognition/` 的代码直接入库（排除其
+>    **彻底 vendor**：`src/arknights_video_recognition/` 的代码直接入库（排除其
 >    `resource/`、`tests/`、`uv.lock`）；识别资源（约 216M）直接入库于
 >    顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile，与 font/locales 同层）。
 >    克隆后零额外步骤。`sync_recognition_resources.py` 与 `test_sync_resources.py` 已删除。
 > 2. 子模块方式（§5.3、§6、§8 等章节）保留为历史方案描述，不再适用于当前仓库。
 >    识别资源更新方式：在 Recognition 上游仓库更新后，手动将新资源复制入库并提交。
 > 3. 打包（§9）：`builder.py` 已为 Recognition 代码补 `--hidden-import` 与
->    `--paths src/ArknightsVideoRecognition`；`runtime_hook.py` 已设置
+>    `--paths src/arknights_video_recognition`；`runtime_hook.py` 已设置
 >    `AVR_RESOURCE_DIR` 指向打包内 `resource/`。
 > 4. 资源自动同步：主仓库新增独立 `.github/workflows/sync-resources.yml`（每周一
 >    08:00 UTC 定时 + 手动触发，直接更新本仓库顶层 resource/ 并自动提交）。
@@ -96,7 +96,7 @@
 - **依赖**：`numpy`、`opencv-python`、`onnxruntime`、`rapidocr-onnxruntime`、`pillow`
 - **入口**：`arknights-video-recognition`（`cli:main`）
 - **许可证**：代码遵循其声明许可证；`resource/` 资源为 AGPL-3.0（来自 Maa）
-- **主流水线类**（`src/ArknightsVideoRecognition/pipeline.py`）：
+- **主流水线类**（`src/arknights_video_recognition/pipeline.py`）：
   ```python
   class VideoRecognitionPipeline:
       def __init__(self, ocr_source: str = "maamodel",
@@ -109,7 +109,7 @@
   - `run()` 返回 **copilot 作业 dict**（`CopilotJob.to_dict()`）
   - 构造时调用 `check_resource()` 校验资源，缺失抛 `ResourceMissingError`
   - 实例属性 `last_output_path` 保存最近写入路径
-- **资源路径解析**（`src/ArknightsVideoRecognition/config/settings.py`）：
+- **资源路径解析**（`src/arknights_video_recognition/config/settings.py`）：
   ```python
   _PROJECT_ROOT = Path(__file__).resolve().parents[3]
   _ENV_RESOURCE_DIR = os.environ.get("AVR_RESOURCE_DIR")
@@ -117,7 +117,7 @@
   ```
   - **关键**：`AVR_RESOURCE_DIR` 环境变量可在 **import 时**覆盖资源目录
   - 衍生常量：`TILE_DIR`、`ONNX_DIR`、`OCR_MAA_DIR`、`DATA_DIR`、`TEMPLATE_DIR`、`CONFIG_DIR`、`AVATAR_DIR`
-- **输出 schema**（`src/ArknightsVideoRecognition/copilot/builder.py` 的 `CopilotJob.to_dict()`）：
+- **输出 schema**（`src/arknights_video_recognition/copilot/builder.py` 的 `CopilotJob.to_dict()`）：
   ```json
   {
     "minimum_required": "v4.0.0",
@@ -132,7 +132,7 @@
   - `location` = `[col, row]`（x=列、y=行）
 - **可导入 API**：`__init__.py` 仅暴露 `__version__`，需用完整子模块路径：
   ```python
-  from ArknightsVideoRecognition.pipeline import VideoRecognitionPipeline, StageNotRecognizedError
+  from arknights_video_recognition.pipeline import VideoRecognitionPipeline, StageNotRecognizedError
   ```
 - **打包问题**：`pyproject.toml` 无 `package-data`/`data-files`/`MANIFEST.in`，`resource/` 位于包外 → `pip install .`（非 editable）**不会**包含资源；仅 `pip install -e .`（editable）因引用源码树而可用
 
@@ -176,8 +176,8 @@ ArknightsVideoPipeline/                          # 父项目仓库根
 │   │   │   └── ...（其余不变）
 │   │   └── gui/ / service/ / tests/ / ...      # 不变
 │   │
-│   └── ArknightsVideoRecognition/              # 【git submodule】PascalCase 命名避免与父项目包冲突
-│       ├── src/ArknightsVideoRecognition/      # 子模块代码包（默认后端实现）
+│   └── arknights_video_recognition/            # 【git submodule】snake_case 命名（原 PascalCase 避免与父项目包冲突）
+│       ├── src/arknights_video_recognition/      # 子模块代码包（默认后端实现）
 │       ├── resource/                           # 子模块自带资源（来源真相，见 §8.1）
 │       ├── scripts/                            # 资源同步脚本
 │       ├── .github/workflows/sync-resources.yml
@@ -206,16 +206,16 @@ ArknightsVideoPipeline/                          # 父项目仓库根
 ```
 
 > **布局要点**：
-> 1. **不新建 `submodules/` 目录**——recognition 子模块直接作为 `src/ArknightsVideoRecognition/` 与父项目代码包 `src/arknights_video_pipeline/` 平级共存于 `src/` 下。
-> 2. **命名隔离**：父项目包用 `snake_case`（`arknights_video_pipeline`），子模块根用 `PascalCase`（`ArknightsVideoRecognition`），两者在 `src/` 下不冲突。
+> 1. **不新建 `submodules/` 目录**——recognition 子模块直接作为 `src/arknights_video_recognition/` 与父项目代码包 `src/arknights_video_pipeline/` 平级共存于 `src/` 下。
+> 2. **命名隔离**：父项目包与子模块根均用 `snake_case`（`arknights_video_pipeline` / `arknights_video_recognition`，均符合 Python 命名规范），两者在 `src/` 下不冲突。
 > 3. **资源统一原则**：所有运行时资源（父项目自有 + Recognition）一律存放在顶层 `resource/` 下。Recognition 资源位于 `resource/`，运行时 `AVR_RESOURCE_DIR` 指向该目录。子模块内的 `resource/` 仅作"来源真相"（git submodule 完整 checkout 必然存在），不作为运行时读取路径，避免双份资源与路径歧义（详见 §8）。
 
 ### 3.2 职责边界
 
 | 关注点 | 归属 | 说明 |
 | --- | --- | --- |
-| 视频识别算法（编队/关卡/动作） | `src/ArknightsVideoRecognition/`（子模块） | 子模块独立实现，父项目不重复 |
-| ONNX/OCR 模型、地图数据、头像库 | 父项目 `resource/` | **统一存放于顶层 resource/**，由同步脚本从子模块 `src/ArknightsVideoRecognition/resource/` 拉取（见 §8） |
+| 视频识别算法（编队/关卡/动作） | `src/arknights_video_recognition/`（子模块） | 子模块独立实现，父项目不重复 |
+| ONNX/OCR 模型、地图数据、头像库 | 父项目 `resource/` | **统一存放于顶层 resource/**，由同步脚本从子模块 `src/arknights_video_recognition/resource/` 拉取（见 §8） |
 | 开始按钮模板、字体、i18n | 父项目 `resource/`（StartButton/font/locales） | 父项目自有，与识别无关 |
 | 视频合成（movielite）、文本渲染（pictex） | Pipeline | 父项目独有 |
 | GUI（PyQt6）、CLI、流水线编排 | Pipeline | 父项目独有 |
@@ -285,7 +285,7 @@ def create_backend(backend_name: str, config: dict) -> CopilotBackend:
 ```python
 """Recognition 后端：用 ArknightsVideoRecognition 子模块完成视频转 copilot JSON。
 
-依赖子模块 src/ArknightsVideoRecognition，需可导入 ArknightsVideoRecognition 包。
+依赖子模块 src/arknights_video_recognition，需可导入 arknights_video_recognition 包。
 """
 from __future__ import annotations
 import json
@@ -299,23 +299,23 @@ from pathlib import Path
 # 优先级：配置 > 环境变量 AVR_RESOURCE_DIR > 默认 resource/
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource" / "recognition"
-_SUBMODULE_ROOT = _PROJECT_ROOT / "src" / "ArknightsVideoRecognition"
+_SUBMODULE_ROOT = _PROJECT_ROOT / "src" / "arknights_video_recognition"
 
 # 仅当未被外部（配置/环境变量）显式设置时，回退到顶层 resource/
 if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
 # 确保子模块源码可导入（editable 安装则无需）
-# 子模块代码包位于 src/ArknightsVideoRecognition
+# 子模块代码包位于 src/arknights_video_recognition
 _SRC_DIR = _SUBMODULE_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from ArknightsVideoRecognition.pipeline import (
+from arknights_video_recognition.pipeline import (
     VideoRecognitionPipeline,
     StageNotRecognizedError,
 )
-from ArknightsVideoRecognition.config.settings import ResourceMissingError
+from arknights_video_recognition.config.settings import ResourceMissingError
 
 
 class RecognitionBackend:
@@ -600,23 +600,23 @@ dependencies = [
 
 ### 7.2 Recognition 子模块的安装方式
 
-Recognition 作为子模块直接位于 `src/ArknightsVideoRecognition/`，有两种集成方式（推荐方式 A）：
+Recognition 作为子模块直接位于 `src/arknights_video_recognition/`，有两种集成方式（推荐方式 A）：
 
 **方式 A（推荐）：editable 安装子模块**
 ```bash
 # 父项目根目录
-git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/ArknightsVideoRecognition
+git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/arknights_video_recognition
 git submodule update --init --recursive
-pip install -e src/ArknightsVideoRecognition
+pip install -e src/arknights_video_recognition
 ```
-- editable 模式直接引用源码树，子模块代码包 `ArknightsVideoRecognition` 可正常 import
+- editable 模式直接引用源码树，子模块代码包 `arknights_video_recognition` 可正常 import
 - 父项目 `pyproject.toml` 无需声明对子模块的依赖（同 `src/` 下平级共存）
 
 **方式 B：sys.path 注入（免安装）**
-- 由 `recognition_backend.py` 在 import 前将 `src`（vendor 包 `src/ArknightsVideoRecognition` 的父目录）加入 `sys.path`（已在 §4.2 代码中实现）
+- 由 `recognition_backend.py` 在 import 前将 `src`（vendor 包 `src/arknights_video_recognition` 的父目录）加入 `sys.path`（已在 §4.2 代码中实现）
 - 适合开发期快速切换；生产部署建议方式 A
 
-> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/ArknightsVideoRecognition/config/settings.py`，其 `parents[3]` 解析到仓库根，默认 `RESOURCE_DIR` 指向顶层 `resource/`（识别资源已并入）。适配层仍显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
+> **注意 `settings.py` 路径解析**：子模块 `settings.py` 位于 `src/arknights_video_recognition/config/settings.py`，其 `parents[3]` 解析到仓库根，默认 `RESOURCE_DIR` 指向顶层 `resource/`（识别资源已并入）。适配层仍显式设置 `AVR_RESOURCE_DIR`（见 §4.2、§8.4），覆盖该默认值。
 
 ### 7.3 构建脚本（`script/build_exe/`）
 
@@ -655,8 +655,8 @@ resource/                                    # 父项目统一资源根
 **方式 A（推荐）：符号链接（开发期零拷贝）**
 - 子模块初始化后，运行 `script/sync_recognition_resources.py` 为每个条目创建符号链接：
   ```
-  resource/<条目>  ->  src/ArknightsVideoRecognition/resource/<条目>
-  （如 resource/template -> src/ArknightsVideoRecognition/resource/template）
+  resource/<条目>  ->  src/arknights_video_recognition/resource/<条目>
+  （如 resource/template -> src/arknights_video_recognition/resource/template）
   ```
 - 优点：零存储重复、子模块更新后自动生效（链接指向最新 checkout）
 - 注意：Windows 创建符号链接需开发者模式或管理员权限；CI 环境通常允许
@@ -666,7 +666,7 @@ resource/                                    # 父项目统一资源根
   import os, sys
   from pathlib import Path
   ROOT = Path(__file__).resolve().parents[1]
-  SRC = ROOT / "src" / "ArknightsVideoRecognition" / "resource"
+  SRC = ROOT / "src" / "arknights_video_recognition" / "resource"
   DST = ROOT / "resource"
   for entry in SRC.iterdir():
       link = DST / entry.name
@@ -710,7 +710,7 @@ resource/                                    # 父项目统一资源根
 4. Recognition 上游仓库（原子仓库）自身的 `sync-resources.yml` 已整体注释停用
    （2026-08-08，上游提交 7f30007），资源同步统一由本仓库 workflow 负责，避免
    两侧重复同步提交；本仓库 vendor 目录
-   `src/ArknightsVideoRecognition/.github/workflows/sync-resources.yml`
+   `src/arknights_video_recognition/.github/workflows/sync-resources.yml`
    保留其全注释副本（仅作对照参考——GitHub Actions 只扫描仓库根目录，vendor 内的
    workflow 文件不会被执行）
 
@@ -720,7 +720,7 @@ resource/                                    # 父项目统一资源根
 1. **配置覆盖**：`recognition.resource_dir` 非空 → 用该路径
 2. **环境变量**：`AVR_RESOURCE_DIR` 已设置 → 用该路径
 3. **默认**：`<父项目根>/resource/`
-4. **必须在 import `ArknightsVideoRecognition.*` 之前完成设置**（因 `settings.py` 在 import 时读取环境变量）
+4. **必须在 import `arknights_video_recognition.*` 之前完成设置**（因 `settings.py` 在 import 时读取环境变量）
 
 ### 8.5 .gitignore 处理
 
@@ -760,7 +760,7 @@ resource/
    - GPL-3.0 与 AGPL-3.0 兼容（组合作品可按 AGPL-3.0 分发）
    - GPL-2.0 → GPL-3.0 升级需所有贡献者同意（当前仅 1 位贡献者 Tisn4627，可行）
 2. **资源归属声明**：在父项目 `LICENSE`/`NOTICE` 中明确：
-   - `resource/` 内的资源遵循 AGPL-3.0（源自子模块 `src/ArknightsVideoRecognition/resource/`）
+   - `resource/` 内的资源遵循 AGPL-3.0（源自子模块 `src/arknights_video_recognition/resource/`）
    - 资源作为独立数据目录分发，不与父项目代码"链接"
 3. **补充 Recognition 代码许可证**：在子模块 `pyproject.toml` 显式声明代码许可证
 
@@ -773,10 +773,10 @@ resource/
 > 以下为建议的实施顺序，**本方案不执行任何步骤**，仅作规划。
 
 ### 阶段 1：子模块接入与资源统一（不影响现有功能）
-1. 父项目执行 `git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/ArknightsVideoRecognition`（子模块直接入 `src/`，不新建 `submodules/`）
-2. 更新 `.gitmodules`（path 指向 `src/ArknightsVideoRecognition`）
+1. 父项目执行 `git submodule add https://github.com/Tisn4627/ArknightsVideoRecognition src/arknights_video_recognition`（子模块直接入 `src/`，不新建 `submodules/`）
+2. 更新 `.gitmodules`（path 指向 `src/arknights_video_recognition`）
 3. 新增 `script/sync_recognition_resources.py`（资源同步脚本，支持 `--mode=link|copy`）
-4. 运行同步脚本：`resource/` ← `src/ArknightsVideoRecognition/resource/`（方式 A 符号链接）
+4. 运行同步脚本：`resource/` ← `src/arknights_video_recognition/resource/`（方式 A 符号链接）
 5. 更新 `.gitignore`（若用方式 B 复制，追加识别资源子目录 avatar/config/data/ocr/onnx/template/tile）
 6. 文档补充 `git submodule update --init --recursive` + 运行同步脚本的克隆说明
 7. CI 中增加子模块初始化 + 资源同步步骤
@@ -865,7 +865,7 @@ resource/
 | `docs/configuration.md` | 新增 `copilot_backend` 及 recognition 配置项（含 `resource_dir`） |
 | `docs/cli_reference.md` | 新增 `--backend`/`--ocr`/`--stage`/`--resolution` 参数 |
 | `docs/gui_guide.md` | GUI 后端选择控件说明（若 GUI 增加切换） |
-| `src/ArknightsVideoRecognition/doc/` | 保持子模块文档独立 |
+| `src/arknights_video_recognition/doc/` | 保持子模块文档独立 |
 
 ---
 
@@ -883,8 +883,8 @@ resource/
 
 | 父项目文件 | 操作 | 说明 |
 | --- | --- | --- |
-| `.gitmodules` | 新增 | 声明 recognition 子模块（path 指向 `src/ArknightsVideoRecognition`） |
-| `src/ArknightsVideoRecognition/` | 新增 | git submodule（与父项目代码包平级共存于 `src/`，含代码 + 子模块内 resource 作来源） |
+| `.gitmodules` | 新增 | 声明 recognition 子模块（path 指向 `src/arknights_video_recognition`） |
+| `src/arknights_video_recognition/` | 新增 | git submodule（与父项目代码包平级共存于 `src/`，含代码 + 子模块内 resource 作来源） |
 | `script/sync_recognition_resources.py` | 新增 | 资源同步脚本（`--mode=link\|copy`），子模块 resource → 顶层 `resource/` |
 | `resource/` 下的识别资源子目录（avatar/config/data/ocr/onnx/template/tile） | 新增 | Recognition 资源统一入口（符号链接或复制，见 §8） |
 | `.gitignore` | 修改 | 方式 B 复制时追加识别资源子目录 |
@@ -906,13 +906,13 @@ resource/
 
 ```python
 # 主流水线
-from ArknightsVideoRecognition.pipeline import VideoRecognitionPipeline, StageNotRecognizedError
+from arknights_video_recognition.pipeline import VideoRecognitionPipeline, StageNotRecognizedError
 
 # Copilot 数据结构
-from ArknightsVideoRecognition.copilot import CopilotJob, Action, ActionType, Direction, Oper
+from arknights_video_recognition.copilot import CopilotJob, Action, ActionType, Direction, Oper
 
 # 配置与资源校验
-from ArknightsVideoRecognition.config.settings import (
+from arknights_video_recognition.config.settings import (
     RESOURCE_DIR, ResourceMissingError, check_resource,
     DEFAULT_OCR_SOURCE, DEFAULT_RESOLUTION, MINIMUM_REQUIRED,
 )

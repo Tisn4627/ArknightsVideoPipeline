@@ -633,7 +633,7 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                 threshold = config.get("match_threshold", DEFAULT_CONFIG["match_threshold"])
                 msg = (
                     f"  [诊断] 帧{frame_idx} 最佳置信度:{raw_confidence:.4f} "
-                    f"(阈值:{threshold}) {'✓匹配' if detected else '✗未达'}"
+                    f"(阈值:{threshold}) {'[匹配]' if detected else '[未达]'}"
                 )
                 if pbar:
                     pbar.write(msg)

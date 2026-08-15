@@ -19,7 +19,7 @@ ArknightsVideoRecognition 上游仓库的 `resource/`，包含：
 以上资源遵循各自上游仓库的许可证，其中 Maa 相关资源为 **AGPL-3.0**。
 该目录作为独立数据目录分发，不与本项目代码链接。
 
-## recognition 代码（src/ArknightsVideoRecognition/）
+## recognition 代码（src/arknights_video_recognition/）
 
 代码部分由 ArknightsVideoRecognition 项目维护，遵循其自身声明的许可证
 （详见该项目的 `pyproject.toml` 与 README）。

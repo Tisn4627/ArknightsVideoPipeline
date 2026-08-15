@@ -207,8 +207,15 @@ ArknightsVideoPipeline-*/
 # Configuration files
 # ================================
 # 仅忽略仓库根目录的 config/（用户可编辑配置），
-# 不可用裸 config/ 模式——会误伤 src/ArknightsVideoRecognition/config/ 代码包
+# 不可用裸 config/ 模式——会误伤 src/arknights_video_recognition/config/ 代码包
 /config/
+
+# ================================
+# Runtime artifacts
+# ================================
+# 识别/合成过程产生的运行时缓存（MaaAI_*.json 等），
+# 可通过 --copilot-json 复用的中间产物，不入库
+/cache/
 
 # ================================
 # FFmpeg release files

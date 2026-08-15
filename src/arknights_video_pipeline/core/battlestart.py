@@ -175,7 +175,7 @@ def scan_battle_start(
                 )
                 msg = (
                     f"  [诊断] 帧{frame_idx} 亮像素比:{ratio:.3f} "
-                    f"(阈值:{threshold}) {'✓命中' if hit else '✗未达'}"
+                    f"(阈值:{threshold}) {'[命中]' if hit else '[未达]'}"
                 )
                 if pbar:
                     pbar.write(msg)

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 全局流水线默认配置
 PIPELINE_DEFAULTS: dict[str, Any] = {
     # === 后端选择（新增）===
-    # "recognition"（默认，纯 Python 实现，ArknightsVideoRecognition 随仓库分发）
+    # "recognition"（默认，纯 Python 实现，arknights_video_recognition 随仓库分发）
     # | "maa"（可选回退，依赖 MAA 项目安装）
     "copilot_backend": "recognition",
 
@@ -38,8 +38,8 @@ PIPELINE_DEFAULTS: dict[str, Any] = {
     "maa_path": "",
 
     # === 通用（recognition/maa 两后端共用的统一超时与重试）===
-    "copilot_timeout_seconds": 600,
-    "copilot_max_retries": 2,
+    "copilot_timeout_seconds": 2400,
+    "copilot_max_retries": 1,
 
     "output_dir": "output",
     "log_level": "INFO",
@@ -227,11 +227,11 @@ class ConfigManager:
 
     def get_copilot_timeout(self) -> int:
         """获取 copilot 识别统一超时（秒），recognition/maa 两后端共用"""
-        return self.pipeline.get("copilot_timeout_seconds", 600)
+        return self.pipeline.get("copilot_timeout_seconds", 2400)
 
     def get_copilot_max_retries(self) -> int:
         """获取 copilot 识别统一重试次数，recognition/maa 两后端共用"""
-        return self.pipeline.get("copilot_max_retries", 2)
+        return self.pipeline.get("copilot_max_retries", 1)
 
     def get_recognition_config(self) -> dict[str, Any]:
         """获取 Recognition 后端子配置块（缺失键回退默认值）"""

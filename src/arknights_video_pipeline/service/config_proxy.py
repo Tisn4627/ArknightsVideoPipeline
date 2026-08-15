@@ -256,9 +256,9 @@ class ConfigProxy(QObject):
 
     def copilot_timeout(self) -> int:
         try:
-            return int(self.get("copilot_timeout_seconds", 600))
+            return int(self.get("copilot_timeout_seconds", 2400))
         except (TypeError, ValueError):
-            return 600
+            return 2400
 
     def set_copilot_timeout(self, seconds: int) -> None:
         self.set("copilot_timeout_seconds", int(seconds))

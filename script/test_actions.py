@@ -14,8 +14,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from ArknightsVideoRecognition.config.settings import DEFAULT_RESOLUTION
-from ArknightsVideoRecognition.pipeline import (
+from arknights_video_recognition.config.settings import DEFAULT_RESOLUTION
+from arknights_video_recognition.pipeline import (
     StageNotRecognizedError,
     VideoRecognitionPipeline,
 )

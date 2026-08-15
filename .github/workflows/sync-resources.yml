@@ -17,7 +17,7 @@
 # （https://github.com/Tisn4627/ArknightsVideoRecognition）获取更新后
 # 本地复制入库并手动提交。
 #
-# 识别代码位于 src/ArknightsVideoRecognition/（vendor，原为 git 子模块），
+# 识别代码位于 src/arknights_video_recognition/（vendor，原为 git 子模块），
 # 同步脚本即仓库根 script/update_resources.py 与 script/update_character_table.py；
 # 脚本写入顶层 resource/（AVR_RESOURCE_DIR 指向仓库根 resource/）。
 #

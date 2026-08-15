@@ -43,7 +43,7 @@ def _setup_environment() -> None:
 def _ensure_recognition_resource_dir() -> None:
     """设置 AVR_RESOURCE_DIR 指向打包内的 resource
 
-    recognition 后端在导入 ArknightsVideoRecognition 前读取
+    recognition 后端在导入 arknights_video_recognition 前读取
     AVR_RESOURCE_DIR 环境变量（见 core/recognition_backend.py）。
     打包环境下资源随 bundle 分发（--add-data <resource>;resource），
     此处将环境变量指向解包后的资源目录。

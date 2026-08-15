@@ -1,10 +1,10 @@
 """
 core.recognition_backend - Recognition 后端（默认）
 
-用随仓库分发的 ArknightsVideoRecognition 代码完成视频转 copilot JSON。
-代码位于 src/ArknightsVideoRecognition/（vendor，原为 git 子模块）。
+用随仓库分发的 arknights_video_recognition 代码完成视频转 copilot JSON。
+代码位于 src/arknights_video_recognition/（vendor，原为 git 子模块）。
 
-资源目录优先级（必须在 import ArknightsVideoRecognition.* 之前确定）：
+资源目录优先级（必须在 import arknights_video_recognition.* 之前确定）：
   1. 配置 recognition.resource_dir（recognize() 内应用）
   2. 环境变量 AVR_RESOURCE_DIR
   3. 默认 <项目根>/resource/（识别资源并入顶层 resource/）
@@ -15,10 +15,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
+import threading
 from pathlib import Path
 
-# === 关键：在 import ArknightsVideoRecognition 之前设置资源目录 ===
+# === 关键：在 import arknights_video_recognition 之前设置资源目录 ===
 # 识别资源（avatar/config/data/ocr/onnx/template/tile）并入父项目顶层 resource/。
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -29,7 +29,7 @@ if "AVR_RESOURCE_DIR" not in os.environ:
     os.environ["AVR_RESOURCE_DIR"] = str(_DEFAULT_RESOURCE_DIR)
 
 # 确保 vendor 的识别代码可导入（editable 安装则无需）
-# 代码包位于 src/ArknightsVideoRecognition（与父项目包平级共存于 src/）
+# 代码包位于 src/arknights_video_recognition（与父项目包平级共存于 src/）
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
@@ -54,8 +54,8 @@ def _import_recognition_pipeline(resource_dir: str | None = None):
     if resolved:
         os.environ["AVR_RESOURCE_DIR"] = resolved
 
-    from ArknightsVideoRecognition.config.settings import ResourceMissingError
-    from ArknightsVideoRecognition.pipeline import (
+    from arknights_video_recognition.config.settings import ResourceMissingError
+    from arknights_video_recognition.pipeline import (
         StageNotRecognizedError,
         VideoRecognitionPipeline,
     )
@@ -123,25 +123,46 @@ class RecognitionBackend:
             resolution=resolution,
         )
 
-        # run() 返回 dict，需落盘为 JSON 文件以匹配流水线"文件路径"接口
-        start = time.time()
-        try:
-            job_dict = pipe.run(
-                video_path=video_path,
-                stage_override=stage_override,
-                output_path=None,  # 由本适配层统一控制输出路径
-                with_video_time=with_video_time,
-            )
-        except StageNotRecognizedError:
-            raise
-        except ResourceMissingError as exc:
-            raise RuntimeError(
-                f"Recognition 资源缺失: {exc}\n"
-                "请检查顶层 resource/ 目录（识别资源已随仓库分发，不应缺失）"
-            ) from exc
+        # run() 返回 dict，需落盘为 JSON 文件以匹配流水线"文件路径"接口。
+        # 识别在 daemon 线程中执行，超时为"中断式"：到点立即失败返回，
+        # 而非等识别跑完再事后判定（旧实现会白等约 20 分钟再丢弃慢而
+        # 成功的结果，并触发无意义重试）。超时后线程仍在后台继续跑完，
+        # 其产物（cache/MaaAI_*.json）可通过 --copilot-json 复用。
+        job_dict: dict = {}
+        error: BaseException | None = None
 
-        if timeout is not None and (time.time() - start) > timeout:
-            raise TimeoutError(f"Recognition 识别超时（>{timeout}s）")
+        def _run() -> None:
+            nonlocal job_dict, error
+            try:
+                job_dict = pipe.run(
+                    video_path=video_path,
+                    stage_override=stage_override,
+                    output_path=None,  # 由本适配层统一控制输出路径
+                    with_video_time=with_video_time,
+                )
+            # 线程内异常全部捕获后重抛：超时/重试语义由外层流水线处理
+            except Exception as exc:  # noqa: BLE001 - 线程异常传播必须全量捕获
+                error = exc
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        worker.join(timeout)
+
+        if worker.is_alive():
+            raise TimeoutError(
+                f"Recognition 识别超时（>{timeout}s），已中止等待；"
+                "后台识别仍在继续，完成后可复用 cache/ 下产物"
+            )
+
+        if error is not None:
+            if isinstance(error, StageNotRecognizedError):
+                raise error
+            if isinstance(error, ResourceMissingError):
+                raise RuntimeError(
+                    f"Recognition 资源缺失: {error}\n"
+                    "请检查顶层 resource/ 目录（识别资源已随仓库分发，不应缺失）"
+                ) from error
+            raise error
 
         # 归一化：补齐 opers 默认值，确保与 MAA 后端输出一致（见 docs/merge_plan.md §5）
         job_dict = _normalize_copilot(job_dict)

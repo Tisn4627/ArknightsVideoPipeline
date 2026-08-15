@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ArknightsVideoRecognition.config.settings import DATA_DIR  # noqa: E402
+from arknights_video_recognition.config.settings import DATA_DIR  # noqa: E402
 
 URL = (
     "https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/"

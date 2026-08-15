@@ -59,7 +59,7 @@ pip install -r requirements.txt
 ### 1.5 识别资源与代码（recognition 后端必需）
 
 步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 216M 识别资源
-（模型/地图/头像）与识别代码 `src/ArknightsVideoRecognition/`（原为 git 子模块，
+（模型/地图/头像）与识别代码 `src/arknights_video_recognition/`（原为 git 子模块，
 现随仓库直接分发）。两者均已入库，克隆后无需额外初始化即可使用：
 识别资源直接位于顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile 等，
 与 font/locales 同层）。

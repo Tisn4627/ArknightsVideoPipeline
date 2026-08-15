@@ -15,7 +15,7 @@ from pathlib import Path
 # 让脚本可在不安装包的情况下直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ArknightsVideoRecognition.config.settings import TILE_DIR  # noqa: E402
+from arknights_video_recognition.config.settings import TILE_DIR  # noqa: E402
 
 URL = "https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/levels.json"
 
