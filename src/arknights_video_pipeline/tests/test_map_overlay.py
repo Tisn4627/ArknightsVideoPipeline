@@ -22,6 +22,7 @@ import pytest
 
 from arknights_video_pipeline.core.map_overlay import (
     DEFAULT_MAP_OVERLAY_CONFIG,
+    _measure_line_top_offsets,
     build_action_timeline,
     build_map_number_clips,
     build_map_overlay_clips,
@@ -205,7 +206,7 @@ class TestMapNumberClips:
 
     def test_number_centered_on_cell_center(self, level):
         """数字中心 = 格子中心（识别分辨率坐标）"""
-        from ArknightsVideoRecognition.tile import get_tile_screen_pos
+        from arknights_video_recognition.tile import get_tile_screen_pos
 
         center = get_tile_screen_pos(level, 3, 6, (1280, 720))
         timeline = build_action_timeline(
@@ -224,7 +225,7 @@ class TestMapNumberClips:
 
     def test_output_transform_with_scale_and_offset(self, level):
         """坐标换算：识别分辨率 -> 视频原生(1920x1080) -> 输出画布(scale=0.85, x=272, y=47)"""
-        from ArknightsVideoRecognition.tile import get_tile_screen_pos
+        from arknights_video_recognition.tile import get_tile_screen_pos
 
         center = get_tile_screen_pos(level, 3, 6, (1280, 720))
         expect_x = center[0] * (1920 / 1280) * 0.85 + 272
@@ -296,7 +297,7 @@ class TestCellSize:
         size = compute_approximate_cell_size(level, (1280, 720))
         assert 50.0 < size < 60.0
         # 验证与逐行逐列最小值的等价性
-        from ArknightsVideoRecognition.tile import get_all_tile_positions
+        from arknights_video_recognition.tile import get_all_tile_positions
 
         positions = get_all_tile_positions(level, (1280, 720))
         min_w = min(
@@ -379,6 +380,85 @@ class TestPanelHighlightClips:
         # 新语义下 SpeedUp 行（与 switch_time 同刻）无区间，clips 从第 2 行开始
         assert [c.text for c in clips] == self._lines()[1:]
         for i, clip in enumerate(clips, 1):
+            px, py = clip.position(0)
+            assert px == 50
+            assert abs((py + single_top) - (240 + tops[i])) < 1.0
+
+    def test_small_glyph_line_stays_aligned(self):
+        """行首为 "←" 等小字形时，单行渲染的字形顶部低于常规字形；
+        高亮须按"块内行顶 - 单行字形顶"定位，与主文本字形严格重合"""
+        import numpy as np
+        from pictex import Canvas
+
+        lines = ["1.部署 遥 (6,3)", "←", "2.技能 遥"]
+        line_groups = [(0, 2), (2, 3)]
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 1.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 3.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            lines, timeline, switch_time=0.5, video_duration=10,
+            text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, cfg={}, line_groups=line_groups,
+        )
+        assert [c.text for c in clips] == lines
+        block = Canvas().font_family(FONT_PATH).font_size(25).padding(10)
+        alpha = block.render("\n".join(lines)).to_numpy("RGBA")[:, :, 3]
+        tops = []
+        in_text = False
+        for y in range(alpha.shape[0]):
+            has = bool(alpha[y].max() > 0)
+            if has and not in_text:
+                tops.append(y)
+                in_text = True
+            elif not has and in_text:
+                in_text = False
+        for i, clip in enumerate(clips):
+            single_top = int(np.where(
+                block.render(lines[i]).to_numpy("RGBA")[:, :, 3].max(axis=1) > 0
+            )[0][0])
+            px, py = clip.position(0)
+            assert px == 50
+            # 高亮字形顶部 = py + single_top，须与主文本块内该行字形顶部重合
+            assert abs((py + single_top) - (240 + tops[i])) < 1.0
+
+    def test_internal_glyph_gap_merged(self):
+        """行内字形存在竖向空隙（如 "Unknown_Ends" 的下划线部分与正文
+        相隔 1 行全透明行）时，按小间隙合并测量（相邻行间距远大于此），
+        避免误判为额外行而回退等距行高"""
+        import numpy as np
+        from pictex import Canvas
+
+        lines = ["1.部署 能天使", "Unknown_Ends", "3.技能 能天使"]
+        block = Canvas().font_family(FONT_PATH).font_size(25).padding(10)
+        # 该行确实存在 ≥1 行全透明内部间隙
+        rows = np.nonzero(block.render(lines[1]).to_numpy("RGBA")[:, :, 3].max(axis=1) > 0)[0]
+        assert int((rows[1:] - rows[:-1]).max()) >= 2
+        tops = _measure_line_top_offsets(lines, block)
+        assert tops is not None
+        assert len(tops) == len(lines)
+        # 合并后的行顶为该行字形顶部，且高亮仍与主文本逐行重合
+        timeline = build_action_timeline(
+            [
+                {"type": "Deploy", "location": [6, 3], "video_time": 1.0},
+                {"type": "Skill", "location": [6, 3], "video_time": 3.0},
+                {"type": "Retreat", "location": [6, 3], "video_time": 5.0},
+            ],
+            switch_time=0.5, video_duration=10,
+        )
+        clips = build_panel_highlight_clips(
+            lines, timeline, switch_time=0.5, video_duration=10,
+            text_config={"font_size": 25, "text_x": 50, "text_y": 240},
+            font_path=FONT_PATH, cfg={},
+        )
+        assert [c.text for c in clips] == lines
+        for i, clip in enumerate(clips):
+            single_top = int(np.where(
+                block.render(lines[i]).to_numpy("RGBA")[:, :, 3].max(axis=1) > 0
+            )[0][0])
             px, py = clip.position(0)
             assert px == 50
             assert abs((py + single_top) - (240 + tops[i])) < 1.0

@@ -228,7 +228,7 @@ def page_actions_lines(
     max_text_bottom: float | None,
     text_x: float,
     text_y: float,
-    video_times: Sequence[float],
+    video_times: Sequence[float | None],
     switch_time: float,
     video_duration: float,
     padding: int = PANEL_PADDING,
@@ -237,8 +237,13 @@ def page_actions_lines(
 
     仅当满足以下全部条件时返回分页列表，否则返回 None（保持单页静态显示）：
       - 配置了高度限定且整表确实发生了末尾截断（放得下无需分页）；
-      - 每个操作均有有效的 video_time（切换时刻 = 页内最后一个操作的
-        video_time，因此必须存在该字段才能分页）。
+      - 存在至少一个有效的 video_time 可供推进时间（切换时刻 = 页内
+        最后一个操作的 video_time）。
+
+    缺失 video_time 的操作回退到上一个有效时刻（首条回退到
+    switch_time），与 map_overlay.build_action_timeline 语义一致——
+    识别后端合成的前置/收尾动作（SpeedUp / SkillDaemon）恒无该字段，
+    不应因此放弃分页；全部缺失（时间无法前进）时自然回退单页静态显示。
 
     分页规则：
       - 第 1 页自 switch_time 显示；后续每页自前一页末尾操作的
@@ -252,7 +257,8 @@ def page_actions_lines(
 
     Args:
         lines: format_actions_lines 输出（每个操作一行，与 video_times 对齐）
-        video_times: 每个操作的 video_time（与 lines 一一对应）
+        video_times: 每个操作的 video_time（与 lines 一一对应；
+            允许缺失，缺失项回退到上一个有效时刻/switch_time）
         switch_time: 进入战斗时间
         video_duration: 视频总时长
 
@@ -265,8 +271,18 @@ def page_actions_lines(
         return None
     if not lines or len(video_times) != len(lines):
         return None
-    if not all(isinstance(v, (int, float)) for v in video_times):
-        return None
+
+    # 缺失 video_time 回退到上一个有效时刻（首条回退到 switch_time）；
+    # 全部缺失时时间无法前进，保持单页静态显示
+    filled_times: list[float] = []
+    prev = float(switch_time)
+    for v in video_times:
+        if isinstance(v, (int, float)):
+            t = float(v)
+        else:
+            t = prev
+        filled_times.append(t)
+        prev = t
 
     # 整表未截断时保持单页静态显示（与旧行为一致）
     _, _, dropped = fit_actions_lines(
@@ -293,7 +309,7 @@ def page_actions_lines(
         end = cursor + len(groups)
         boundary = max(
             float(switch_time),
-            min(float(video_duration), float(video_times[end - 1])),
+            min(float(video_duration), float(filled_times[end - 1])),
         )
         if boundary <= t + 1e-9:
             # 页时长非正：页内操作完成时刻不晚于页起点（同刻操作、

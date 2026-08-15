@@ -253,11 +253,38 @@ class TestPaging:
         lines = [f"{i}.技能 能天使" for i in range(1, 11)]
         assert self._paged(lines, [1.0 + i for i in range(10)]) is None
 
-    def test_missing_video_time_returns_none(self):
-        """任一操作缺 video_time 则不分页（切换需要该字段）"""
+    def test_missing_video_time_fills_previous(self):
+        """缺失的 video_time 回退到上一有效时刻，分页仍正常工作
+        （识别后端合成的 SpeedUp/SkillDaemon 等操作恒缺该字段）"""
         vts = [1.0 + i for i in range(40)]
         vts[5] = None
-        assert self._paged(_actions(40), vts) is None
+        pages = self._paged(_actions(40), vts)
+        assert pages is not None
+        assert len(pages) >= 2
+        # 缺失项 #6 回退到 #5 的时刻 5.0，不得产生 0 时长页
+        assert pages[0].start == 0
+        assert pages[0].t_start < pages[0].t_end
+        assert pages[-1].end == 40
+
+    def test_first_action_missing_fills_switch_time(self):
+        """首操作（如前置 SpeedUp）缺 video_time 时回退到 switch_time，
+        不因"全部缺失"判断而放弃分页"""
+        vts = [None] + [1.0 + i for i in range(39)]
+        pages = self._paged(_actions(40), vts)
+        assert pages is not None
+        assert len(pages) >= 2
+        assert pages[0].start == 0
+        assert pages[-1].end == 40
+
+    def test_last_action_missing_fills_previous(self):
+        """末操作（如收尾 SkillDaemon）缺 video_time 时回退到上一时刻，
+        末页时间线完整覆盖"""
+        vts = [1.0 + i for i in range(40)]
+        vts[-1] = None
+        pages = self._paged(_actions(40), vts)
+        assert pages is not None
+        assert len(pages) >= 2
+        assert pages[-1].end == 40
 
     def test_video_time_count_mismatch_returns_none(self):
         assert self._paged(_actions(40), [1.0] * 39) is None

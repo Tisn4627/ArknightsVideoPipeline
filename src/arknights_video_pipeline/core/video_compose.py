@@ -399,10 +399,12 @@ def compose_video(config):
                         text_config.get("text_x", 50), text_config.get("text_y", 240),
                     )
                 )
-                # 分页切换需 video_time 扩展字段（缺失时保持单页静态显示）
+                # 分页切换需 video_time 扩展字段（全部缺失时保持单页静态显示；
+                # 部分缺失（SpeedUp/SkillDaemon 等合成动作恒无该字段）由
+                # page_actions_lines 内部回退补全，不影响分页）
                 actions = (input_data or {}).get("actions", [])
                 video_times = [a.get("video_time") for a in actions]
-                if all(isinstance(v, (int, float)) for v in video_times):
+                if any(isinstance(v, (int, float)) for v in video_times):
                     actions_pages = page_actions_lines(
                         raw_actions_lines,
                         fit_font_path, text_config,

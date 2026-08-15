@@ -92,9 +92,9 @@ def load_level(stage_name: str) -> Optional[dict]:
     if not stage_name:
         return None
     try:
-        from ArknightsVideoRecognition.tile import find_level
+        from arknights_video_recognition.tile import find_level
     except ImportError as exc:
-        logger.warning("无法导入 ArknightsVideoRecognition.tile，逐操作显示的地图数字不可用: %s", exc)
+        logger.warning("无法导入 arknights_video_recognition.tile，逐操作显示的地图数字不可用: %s", exc)
         return None
     try:
         return find_level(stage_name)
@@ -105,7 +105,7 @@ def load_level(stage_name: str) -> Optional[dict]:
 
 def _import_tile_calc():
     """延迟导入 vendored 的 tile.calc（仅依赖 numpy，无重依赖）"""
-    from ArknightsVideoRecognition.tile import calc
+    from arknights_video_recognition.tile import calc
     return calc
 
 
@@ -387,19 +387,34 @@ def _measure_line_top_offsets(lines: Sequence[str], canvas: Canvas) -> Optional[
     逐行错位（残影）。此处直接渲染整块文本并按不透明像素扫描每行起点，
     完全吸收取整误差。
 
+    行内字形存在竖向空隙（如行尾 "←" 与正文相隔 1~2 行）时会被拆成两个
+    带，与行数不一致；相邻行的字形间距远大于此（约 13px），按小间隙
+    （≤6 行）合并后重试。
+
     返回 None 表示测量失败（如存在空行），调用方应回退到等距行高。
     """
     image = canvas.render("\n".join(lines))
     alpha = image.to_numpy("RGBA")[:, :, 3]
-    tops: list[int] = []
+    bands: list[list[int]] = []
     in_text = False
     for y in range(alpha.shape[0]):
         has = bool(alpha[y].max() > 0)
         if has and not in_text:
-            tops.append(y)
+            bands.append([y, y])
             in_text = True
+        elif has and in_text:
+            bands[-1][1] = y
         elif not has and in_text:
             in_text = False
+    tops = [b[0] for b in bands]
+    if len(tops) != len(lines):
+        merged: list[list[int]] = []
+        for band in bands:
+            if merged and band[0] - merged[-1][1] <= 6:
+                merged[-1][1] = band[1]
+            else:
+                merged.append(list(band))
+        tops = [b[0] for b in merged]
     if len(tops) != len(lines):
         logger.warning(
             "行位置测量与行数不一致 (%d vs %d)，回退到等距行高",
@@ -407,6 +422,20 @@ def _measure_line_top_offsets(lines: Sequence[str], canvas: Canvas) -> Optional[
         )
         return None
     return tops
+
+
+def _measure_single_line_glyph_top(line: str, canvas: Canvas) -> int:
+    """测量单行渲染时该行字形的顶部 y（相对 canvas 顶部，含 padding）
+
+    同一行文本在多行文本块与单行渲染中的字形垂直位置可能不同：
+    "←" 等小字形在行盒内垂直居中，顶部低于常规字形，若以
+    ``line_tops[0]`` 为基准定位单行高亮会整行错位（残影）。
+    按"块内行顶 - 单行字形顶"定位可抵消该差异，使高亮字形与
+    主文本字形严格重合。空行（无字形像素）返回 0。
+    """
+    alpha = canvas.render(line).to_numpy("RGBA")[:, :, 3]
+    rows = np.nonzero(alpha.max(axis=1) > 0)[0]
+    return int(rows[0]) if len(rows) else 0
 
 
 def build_panel_highlight_clips(
@@ -423,8 +452,10 @@ def build_panel_highlight_clips(
     """构建左侧面板的"下一操作"高亮 clips（静态全列表 + 下一个将要执行的行高亮）
 
     高亮行与主文本块逐行对齐：使用相同的字体度量与 padding，每行位置
-    按真实行距测量（见 _measure_line_top_offsets），避免等距近似随行数
-    累积偏移导致高亮与白色文本错位（残影）。
+    按真实行距测量（见 _measure_line_top_offsets）并减去该行单行渲染的
+    字形顶部偏移（见 _measure_single_line_glyph_top），避免等距近似随
+    行数累积偏移、以及 "←" 等小字形在单行渲染中位置差异导致高亮与
+    白色文本错位（残影）。
 
     区间语义与地图数字一致：行 i 高亮 [上一个不同 video_time, 该行
     video_time)——上一操作执行完毕后立即预告下一行，不随"当前行"语义
@@ -510,11 +541,18 @@ def build_panel_highlight_clips(
         if end <= 0 or end - start < _MIN_INTERVAL:
             continue
 
+        # 行定位：line_tops 为多行块内各行的内容顶部，但单行渲染时字形
+        # 在行盒内的垂直位置随字形变化（"←" 等小字形顶部偏下），直接以
+        # line_tops[0] 为基准定位会整行错位（残影）。按
+        # "块内行顶 - 单行字形顶"（回退时以等距行盒顶近似）定位，
+        # 使高亮字形与主文本字形严格重合。
+        single_top_0 = _measure_single_line_glyph_top(lines[0], measure_canvas)
         for line_idx in range(group_start, min(group_end, len(lines))):
+            single_top = _measure_single_line_glyph_top(lines[line_idx], measure_canvas)
             if line_tops is not None:
-                line_offset = line_tops[line_idx] - line_tops[0]
+                line_offset = line_tops[line_idx] - single_top
             else:
-                line_offset = line_idx * line_height
+                line_offset = line_idx * line_height - single_top + single_top_0
 
             canvas = Canvas().font_family(font_path).font_size(font_size)
             # 不带阴影与淡入淡出：高亮行必须完全不透明地覆盖下方白色文本，
