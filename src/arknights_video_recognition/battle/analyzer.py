@@ -263,6 +263,50 @@ class BattleAnalyzer:
             return nearest
         return None
 
+    @staticmethod
+    def _buildable_tiles(level) -> Optional[set]:
+        """提取关卡中可部署格子的集合（``buildableType != 0``）。
+
+        levels.json 的每个 tile 携带 ``buildableType``（0=不可部署，
+        1=地面，2=高台）。干员只能位于可部署格；而部分干员技能会把
+        召唤物自动部署到**非可部署格**上（如圣聆初雪二技能在蓝门
+        ``tile_end`` 处部署的"冻结的蓝门"），该召唤物无法手动部署/
+        撤退，却带与干员一致的头像框与血条，会被 YOLO 检出并映射到
+        蓝门格，进而产生假 Deploy/Retreat 并污染格子↔干员映射。
+
+        本方法是**有意偏离 Maa 对齐**的过滤点（Maa C++ 无此逻辑）：
+        战场集合收集阶段直接丢弃落在非可部署格上的检测。copilot 作业
+        的动作只涉及编队干员，此类自动召唤物本就不应产出任何动作；
+        且在非可部署格上的 Deploy 对 MAA 执行而言必然非法。
+
+        Returns
+        -------
+        set or None
+            ``{(row, col), ...}`` 可部署格集合；level 缺失 tiles 或结构
+            异常时返回 ``None``（fail-open：调用方跳过过滤，保持旧行为）。
+            单个 tile 缺 ``buildableType`` 字段时视为可部署（兼容最小化
+            测试关卡与脏数据）。
+        """
+        tiles = level.get("tiles") if isinstance(level, dict) else None
+        if not isinstance(tiles, list) or not tiles:
+            return None
+        buildable: set = set()
+        try:
+            for row, row_tiles in enumerate(tiles):
+                if not isinstance(row_tiles, list):
+                    return None
+                for col, tile in enumerate(row_tiles):
+                    if not isinstance(tile, dict):
+                        return None
+                    bt = tile.get("buildableType")
+                    # 字段缺失按可部署处理：真实关卡数据必有该字段，
+                    # 只有手工构造的最小 fixture 才会缺省，此时保持旧行为
+                    if bt is None or int(bt) != 0:
+                        buildable.add((row, col))
+        except (TypeError, ValueError):
+            return None
+        return buildable
+
     # --- 双指针主循环（对齐 Maa _run） ------------------------------------
 
     @staticmethod
@@ -817,6 +861,10 @@ class BattleAnalyzer:
 
         # === 步骤 1：detect_operators —— 整帧集合众数 ===
         # 对齐 Maa oper_det_samping[cur_locations] += 1; max_element(...)
+        # 有意偏离 Maa：先提取可部署格白名单，收集阶段丢弃落在非可部署格
+        # （蓝门 tile_end、禁区等）上的检测——那里只可能是技能自动部署的
+        # 召唤物（见 _buildable_tiles），不参与集合投票，避免假 newcomer
+        buildable = self._buildable_tiles(level)
         set_votes: dict[frozenset, int] = {}
         set_boxes: dict[frozenset, dict[tuple, list]] = {}  # 集合 -> {tile: box}
         for frame in frames:
@@ -831,6 +879,9 @@ class BattleAnalyzer:
                     d.box, level, screen_size, positions
                 )
                 if tile is None:
+                    continue
+                if buildable is not None and tile not in buildable:
+                    # 非可部署格上不会有玩家干员：丢弃召唤物/误检框
                     continue
                 cur_locations.add(tile)
                 cur_boxes[tile] = d.box

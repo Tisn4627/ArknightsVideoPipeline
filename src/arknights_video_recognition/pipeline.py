@@ -16,7 +16,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -73,6 +73,57 @@ _PLACEHOLDER_OPER_NAMES = frozenset({
     "UnknownDeployment",
     "Unknown_EndsEmpty",
 })
+
+
+def _is_location_buildable(
+    level: Optional[Dict[str, Any]],
+    location: Optional[Sequence[float]],
+) -> bool:
+    """校验动作落点是否位于可部署格（``buildableType != 0``）。
+
+    防御层：检测端（battle/analyzer._buildable_tiles）已按格子白名单
+    过滤战场集合，此处对最终动作的 location 再校验一次，拦截仍携带
+    非可部署落点的动作（如技能自动部署在蓝门 ``tile_end`` 等格上的
+    召唤物被误判为干员）。
+
+    copilot 的 location 为 ``[col, row]``。fail-open 原则：level 缺失、
+    tiles 结构异常、索引越界或字段缺失时一律返回 True（不丢弃），只有
+    拿到明确的 ``buildableType == 0`` 证据才判非法——避免脏关卡数据把
+    合法动作整批清空。
+
+    Parameters
+    ----------
+    level:
+        关卡 dict（含 tiles）。``None`` 或结构异常时放行。
+    location:
+        动作落点 ``[col, row]``。``None`` 或长度不足时放行。
+    """
+    if level is None or location is None:
+        return True
+    if not isinstance(level, dict) or len(location) < 2:
+        return True
+    tiles = level.get("tiles")
+    if not isinstance(tiles, list):
+        return True
+    try:
+        col = int(location[0])
+        row = int(location[1])
+        # 负坐标是非法落点而非"倒数索引"，须显式拦截，否则 [-1,-1] 会经
+        # Python 负索引恰好命中右下角格子并被误判
+        if col < 0 or row < 0:
+            return True
+        tile = tiles[row][col]
+    except (IndexError, TypeError, ValueError):
+        return True
+    if not isinstance(tile, dict):
+        return True
+    bt = tile.get("buildableType")
+    if bt is None:
+        return True
+    try:
+        return int(bt) != 0
+    except (TypeError, ValueError):
+        return True
 
 
 class StageNotRecognizedError(ValueError):
@@ -224,8 +275,8 @@ class VideoRecognitionPipeline:
                 battle_start_time=slicer.battle_start_time,
             )
 
-            # 6) 转换 battle Action → copilot Action
-            copilot_actions = self._convert_actions(battle_actions)
+            # 6) 转换 battle Action → copilot Action（携带 level 做落点校验）
+            copilot_actions = self._convert_actions(battle_actions, level=level)
 
             # 7) 组装 CopilotJob
             # 对齐 Maa：copilot opers 列表包含全部 m_formation（含助战干员）。
@@ -447,7 +498,9 @@ class VideoRecognitionPipeline:
     # --- 内部：battle Action → copilot Action ------------------------------
 
     def _convert_actions(
-        self, battle_actions: List[BattleAction]
+        self,
+        battle_actions: List[BattleAction],
+        level: Optional[Dict[str, Any]] = None,
     ) -> List[CopilotAction]:
         """把 battle/analyzer 的轻量 Action 列表转成 copilot.Action。
 
@@ -458,6 +511,19 @@ class VideoRecognitionPipeline:
         - type：``"Deploy"``/``"Skill"``/``"Retreat"`` → ``ActionType`` 常量。
         - direction：``"Right"``/``"Down"``/... → ``Direction`` 常量；仅 Deploy
           输出 direction（Skill/Retreat 不需要朝向，省略保持 JSON 简洁）。
+        - **落点校验（防御层）**：Deploy/Retreat 的 location 落在
+          ``buildableType == 0`` 的非可部署格时丢弃并告警——此类动作只可能
+          来自技能自动召唤物（如圣聆初雪二技能的"冻结的蓝门"）被误判为
+          干员，MAA 执行必然失败。Skill 不校验（其 location 仅作参考定位，
+          且技能可由干员在任意格释放）。level 异常时跳过校验（fail-open，
+          见 :func:`_is_location_buildable`）。
+
+        Parameters
+        ----------
+        battle_actions:
+            battle/analyzer 产出的 Action 列表。
+        level:
+            关卡 dict，用于落点合法性校验；``None`` 时跳过校验。
         """
         copilot_actions: List[CopilotAction] = []
         for ba in battle_actions:
@@ -470,6 +536,19 @@ class VideoRecognitionPipeline:
             ):
                 print(
                     f"警告：丢弃无法确定干员名的 Deploy 动作（t={ba.ts:.1f}s）",
+                    file=sys.stderr,
+                )
+                continue
+
+            # 防御层：Deploy/Retreat 落点必须在可部署格（location=[col, row]）
+            if (
+                act_type in (ActionType.DEPLOY, ActionType.RETREAT)
+                and not _is_location_buildable(level, ba.location)
+            ):
+                print(
+                    f"警告：丢弃落在非可部署格上的 {act_type} 动作 "
+                    f"(name={ba.name!r}, location={ba.location}, "
+                    f"t={ba.ts:.1f}s)——疑似自动召唤物误判",
                     file=sys.stderr,
                 )
                 continue
