@@ -40,7 +40,9 @@ VALID_MODES = ("gui", "cli", "combined")
 _HIDDEN_IMPORTS: list[str] = [
     # movielite 内部动态导入
     "movielite",
-    "movielite.VideoQuality",
+    # 注: 旧版本曾列出 "movielite.VideoQuality"，movielite 0.2.x 中它是
+    # 包属性（enums.py 经 __init__ 导出）而非子模块，hidden-import 会报
+    # not found；收集 movielite 包本身即已覆盖。
     # pictex 字体加载
     "pictex",
     # PyQt6 插件
@@ -85,6 +87,13 @@ _PROJECT_HIDDEN_IMPORTS: list[str] = [
     "arknights_video_recognition",
     "arknights_video_recognition.pipeline",
     "arknights_video_recognition.config.settings",
+    # recognition 后端的函数级导入子包（modulegraph 对函数级导入检测
+    # 不可靠，见下方 bidi 的同类问题）：
+    # - tile: core/map_overlay.py 函数内 `from arknights_video_recognition.tile import ...`
+    # - vision.templ_det_ocrer: formation/analyzer.py 函数内兜底导入，
+    #   其内部再静态引用 multi_matcher / region_ocrer
+    "arknights_video_recognition.tile",
+    "arknights_video_recognition.vision.templ_det_ocrer",
 ]
 
 # GUI 模式额外的隐藏导入
@@ -120,6 +129,77 @@ _TEST_EXCLUDES: list[str] = [
     "unittest",
 ]
 
+# 防御性排除的重型 PyQt6 子模块（项目未使用）
+# 默认打包仅按隐藏导入收集实际使用的 QtCore/QtGui/QtWidgets
+# （GUI 模式另加 QtSvg/QtSvgWidgets），不再全量收集 PyQt6——
+# 全量收集会拖入全部 110 个 Qt 原生 DLL（约 207MB，实际仅需约 35MB）。
+# 本列表防止未来某个传递依赖意外 import 重型 Qt 模块而拖入对应 DLL。
+# --collect-pyqt6（排障逃生通道）启用时自动跳过本列表。
+_QT_HEAVY_EXCLUDES: list[str] = [
+    # WebEngine 家族（内嵌 Chromium，体积最大头）
+    "PyQt6.QtWebEngineCore",
+    "PyQt6.QtWebEngineWidgets",
+    "PyQt6.QtWebEngineQuick",
+    "PyQt6.QtWebChannel",
+    "PyQt6.QtWebSockets",
+    # Qml/Quick 家族
+    "PyQt6.QtQml",
+    "PyQt6.QtQmlModels",
+    "PyQt6.QtQuick",
+    "PyQt6.QtQuickWidgets",
+    "PyQt6.QtQuickControls2",
+    "PyQt6.QtQuick3D",
+    "PyQt6.QtLabsAnimation",
+    "PyQt6.QtLabsFolderListModel",
+    "PyQt6.QtLabsPlatform",
+    "PyQt6.QtLabsQmlModels",
+    "PyQt6.QtLabsSettings",
+    "PyQt6.QtLabsSharedImage",
+    "PyQt6.QtLabsWavefrontMesh",
+    # 图表/数据可视化
+    "PyQt6.QtCharts",
+    "PyQt6.QtDataVisualization",
+    # 多媒体/音视频（视频处理走 cv2/movielite，不经 Qt Multimedia）
+    "PyQt6.QtMultimedia",
+    "PyQt6.QtMultimediaWidgets",
+    "PyQt6.QtSpatialAudio",
+    "PyQt6.QtTextToSpeech",
+    # PDF
+    "PyQt6.QtPdf",
+    "PyQt6.QtPdfWidgets",
+    # 设计器/帮助/测试/数据库
+    "PyQt6.QtDesigner",
+    "PyQt6.QtHelp",
+    "PyQt6.QtTest",
+    "PyQt6.QtSql",
+    # 传感器/定位/蓝牙等硬件相关
+    "PyQt6.QtBluetooth",
+    "PyQt6.QtNfc",
+    "PyQt6.QtPositioning",
+    "PyQt6.QtSensors",
+    "PyQt6.QtSerialPort",
+    "PyQt6.QtRemoteObjects",
+    "PyQt6.QtStateMachine",
+]
+
+# UPX 压缩排除清单：这些 DLL 被压缩后运行时会崩溃或行为异常
+# （VC 运行时与 Python 核心 DLL 不容忍 UPX 的按需解压加载方式）。
+# 通过 PyInstaller 原生 --upx-exclude 传入（支持通配模式）。
+_UPX_EXCLUDES: list[str] = [
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "vcruntime140_threads.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
+    "msvcp140_codecvt_ids.dll",
+    "concrt140.dll",
+    "ucrtbase.dll",
+    "python3.dll",
+    "python3*.dll",
+]
+
 
 # ── 配置数据类 ────────────────────────────────────────────
 
@@ -144,6 +224,11 @@ class BuildConfig:
         extra_excludes: 额外排除的模块列表
         extra_hidden_imports: 额外的隐藏导入列表
         project_root: 项目根目录（默认自动检测）
+        use_upx: 是否启用 UPX 压缩（默认 False；可再减 35-45% 体积，
+            但会增加杀毒软件误报率与启动时间）
+        upx_path: upx 可执行文件路径（文件或所在目录均可，空则从 PATH 检测）
+        collect_pyqt6: 排障逃生通道——恢复全量收集 PyQt6 子模块的旧行为
+            （体积增加约 170MB，仅在裁剪模式导致 GUI 异常时使用）
     """
 
     mode: str = "gui"
@@ -159,6 +244,9 @@ class BuildConfig:
     extra_excludes: list[str] = field(default_factory=list)
     extra_hidden_imports: list[str] = field(default_factory=list)
     project_root: str = ""
+    use_upx: bool = False
+    upx_path: str = ""
+    collect_pyqt6: bool = False
 
     def __post_init__(self) -> None:
         """校验配置参数"""
@@ -249,6 +337,7 @@ class BuildManager:
         self._temp_dir: str | None = None
         self._build_start_time: float = 0
         self._pyinstaller_cmd: str = ""  # 记录最终命令，用于调试
+        self._upx_dir: str = ""  # 解析后的 UPX 所在目录（启用压缩时有效）
 
     # ── 公共接口 ──────────────────────────────────────────
 
@@ -261,8 +350,11 @@ class BuildManager:
         self._build_start_time = time.time()
 
         try:
-            self._print_banner()
+            # 先做环境检查再打印横幅：横幅中的 UPX 标签依赖
+            # _check_environment 解析出的 _upx_dir，顺序颠倒会
+            # 导致 --upx 时横幅只显示"启用"而缺少路径
             self._check_environment()
+            self._print_banner()
             self._prepare_directories()
             excludes = self._analyze_dependencies()
             launcher_path = self._generate_launcher()
@@ -333,6 +425,51 @@ class BuildManager:
                 raise BuildError(f"图标文件不存在: {self.config.icon}")
             print(f"  [OK] 图标: {self.config.icon}")
 
+        # 检查 UPX（如果启用）
+        self._upx_dir = ""
+        if self.config.use_upx:
+            self._upx_dir = self._locate_upx()
+            print(f"  [OK] UPX: {self._upx_dir}")
+        elif shutil.which("upx"):
+            # PyInstaller 在 PATH 中发现 upx 时会隐式启用压缩，
+            # 未显式开启时提示用户，避免"以为没压缩其实压了"的认知偏差
+            print("  [INFO] 检测到 PATH 中存在 upx，但未启用 --upx。")
+            print("         PyInstaller 可能隐式应用 UPX 压缩；如需明确控制请加 --upx 参数")
+
+    def _locate_upx(self) -> str:
+        """定位 upx 可执行文件
+
+        优先使用 --upx-path 指定路径（文件或所在目录均可），
+        否则从 PATH 环境变量检测。
+
+        Returns:
+            upx.exe 所在目录（用于 PyInstaller --upx-dir）
+
+        Raises:
+            BuildError: 未找到有效的 upx 可执行文件
+        """
+        candidates: list[str] = []
+        if self.config.upx_path:
+            candidates.append(self.config.upx_path)
+        else:
+            which_hit = shutil.which("upx")
+            if which_hit:
+                candidates.append(which_hit)
+
+        for cand in candidates:
+            path = os.path.abspath(cand)
+            if os.path.isdir(path):
+                if os.path.isfile(os.path.join(path, "upx.exe")):
+                    return path
+            elif os.path.isfile(path):
+                return os.path.dirname(path)
+
+        raise BuildError(
+            "未找到 UPX: 请通过 --upx-path 指定 upx.exe（或其所在目录），"
+            "或将 upx.exe 加入 PATH。\n"
+            "下载地址: https://github.com/upx/upx/releases"
+        )
+
     # ── 目录准备 ──────────────────────────────────────────
 
     def _prepare_directories(self) -> None:
@@ -376,6 +513,9 @@ class BuildManager:
         excludes: list[str] = []
         excludes.extend(_ALWAYS_EXCLUDE)
         excludes.extend(_TEST_EXCLUDES)
+        if not self.config.collect_pyqt6:
+            # 防御性排除重型 Qt 模块（全量收集排障模式下不适用）
+            excludes.extend(_QT_HEAVY_EXCLUDES)
         excludes.extend(result.unused_packages)
         if self.config.clean_stdlib:
             excludes.extend(result.stdlib_excludes)
@@ -500,7 +640,7 @@ class BuildManager:
 
         # 解析 PyInstaller 输出中的缺失模块警告
         # 典型格式: WARNING: Hidden import "foo" not found in PYZ
-        # 或:       WARNING: Hidden import "foo.bar" not found
+        # 或:       ERROR: Hidden import 'foo' not found（单双引号均兼容）
         missing_modules: list[str] = []
         for line in self._pyinstaller_output:
             stripped = line.strip()
@@ -508,9 +648,9 @@ class BuildManager:
                 continue
             if "hidden import" not in stripped.lower():
                 continue
-            # 提取模块名（引号内的内容）
+            # 提取模块名（引号内的内容，单/双引号均支持）
             import re
-            match = re.search(r'[Hh]idden import "([^"]+)"', stripped)
+            match = re.search(r"""[Hh]idden import ['"]([^'"]+)['"]""", stripped)
             if match:
                 mod = match.group(1)
                 if mod in declared_hidden:
@@ -525,6 +665,110 @@ class BuildManager:
             print("  [WARN] 请安装缺失的依赖后重新打包")
         else:
             print("  [OK] 库完整性自检通过：所有隐藏导入均已打包")
+
+    # ── 产物审计 ──────────────────────────────────────────
+
+    # 审计中判定为"不应出现"的重型 DLL 名称片段（对文件名小写匹配）。
+    # 仅扫描 _internal/PyQt6 目录，避免误报 cv2 自带的
+    # opencv_videoio_ffmpeg.dll（视频处理必需，位于 _internal/cv2 下）。
+    # 注意: 不含 qt6pdf —— Qt6Pdf.dll 会经 QtGui 的 PDF 图像格式插件
+    # （imageformats/qpdf.dll，QtGui 钩子默认收集）被连带复制，
+    # 约 4.4MB，属预期行为；项目不渲染 PDF，无功能影响。
+    _AUDIT_HEAVY_PATTERNS: tuple[str, ...] = (
+        "qt6webengine",
+        "qt6quick",
+        "qt6qml",
+        "qt6designer",
+        "qt6charts",
+        "avcodec",
+        "avformat",
+    )
+
+    def _audit_output(self) -> None:
+        """产物审计：校验关键依赖在/不在，输出体积分解
+
+        - 应存在（GUI/combined 且非全量收集模式）：qwindows 平台插件与
+          Qt6Core/Gui/Widgets —— 缺失说明 PyQt6 裁剪过度，直接报错
+        - 应缺失：WebEngine/Quick/Qml 等重型 DLL —— 发现说明排除失效，警告
+        - 体积分解：_internal 各组件降序输出，便于确认优化效果
+
+        Raises:
+            BuildError: 关键文件缺失（裁剪过度）
+        """
+        output_path = self._get_output_path()
+        if self.config.onefile:
+            print("  [INFO] onefile 单文件产物，跳过目录审计")
+            return
+
+        internal = os.path.join(output_path, "_internal")
+        if not os.path.isdir(internal):
+            print("  [WARN] 未找到 _internal 目录，跳过审计")
+            return
+
+        qt_bin = os.path.join(internal, "PyQt6", "Qt6", "bin")
+        errors: list[str] = []
+        warnings: list[str] = []
+
+        # ── 应存在的关键文件 ──────────────────────────────
+        if self.config.mode in ("gui", "combined") and not self.config.collect_pyqt6:
+            required = [
+                (
+                    "平台插件 qwindows.dll",
+                    os.path.join(
+                        internal,
+                        "PyQt6",
+                        "Qt6",
+                        "plugins",
+                        "platforms",
+                        "qwindows.dll",
+                    ),
+                ),
+                ("Qt6Core.dll", os.path.join(qt_bin, "Qt6Core.dll")),
+                ("Qt6Gui.dll", os.path.join(qt_bin, "Qt6Gui.dll")),
+                ("Qt6Widgets.dll", os.path.join(qt_bin, "Qt6Widgets.dll")),
+            ]
+            for label, path in required:
+                if os.path.isfile(path):
+                    print(f"  [OK] 关键文件存在: {label}")
+                else:
+                    errors.append(f"{label} 缺失: {path}")
+
+        # ── 应缺失的重型 DLL ──────────────────────────────
+        heavy_found: list[str] = []
+        pyqt_dir = os.path.join(internal, "PyQt6")
+        if os.path.isdir(pyqt_dir):
+            for root, _, files in os.walk(pyqt_dir):
+                for f in files:
+                    lower = f.lower()
+                    if any(pat in lower for pat in self._AUDIT_HEAVY_PATTERNS):
+                        heavy_found.append(
+                            os.path.relpath(os.path.join(root, f), internal)
+                        )
+        if heavy_found:
+            preview = ", ".join(heavy_found[:8])
+            suffix = f" 等 {len(heavy_found)} 个" if len(heavy_found) > 8 else ""
+            warnings.append(f"发现重型 Qt DLL（裁剪可能失效）: {preview}{suffix}")
+
+        for w in warnings:
+            print(f"  [WARN] {w}")
+
+        # ── 体积分解 ──────────────────────────────────────
+        entries: list[tuple[str, int]] = []
+        for name in os.listdir(internal):
+            entries.append((name, self._get_dir_size(os.path.join(internal, name))))
+        entries.sort(key=lambda x: -x[1])
+        print("  [INFO] _internal 体积分解 (前12):")
+        for name, size in entries[:12]:
+            print(f"    {self._format_size(size):>10}  {name}")
+
+        if errors:
+            raise BuildError(
+                "产物审计失败:\n  "
+                + "\n  ".join(errors)
+                + "\n如为误判可使用 --collect-pyqt6 回退全量收集模式"
+            )
+        if not warnings:
+            print("  [OK] 产物审计通过")
 
     def _build_pyinstaller_args(
         self, launcher_path: str, excludes: list[str]
@@ -621,11 +865,27 @@ class BuildManager:
             else:
                 print(f"  [WARN] resource 目录不存在，跳过: {resource_dir}")
 
-        # 收集 PyQt6 子模块（确保完整打包）
-        args.extend(["--collect-submodules", "PyQt6"])
+        # PyQt6 收集策略：
+        # 默认仅按隐藏导入收集实际使用的 QtCore/QtGui/QtWidgets
+        # （GUI 模式另加 QtSvg/QtSvgWidgets），避免全量收集拖入全部
+        # 110 个 Qt 原生 DLL（约 207MB，实际仅需约 35MB）。
+        # --collect-pyqt6 为排障逃生通道，恢复旧的全量收集行为。
+        if self.config.collect_pyqt6:
+            args.extend(["--collect-submodules", "PyQt6"])
+
+        # recognition 模块整体收集（34 个纯 Python 文件，体积可忽略）：
+        # 该模块存在多处函数级导入（tile/vision 等），逐个维护隐藏导入
+        # 易遗漏，整体收集一劳永逸
+        args.extend(["--collect-submodules", "arknights_video_recognition"])
 
         # 收集 movielite 数据文件
         args.extend(["--collect-data", "movielite"])
+
+        # UPX 压缩（可选）：指定 upx 目录并排除不可压缩的系统 DLL
+        if self.config.use_upx and self._upx_dir:
+            args.extend(["--upx-dir", self._upx_dir])
+            for pattern in _UPX_EXCLUDES:
+                args.extend(["--upx-exclude", pattern])
 
         # 入口脚本（必须放在最后）
         args.append(launcher_path)
@@ -648,6 +908,9 @@ class BuildManager:
 
         # 库完整性自检：解析 PyInstaller 输出，检测缺失的隐藏导入
         self._verify_packaged_modules()
+
+        # 产物审计：关键 DLL 在/不在检查 + 体积分解
+        self._audit_output()
 
         # 如果未通过 --add-data 打包 resource，且用户选择包含资源，
         # 则复制 resource 目录到输出位置旁边
@@ -838,6 +1101,13 @@ class BuildManager:
         print(f"  类型:     {'单文件(onefile)' if self.config.onefile else '目录(onedir)'}")
         print(f"  资源:     {'包含' if self.config.include_resource else '不包含'}")
         print(f"  清理标准库: {'是' if self.config.clean_stdlib else '否'}")
+        if self.config.use_upx:
+            upx_label = f"启用 ({self._upx_dir})" if self._upx_dir else "启用"
+        else:
+            upx_label = "关闭"
+        print(f"  UPX:      {upx_label}")
+        if self.config.collect_pyqt6:
+            print("  PyQt6:    全量收集（排障模式，体积 +约170MB）")
         print(f"  项目根:   {self.config.project_root}")
         print(f"  输出目录: {self.config.abs_output_dir}")
         print("=" * 60)
@@ -854,6 +1124,8 @@ class BuildManager:
         print("=" * 60)
         print(f"  耗时:     {elapsed:.1f}s")
         print(f"  输出路径: {output_path}")
+        if self.config.use_upx:
+            print("  UPX:      已应用压缩（排除系统运行时 DLL）")
 
         if self.config.mode == "gui":
             print(f"  启动方式: 双击 {self.config.name}.exe")

@@ -233,12 +233,20 @@ python script/build_exe --analyze-only --clean-stdlib
 
 ### 高级参数
 
-| 参数                       | 说明              |
-| ------------------------ | --------------- |
+| 参数                       | 说明                      |
+| ------------------------ | ----------------------- |
 | `--exclude MODULE`       | 额外排除的模块（可多次使用）  |
-| `--hidden-import MODULE` | 额外的隐藏导入（可多次使用）  |
+| `--hidden-import MODULE` | 额外的隐藏导入（可多次使用）   |
 | `--project-root PATH`    | 项目根目录路径（默认自动检测） |
 | `--analyze-only`         | 仅执行依赖分析，不打包     |
+
+### 体积优化参数
+
+| 参数                 | 说明                                       |
+| ------------------ | ---------------------------------------- |
+| `--upx`            | 启用 UPX 压缩（可再减 35-45% 体积；会增加杀软误报率与启动时间） |
+| `--upx-path PATH`  | upx 可执行文件路径（文件或所在目录均可，默认从 PATH 检测）      |
+| `--collect-pyqt6`  | 排障用：恢复全量收集 PyQt6 子模块的旧行为（体积 +约170MB）    |
 
 ### 默认输出名称
 
@@ -333,14 +341,16 @@ python script/build_exe --mode gui --hidden-import PyQt6.QtSvg --hidden-import P
 
 ### 5. 打包体积过大
 
-**解决方案：**
+**说明：** 工具默认已应用体积优化（详见下方"体积优化说明"），无需额外操作。
+
+进一步压缩：
 
 ```bash
 # 1. 启用标准库清理
 python script/build_exe --mode gui --clean-stdlib
 
-# 2. 使用单文件模式（压缩更好，但启动较慢）
-python script/build_exe --mode gui --onefile
+# 2. 启用 UPX 压缩（可再减 35-45% 体积）
+python script/build_exe --mode gui --upx
 
 # 3. 排除不需要的大型库
 python script/build_exe --mode cli --exclude matplotlib --exclude scipy
@@ -348,6 +358,38 @@ python script/build_exe --mode cli --exclude matplotlib --exclude scipy
 # 4. 先分析依赖，确认排除列表
 python script/build_exe --analyze-only
 ```
+
+> **UPX 注意事项：** UPX 压缩会增加杀毒软件误报概率和启动时间（解压开销）。
+> 工具已内置系统 DLL 排除清单（vcruntime/msvcp/python312 等），防止压坏运行时。
+> 若 PATH 中已存在 upx，即使不加 `--upx`，PyInstaller 也可能隐式启用压缩；
+> 构建日志会给出提示。
+
+### 5.1 体积优化说明
+
+工具对 PyQt6 采用**按需收集**策略：
+
+- **旧行为**：`--collect-submodules PyQt6` 全量收集，拖入全部 110 个 Qt 原生
+  DLL（约 207MB），其中 WebEngine（内嵌 Chromium）、Quick3D、Charts、
+  Multimedia 等模块项目根本未使用。
+- **现行为**：仅显式收集实际使用的 QtCore/QtGui/QtWidgets（GUI 模式另加
+  QtSvg/QtSvgWidgets），并防御性排除重型 Qt 模块。**节省约 170MB**。
+- **产物审计**：每次打包后自动检查关键 DLL 在/不在（qwindows 平台插件、
+  Qt6Core/Gui/Widgets 必须存在；WebEngine/Quick/Qml 等不应出现），
+  并输出 `_internal` 各组件体积分解表。
+- **逃生通道**：若裁剪模式导致 GUI 启动异常，可加 `--collect-pyqt6`
+  回退全量收集以定位问题。
+
+识别模块 `arknights_video_recognition` 整体收集（34 个纯 Python 文件，
+体积可忽略），确保其函数级导入的子包（tile/vision）不遗漏。
+
+### 5.2 GUI 启动异常时回退全量收集
+
+```bash
+python script/build_exe --mode gui --collect-pyqt6
+```
+
+若回退后恢复正常，说明按需收集遗漏了某个 Qt 组件，
+请提 issue 并附上构建日志中的审计输出。
 
 ### 6. 单文件模式(onefile)启动缓慢
 

@@ -60,11 +60,14 @@ def create_parser() -> argparse.ArgumentParser:
   # 打包 GUI 版本，指定名称和图标
   python script/build_exe --mode gui --name MyAVP --icon app.ico
 
-  # 打包并清理未使用的标准库（减小体积）
-  python script/build_exe --mode gui --clean-stdlib
+    # 打包并清理未使用的标准库（减小体积）
+    python script/build_exe --mode gui --clean-stdlib
 
-  # 仅分析依赖，不执行打包
-  python script/build_exe --analyze-only
+    # 启用 UPX 压缩（进一步减小体积，需已安装 upx）
+    python script/build_exe --mode gui --upx
+
+    # 仅分析依赖，不执行打包
+    python script/build_exe --analyze-only
 
 打包模式说明:
   gui       仅打包图形界面版本，双击 exe 启动 GUI
@@ -164,6 +167,27 @@ def create_parser() -> argparse.ArgumentParser:
         help="项目根目录路径 (默认自动检测)",
     )
 
+    # ── 体积优化 ──────────────────────────────────────────
+    parser.add_argument(
+        "--upx",
+        action="store_true",
+        default=False,
+        help="启用 UPX 压缩 (可再减 35-45%% 体积，需已安装 upx；"
+        "会增加杀毒软件误报率与启动时间)",
+    )
+    parser.add_argument(
+        "--upx-path",
+        default="",
+        metavar="PATH",
+        help="upx 可执行文件路径 (文件或所在目录均可，默认从 PATH 检测)",
+    )
+    parser.add_argument(
+        "--collect-pyqt6",
+        action="store_true",
+        default=False,
+        help="排障用: 恢复全量收集 PyQt6 子模块的旧行为 (体积增加约 170MB)",
+    )
+
     # ── 工具选项 ──────────────────────────────────────────
     parser.add_argument(
         "--analyze-only",
@@ -260,6 +284,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_excludes=args.exclude,
         extra_hidden_imports=args.hidden_import,
         project_root=args.project_root,
+        use_upx=args.upx,
+        upx_path=args.upx_path,
+        collect_pyqt6=args.collect_pyqt6,
     )
 
     # 仅分析模式

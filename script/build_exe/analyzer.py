@@ -170,6 +170,9 @@ class DependencyAnalyzer:
         "pictex",
         "Pillow",
         "tqdm",
+        # Recognition 后端依赖（默认后端开箱即用）
+        "onnxruntime",
+        "rapidocr-onnxruntime",
     }
 
     # 隐藏导入（movielite/pictex 等）的运行时传递依赖——兜底集
@@ -438,8 +441,6 @@ class DependencyAnalyzer:
               - 顶层导入名（通过 _PACKAGE_TO_IMPORT 映射）
             两种形式都加入集合，确保排除检查双向匹配。
         """
-        import re
-
         protected: set[str] = set()
         # 待处理的包队列（规范化为 PyPI 名，- 保留）
         queue: list[str] = list(root_packages)
@@ -467,11 +468,13 @@ class DependencyAnalyzer:
             for req_str in deps:
                 # 解析需求字符串，提取包名
                 # 格式示例: "numpy>=1.24", "Pillow>=10.0; extra == 'x'", "pictex"
-                # 取第一个非空格、非分号前的 token 作为包名
-                name_match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req_str)
-                if not name_match:
+                dep_name = self._parse_dep_name(req_str)
+                if not dep_name:
                     continue
-                dep_name = name_match.group(1)
+
+                # 环境标记过滤：extras 依赖与当前环境不满足的标记不纳入保护集
+                if not self._dep_marker_applies(req_str):
+                    continue
 
                 # 跳过标准库（Python 自带，无需保护）
                 if self._is_stdlib(dep_name.replace("-", "_")):
@@ -495,6 +498,49 @@ class DependencyAnalyzer:
                 queue.append(dep_name)
 
         return protected
+
+    @staticmethod
+    def _parse_dep_name(req_str: str) -> str | None:
+        """从需求字符串提取包名，解析失败返回 None
+
+        优先用 packaging 规范解析（正确处理带环境标记/复杂版本约束的
+        条目）；packaging 不可用时回退为取分号前的首个 token。
+        """
+        try:
+            from packaging.requirements import Requirement
+        except ImportError:
+            import re
+
+            match = re.match(
+                r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req_str.split(";", 1)[0]
+            )
+            return match.group(1) if match else None
+        try:
+            return Requirement(req_str).name
+        except Exception:
+            return None
+
+    @staticmethod
+    def _dep_marker_applies(req_str: str) -> bool:
+        """判断需求条目的环境标记是否适用于当前构建环境
+
+        - 含 extra == 的条目属于可选 extras 依赖（如 dev 测试依赖），
+          打包场景一律不纳入保护集，避免误打包导致体积膨胀；
+        - 其余标记（如 sys_platform == 'win32'）按当前环境求值，
+          求值失败时保守视为适用，宁可多保护不可漏保护。
+        """
+        _, _, marker_str = req_str.partition(";")
+        marker_str = marker_str.strip()
+        if not marker_str:
+            return True
+        if "extra" in marker_str:
+            return False
+        try:
+            from packaging.markers import Marker
+
+            return Marker(marker_str).evaluate()
+        except Exception:
+            return True
 
     # ── 主分析入口 ────────────────────────────────────────
 
@@ -539,11 +585,19 @@ class DependencyAnalyzer:
 
         # 4. 动态发现隐藏导入的传递依赖，构建保护集
         # 这一步是彻底解决库遗漏问题的关键：用 importlib.metadata.requires()
-        # 递归读取 REQUIRED_PACKAGES（movielite/pictex 等）的声明依赖，
-        # 自动适应版本升级带来的新依赖，不再依赖手动维护硬编码列表。
+        # 递归读取必需包 + 实际使用包的声明依赖，自动适应版本升级带来的
+        # 新依赖，不再依赖手动维护硬编码列表。
+        # 注意起点必须包含 used_packages：仅扫 src/ 的分析无法感知
+        # "已用包自身的依赖"（如 rapidocr 的 pyclipper/Shapely/PyYAML/six、
+        # onnxruntime 的 flatbuffers/protobuf），遗漏会导致运行时崩溃。
         # HIDDEN_IMPORT_DEPS 作为元数据缺失时的兜底补充。
-        discovered_deps = self._discover_transitive_deps(self.REQUIRED_PACKAGES)
+        discovered_deps = self._discover_transitive_deps(
+            set(used_packages) | set(self.REQUIRED_PACKAGES)
+        )
         protected_deps: set[str] = discovered_deps | self.HIDDEN_IMPORT_DEPS
+        # 小写视图：包名大小写在元数据中不统一（如 rapidocr 声明 "Shapely"，
+        # 实际安装名为 "shapely"），匹配时统一转小写避免漏保护
+        protected_lower = {p.lower() for p in protected_deps}
         print(
             f"  [OK] 保护 {len(protected_deps)} 个传递依赖"
             f"（动态发现 {len(discovered_deps)}，兜底 {len(self.HIDDEN_IMPORT_DEPS)}）"
@@ -560,8 +614,11 @@ class DependencyAnalyzer:
                 continue
             # 跳过隐藏导入的传递依赖（import_name 和 pkg_name 都要检查，
             # 因为 skia 的导入名是 "skia"，PyPI 包名是 "skia-python"）
-            # 使用动态发现的保护集 + 硬编码兜底集
-            if import_name in protected_deps or pkg_name in protected_deps:
+            # 使用动态发现的保护集 + 硬编码兜底集，大小写不敏感匹配
+            if (
+                import_name.lower() in protected_lower
+                or pkg_name.lower() in protected_lower
+            ):
                 continue
             # 跳过 PyInstaller 自身及其依赖
             if pkg_name.lower() in ("pyinstaller", "altgraph", "pyinstaller-hooks-contrib"):
