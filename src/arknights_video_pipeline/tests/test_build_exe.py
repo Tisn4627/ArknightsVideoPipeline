@@ -25,6 +25,19 @@ from script.build_exe.builder import (
 )
 
 
+def _dynamic_test_modules() -> list[str]:
+    """动态扫描 tests 目录生成测试模块名清单。
+
+    硬编码具体文件名会随目录增删漂移（新增测试文件必须同步改清单，
+    否则误报）；改为从实际文件派生。
+    """
+    tests_dir = Path(__file__).parent
+    return sorted(
+        f"arknights_video_pipeline.tests.{p.stem}"
+        for p in tests_dir.glob("test_*.py")
+    )
+
+
 # ── DependencyAnalyzer: 测试文件跳过 ───────────────────────
 
 
@@ -187,15 +200,11 @@ class TestBuildManagerTestExcludes:
         excludes = manager._analyze_dependencies()
         args = manager._build_pyinstaller_args("/tmp/launcher.py", excludes)
 
-        # 在 args 中找到 --exclude-module 后跟测试包名
-        for test_mod in (
-            "arknights_video_pipeline.tests",
-            "arknights_video_pipeline.tests.test_titlebar",
-            "arknights_video_pipeline.tests.test_batch_service",
-            "arknights_video_pipeline.tests.test_batch_cli",
-            "arknights_video_pipeline.tests.test_batch_video_list",
-            "arknights_video_pipeline.tests.test_filename_encoding",
-        ):
+        # 测试包本身 + 动态派生的全部测试模块都应在排除参数中
+        # （动态派生自 tests 目录实际文件，避免硬编码清单与目录漂移）
+        test_mods = ["arknights_video_pipeline.tests"]
+        test_mods.extend(_dynamic_test_modules())
+        for test_mod in test_mods:
             assert test_mod in args, (
                 f"PyInstaller 参数缺少测试排除项: {test_mod}"
             )
@@ -222,17 +231,9 @@ class TestBuildManagerTestExcludes:
         )
 
     def test_all_known_test_files_excluded(self, manager: BuildManager) -> None:
-        """src 下所有已知测试文件都被排除"""
+        """src 下所有测试文件（动态扫描）都被排除"""
         excludes = manager._analyze_dependencies()
-        test_files = [
-            "test_batch_service.py",
-            "test_batch_cli.py",
-            "test_batch_video_list.py",
-            "test_filename_encoding.py",
-            "test_titlebar.py",
-        ]
-        for tf in test_files:
-            mod_name = f"arknights_video_pipeline.tests.{tf[:-3]}"
+        for mod_name in _dynamic_test_modules():
             assert mod_name in excludes, f"缺少测试模块排除: {mod_name}"
 
     def test_always_exclude_still_present(self, manager: BuildManager) -> None:

@@ -134,7 +134,8 @@ def format_action(action, index, opers_map, config):
         if costs and costs > 0:
             cond_parts.append(f"费用>={costs}")
         if cost_changes and cost_changes != 0:
-            cond_parts.append(f"费用变化{cost_changes:+d}")
+            # JSON 中可能为浮点（如 12.0），:+d 仅接受整数，先归一化
+            cond_parts.append(f"{int(cost_changes):+d}")
         if cond_parts:
             parts.append(f"[{'&'.join(cond_parts)}]")
 

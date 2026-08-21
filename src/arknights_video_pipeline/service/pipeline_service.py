@@ -25,7 +25,6 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from arknights_video_pipeline.core.exceptions import VideoValidationError, ImageValidationError
 from arknights_video_pipeline.core.utils import (
-    PROJECT_ROOT,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
     validate_video_file,
@@ -106,16 +105,24 @@ class PipelineService(QObject):
 
         # 自定义作业 JSON：绑定后跳过视频识别，文件必须存在且为 .json
         if json_paths:
-            for idx, json_path in enumerate(json_paths, start=1):
-                if not json_path:
-                    continue
-                prefix = f"[{idx}] "
-                if not os.path.exists(json_path):
-                    errors.append(f"{prefix}自定义作业JSON文件不存在: {json_path}")
-                    continue
-                ext = os.path.splitext(json_path)[1].lower()
-                if ext != ".json":
-                    errors.append(f"{prefix}自定义作业JSON必须是 .json 文件: {json_path}")
+            # 两列表必须平行对齐（GUI 侧含 None 占位）；错位时自定义
+            # 作业会静默绑定到错误的视频，必须在启动前拦截
+            if len(json_paths) != len(video_paths):
+                errors.append(
+                    f"视频列表({len(video_paths)})与JSON列表"
+                    f"({len(json_paths)})长度不一致，无法确定对应关系"
+                )
+            else:
+                for idx, json_path in enumerate(json_paths, start=1):
+                    if not json_path:
+                        continue
+                    prefix = f"[{idx}] "
+                    if not os.path.exists(json_path):
+                        errors.append(f"{prefix}自定义作业JSON文件不存在: {json_path}")
+                        continue
+                    ext = os.path.splitext(json_path)[1].lower()
+                    if ext != ".json":
+                        errors.append(f"{prefix}自定义作业JSON必须是 .json 文件: {json_path}")
 
         # 背景板图片：style1 必填，整批共享
         if self._config.style() == "style1":
@@ -201,15 +208,27 @@ class PipelineService(QObject):
         for worker in list(self._workers.values()):
             if worker.isRunning():
                 worker.cancel()
+        # 取消提示只发一次（worker.cancel 不再各自发，避免并发模式下刷屏）
+        if self._workers:
+            self.log_emitted.emit("INFO", "用户请求取消，将在当前步骤结束后停止")
         # 若没有任何运行中的 worker（例如取消时队列尚未派发），直接结束批次
         if not self._workers:
             self._finish_batch()
 
     def wait_for_shutdown(self, timeout_ms: int = 3000) -> None:
-        """等待所有工作线程退出，避免 QThread 被销毁时仍在运行"""
+        """等待所有工作线程退出，避免 QThread 被销毁时仍在运行
+
+        使用统一 deadline 分摊等待预算：串行逐个 wait(timeout) 时最坏
+        阻塞主线程 N×timeout；改为共享截止时间后总等待不超过 timeout_ms。
+        """
+        import time
+        deadline = time.monotonic() + timeout_ms / 1000.0
         for worker in list(self._workers.values()):
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                break
             if worker.isRunning():
-                worker.wait(timeout_ms)
+                worker.wait(remaining_ms)
 
     def force_terminate_workers(self, timeout_ms: int = 2000) -> None:
         """强制终止所有仍在运行的工作线程。
@@ -307,6 +326,10 @@ class PipelineService(QObject):
         self.step_started.emit(idx, step_key, step_desc)
 
     def _on_file_progress(self, idx: int, percent: int, message: str) -> None:
+        # 与 _on_worker_finished 相同的迟到信号防护（进度信号同样可能
+        # 在批次收尾后到达）
+        if not self._batch_active or idx >= len(self._file_percents):
+            return
         self._file_percents[idx] = percent
         self._contributions[idx] = percent
         self.file_progress.emit(idx, percent, message)
@@ -315,6 +338,11 @@ class PipelineService(QObject):
     def _on_worker_finished(self, idx: int, success: bool,
                             report_dict: dict[str, Any], cancelled: bool) -> None:
         """单个 worker 完成回调"""
+        # 迟到信号防护：force_terminate 后批次状态已被 _finish_batch 清空，
+        # 但 worker 的 finally 块仍可能抢在线程死亡前发射 pipeline_finished；
+        # 此时批次已结束或索引越界，直接忽略，避免 IndexError 与重复信号
+        if not self._batch_active or idx >= len(self._queue):
+            return
         cancelled = cancelled or self._cancelled
         if success:
             self._success_count += 1

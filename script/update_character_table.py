@@ -10,7 +10,10 @@ Support/Special/Drone），用于 avatar 匹配时的 role 过滤。
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -22,6 +25,9 @@ URL = (
     "https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/"
     "master/zh_CN/gamedata/excel/character_table.json"
 )
+
+# 下载超时（秒）：urlretrieve 默认无限等待，网络停滞时会永久挂起
+_DOWNLOAD_TIMEOUT_SEC = 60
 
 # gamedata profession → 部署栏模板名
 _PROFESSION_MAP = {
@@ -47,7 +53,19 @@ def update_character_table() -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     raw_path = DATA_DIR / "character_table.json"
     print(f"Downloading {URL} -> {raw_path}")
-    urllib.request.urlretrieve(URL, raw_path)
+    # 先写临时文件再原子替换：下载中途失败不得顶掉原本可用的旧版
+    with urllib.request.urlopen(URL, timeout=_DOWNLOAD_TIMEOUT_SEC) as resp:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=str(DATA_DIR), prefix="char_table_", suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            shutil.copyfileobj(resp, tmp)
+            tmp_path = Path(tmp.name)
+    try:
+        os.replace(tmp_path, raw_path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     raw = json.loads(raw_path.read_bytes())
     roles: dict[str, str] = {}

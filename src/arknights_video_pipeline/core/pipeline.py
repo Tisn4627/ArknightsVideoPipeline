@@ -32,16 +32,14 @@ from typing import Any, Callable
 
 from arknights_video_pipeline.core.config import ConfigManager
 from arknights_video_pipeline.core.exceptions import (
-    ConfigError,
     CopilotBackendError,
     ImageValidationError,
-    PipelineError,
     PipelineStepError,
     VideoValidationError,
 )
-from arknights_video_pipeline.core.logger import get_step_logger, setup_logger
+from arknights_video_pipeline.core.logger import setup_logger
 from arknights_video_pipeline.core.step_defs import STEPS
-from arknights_video_pipeline.core.types import PipelineReport, StepResult, StepStatus, VideoInfo
+from arknights_video_pipeline.core.types import PipelineReport, StepResult, StepStatus
 from arknights_video_pipeline.core.utils import (
     PROJECT_ROOT,
     SUPPORTED_IMAGE_EXTENSIONS,
@@ -512,21 +510,29 @@ class Pipeline:
                 compose_config["background_image"] = self.background_image_path
 
             text_overlay = compose_config.get("text_overlay", {})
-            text_overlay["enabled"] = True
-            if self.copilot_json_path:
-                text_overlay["input_json"] = self.copilot_json_path
-            text_overlay["formation"] = resolve_path(
-                self.config.project_dir,
-                self.config.pipeline.get(
-                    "formation", "config/formation.json"
-                ),
-            )
-            text_overlay["actions"] = resolve_path(
-                self.config.project_dir,
-                self.config.pipeline.get(
-                    "actions", "config/actions.json"
-                ),
-            )
+            # 尊重用户在 style JSON 中显式设置的 enabled 开关（配置优先级：
+            # 模块 JSON > 代码默认值），不再无条件强制开启；仅在开启时注入
+            # 路径参数，下游 video_compose 按 enabled 决定是否消费文本叠加
+            if text_overlay.get("enabled", True):
+                # track_result 由步骤4写入 self.output_dir（见 step_track）。
+                # load_text_overlay_inputs 只从 text_overlay 子块读取
+                # output_dir，故必须在此同步注入子块；只注入顶层会导致用户
+                # 自定义输出目录时找不到跟踪结果、静默回退 3 秒切换时间
+                text_overlay["output_dir"] = self.output_dir
+                if self.copilot_json_path:
+                    text_overlay["input_json"] = self.copilot_json_path
+                text_overlay["formation"] = resolve_path(
+                    self.config.project_dir,
+                    self.config.pipeline.get(
+                        "formation", "config/formation.json"
+                    ),
+                )
+                text_overlay["actions"] = resolve_path(
+                    self.config.project_dir,
+                    self.config.pipeline.get(
+                        "actions", "config/actions.json"
+                    ),
+                )
             compose_config["text_overlay"] = text_overlay
 
             self.logger.info(f"视频源: {self.video_path}")
@@ -586,7 +592,7 @@ class Pipeline:
             if step_key in self.skip_steps:
                 skipped = StepResult(
                     name=step_key,
-                    description=f"已跳过",
+                    description="已跳过",
                     status=StepStatus.SKIPPED,
                 )
                 self.report.steps.append(skipped)

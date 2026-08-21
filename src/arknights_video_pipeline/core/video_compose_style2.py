@@ -233,6 +233,8 @@ def create_subtitle_clip(text, start, duration, text_config, project_root, outpu
         )
 
     # 8 位 RGBA 十六进制 #00000000 = alpha 0（透明背景）
+    # padding=10 与 video_compose.create_text_clip / text_fit.PANEL_PADDING
+    # 三处必须逐值一致，调整需同步
     canvas = (
         canvas
         .background_color("#00000000")
@@ -271,6 +273,10 @@ def compose_video(config):
     # 加载视频素材
     logger.info(f"加载视频素材: {video_source}")
     video = VideoClip(video_source, start=0)
+    # 与 style1 一致：无法解析时长（文件损坏等）时给出明确错误，
+    # 避免在后续 VideoWriter 处产生深层报错或空输出
+    if not video.duration or video.duration <= 0:
+        raise ValueError(f"无法解析视频时长，文件可能损坏: {video_source}")
 
     # 全屏铺满：设置视频尺寸等于输出尺寸
     logger.info(f"设置视频全屏铺满: {output_size[0]}x{output_size[1]}")

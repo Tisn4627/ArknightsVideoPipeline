@@ -197,6 +197,24 @@ class TestRunPipelineScheduling:
         assert mock_worker_cls.call_count == 1
         assert batch_events[-1] == (1, 3, True)
 
+    def test_worker_signals_are_wired(self, qapp) -> None:
+        """worker 关键信号必须全部接线（防 connect 参数错位/漏接回归）
+
+        直接调 _on_worker_finished 绕过了 dispatch 时的信号连接，
+        若 pipeline_service.py 的五处 .connect 漏接或签名错位，套件仍会
+        全绿——此处显式断言接线发生。
+        """
+        service = PipelineService(_make_config_proxy())
+        with mock.patch(_WORKER) as mock_worker_cls:
+            with mock.patch.object(service, "validate_batch", return_value=[]):
+                service.run_pipeline(["a.mp4"])
+            worker = mock_worker_cls.return_value
+            worker.step_started.connect.assert_called()
+            worker.step_finished.connect.assert_called()
+            worker.progress_updated.connect.assert_called()
+            worker.log_emitted.connect.assert_called()
+            worker.pipeline_finished.connect.assert_called()
+
 
 # ── 自定义作业 JSON ────────────────────────────────────────
 

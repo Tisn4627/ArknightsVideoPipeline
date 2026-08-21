@@ -76,13 +76,15 @@ class TestRecognizeOnlyMutex:
     """验证 --recognize-only 与 --copilot-json 互斥"""
 
     def test_recognize_only_with_copilot_json_errors(self) -> None:
-        """同时指定 --recognize-only 与 --copilot-json 时 parser.error 触发 SystemExit"""
+        """同时指定 --recognize-only 与 --copilot-json 时 parser.error 触发 SystemExit(2)"""
         argv = ["main.py", "a.mp4", "--recognize-only", "--copilot-json", "c.json"]
         with mock.patch.object(sys, "argv", argv), \
              mock.patch(_CONFIG_MGR), \
              mock.patch(_SETUP_LOGGER):
-            with pytest.raises(SystemExit):
+            # 退出码语义：argparse 的 parser.error 固定为 2
+            with pytest.raises(SystemExit) as exc_info:
                 main()
+        assert exc_info.value.code == 2
 
 
 # ── 背景板图片跳过校验 ─────────────────────────────────────

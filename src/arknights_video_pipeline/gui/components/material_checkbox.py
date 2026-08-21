@@ -61,6 +61,21 @@ class MaterialCheckBox(QWidget):
         self.update()
         self.toggled.emit(checked)
 
+    def setCheckedSilent(self, checked: bool) -> None:  # noqa: N802
+        """程序化回填且不发射 toggled。
+
+        供加载配置/重置默认值场景使用，替代调用方手写
+        ``blockSignals`` 样板（Qt 的 QAbstractButton.setChecked 即为
+        静默语义，此处命名保持一致）。
+        """
+        if checked == self._checked:
+            return
+        self.blockSignals(True)
+        try:
+            self.setChecked(checked)
+        finally:
+            self.blockSignals(False)
+
     def setText(self, text: str) -> None:  # noqa: N802
         self._label.setText(text)
         self._label.adjustSize()

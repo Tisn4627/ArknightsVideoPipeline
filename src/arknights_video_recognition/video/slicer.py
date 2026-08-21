@@ -28,12 +28,15 @@ Maa ``CombatRecordRecognitionTask::slice_video``（CombatRecordRecognitionTask.c
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 import numpy as np
 
 from .frames import VideoFrames
+
+logger = logging.getLogger(__name__)
 
 # 采样间隔（秒）。Maa deployment_fps=5 ≈ 0.2s。
 _DEFAULT_SAMPLE_INTERVAL = 0.2
@@ -130,12 +133,17 @@ class VideoSlicer:
             text = self.ocr.recognize_text(frame, roi=roi)
             text = text.strip() if text else ""
             # 对齐 Maa is_name_invalid 校验：非法名视为未读到，返回空串持续重试
-            if text and not BattleAnalyzer._is_valid_oper_name(text):
+            if text and not BattleAnalyzer.is_valid_oper_name(text):
                 return ""
             # 模糊校正：OCR 多读/少读字符时匹配标准干员名
-            resolved = BattleAnalyzer._resolve_oper_name(text)
+            resolved = BattleAnalyzer.resolve_oper_name(text)
             return resolved if resolved else text
-        except Exception:
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            # 只吞预期内的配置/数据缺失类异常；其余异常（如代码缺陷）
+            # 必须暴露而非静默吞掉导致切片命名错误且无从排查
+            logging.getLogger(__name__).warning(
+                "详情页干员名 OCR 失败: %s", exc
+            )
             return ""
 
     # --- 主流程 --------------------------------------------------------------
@@ -278,31 +286,6 @@ class VideoSlicer:
         if len(flags) < 2:
             return True
         xs = sorted(fx[0] for fx in flags)
-        prev_dist = 0
-        for i in range(1, len(xs)):
-            dist = xs[i] - xs[i - 1]
-            if prev_dist and abs(dist - prev_dist) > 5:
-                return False
-            prev_dist = dist
-        return True
-
-    @staticmethod
-    def _check_continuity(slots: list) -> bool:
-        """部署栏水平间距稳定性（对齐 Maa: |dist - prev_dist| <= 5）。
-
-        Parameters
-        ----------
-        slots:
-            detect_slots 返回的 list[dict]，取 flag_pos[0] 作为 x 坐标。
-
-        Returns
-        -------
-        bool
-            相邻间距差异均 <= 5 时为 True。
-        """
-        if len(slots) < 2:
-            return True
-        xs = sorted(slot["flag_pos"][0] for slot in slots)
         prev_dist = 0
         for i in range(1, len(xs)):
             dist = xs[i] - xs[i - 1]

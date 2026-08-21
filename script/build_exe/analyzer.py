@@ -88,7 +88,6 @@ _STDLIB_EXCLUDES: list[str] = [
     "ossaudiodev",
     "spwd",
     "aifc",
-    "au",
     "sunau",
     "chunk",
     "colorsys",
@@ -98,9 +97,12 @@ _STDLIB_EXCLUDES: list[str] = [
     "winreg",  # 注意: 项目 utils.py 中有条件使用 winreg，排除可能导致问题
 ]
 
-# 从默认排除列表中移除项目可能需要的模块
+# 从默认排除列表中移除项目或其依赖可能需要的模块：
+# - winreg: 项目 utils.py / runtime_hook 的 ffmpeg 注册表回退在用
+# - http:   某些第三方库可能间接依赖
+# - msvcrt: Windows 下 click/colorama 系库运行期可能导入，排除会崩
 _STDLIB_EXCLUDES = [
-    m for m in _STDLIB_EXCLUDES if m != "winreg" and m != "http"
+    m for m in _STDLIB_EXCLUDES if m not in ("winreg", "http", "msvcrt")
 ]
 
 

@@ -204,10 +204,6 @@ class TestSetRunningUi:
     def test_running_disables_param_rows(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool._set_running_ui(True)
-        # 参数行应被禁用
-        combo = tool._backend_row.widget.findChild(
-            type(tool._backend_row.widget).__mro__[1]  # 容器 widget
-        )
         # 验证 backend combo 内的 QComboBox 禁用
         from PyQt6.QtWidgets import QComboBox
         combos = tool._backend_row.widget.findChildren(QComboBox)

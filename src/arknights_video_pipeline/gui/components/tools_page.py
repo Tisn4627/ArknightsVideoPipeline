@@ -92,6 +92,18 @@ class ToolDialog(QDialog):
     def view(self) -> ToolView:
         return self._view
 
+    def closeEvent(self, event) -> None:
+        # 本对话框设了 WA_DeleteOnClose，关闭即析构 _view 整棵控件树。
+        # 工具视图可能仍有后台 QThread 在运行（如识别工具的
+        # RecognitionWorker），QThread 先于线程结束被析构会触发
+        # "QThread destroyed while running" 直接 abort 进程。若视图
+        # 实现了 request_shutdown（取消 + 限时等待 + terminate 兜底），
+        # 关闭前先调用它确保线程已退出。
+        shutdown = getattr(self._view, "request_shutdown", None)
+        if callable(shutdown):
+            shutdown()
+        super().closeEvent(event)
+
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
         self._view.set_colors(colors)

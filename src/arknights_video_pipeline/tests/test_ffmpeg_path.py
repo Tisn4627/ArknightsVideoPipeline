@@ -46,10 +46,15 @@ def qapp():
 
 @pytest.fixture(autouse=True)
 def reset_ffmpeg_globals():
-    """每个测试前重置 utils 模块的 FFmpeg 全局状态，避免测试间污染"""
-    set_ffmpeg_config(False, "")
+    """每个测试前后把 utils 的 FFmpeg 全局状态复位为 conftest 计算出的
+    会话初始值（而非硬编码禁用态），避免运行期触发
+    ensure_ffmpeg_in_path() 的测试拿到与收集期不同的全局状态。"""
+    from arknights_video_pipeline.core import utils as _utils
+
+    saved = (_utils._FFMPEG_CUSTOM_ENABLED, _utils._FFMPEG_CUSTOM_PATH)
+    set_ffmpeg_config(*saved)
     yield
-    set_ffmpeg_config(False, "")
+    set_ffmpeg_config(*saved)
 
 
 @pytest.fixture

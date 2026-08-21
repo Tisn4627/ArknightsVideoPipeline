@@ -11,7 +11,6 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import threading
 from copy import deepcopy
 from typing import Any, Callable
@@ -113,7 +112,14 @@ def ensure_ffmpeg_in_path() -> None:
             sys_path = winreg.QueryValueEx(key, "Path")[0]
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
             user_path = winreg.QueryValueEx(key, "Path")[0]
-        os.environ["PATH"] = sys_path + ";" + user_path + ";" + machine_path
+        # REG_EXPAND_SZ 类型的值含未展开的 %SystemRoot% 等字面量，必须
+        # 先展开；注册表条目追加在现有 PATH 之后，避免反超用户预期的
+        # ffmpeg 版本
+        os.environ["PATH"] = (
+            machine_path + ";"
+            + winreg.ExpandEnvironmentStrings(sys_path) + ";"
+            + winreg.ExpandEnvironmentStrings(user_path)
+        )
     except Exception as exc:
         logging.getLogger(__name__).debug(f"从注册表重建 PATH 失败: {exc}")
 
@@ -646,8 +652,16 @@ def get_switch_time(track_result_path: str) -> float:
         logger.warning(f"跟踪结果文件不存在: {track_result_path}，编队文本将显示3秒")
         return 3.0
 
-    with open(track_result_path, "r", encoding="utf-8") as f:
-        result = json.load(f)
+    try:
+        with open(track_result_path, "r", encoding="utf-8") as f:
+            result = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        # 文件可能被中途杀掉的进程截断；损坏时回退默认值而非让合成步骤崩溃
+        logger.warning(f"跟踪结果文件解析失败({exc})，编队文本将显示3秒")
+        return 3.0
+    if not isinstance(result, dict):
+        logger.warning("跟踪结果文件格式异常，编队文本将显示3秒")
+        return 3.0
 
     # battlestart 模式：进入战斗时间即切换时间
     if result.get("track_mode") == "battlestart":

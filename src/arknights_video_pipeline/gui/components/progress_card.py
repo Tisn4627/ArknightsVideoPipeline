@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QWidget
+from PyQt6.QtWidgets import QLabel, QProgressBar, QWidget
 
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
 from arknights_video_pipeline.gui.i18n import i18n, tr

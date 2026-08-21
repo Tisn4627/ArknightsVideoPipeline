@@ -25,12 +25,20 @@ def _run() -> int:
         main()
         return 0
     except SystemExit as exc:
-        # argparse 等已通过 sys.exit 退出，透传退出码
-        return int(exc.code) if isinstance(exc.code, int) else 1
+        # argparse 等已通过 sys.exit 退出：透传退出码；
+        # 裸 sys.exit()（code=None）表示成功，映射为 0 而非 1
+        if isinstance(exc.code, int):
+            return exc.code
+        return 0 if exc.code is None else 1
     except KeyboardInterrupt:
         sys.stderr.write("\n用户中断执行\n")
         return 130
     except Exception as exc:
+        # 默认只输出单行消息；设 AVP_DEBUG=1 输出完整堆栈便于定位
+        if os.environ.get("AVP_DEBUG"):
+            import traceback
+
+            traceback.print_exc()
         sys.stderr.write(f"程序启动失败: {exc}\n")
         return 1
 

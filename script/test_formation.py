@@ -11,14 +11,21 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+# 支持未安装包（pip install -e .）时直接运行：把仓库 src 目录加入路径
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from arknights_video_recognition.config.settings import DEFAULT_RESOLUTION, MINIMUM_REQUIRED
 from arknights_video_recognition.copilot.builder import CopilotJob
 from arknights_video_recognition.formation import FormationAnalyzer
 from arknights_video_recognition.ocr.engine import OcrEngine, OcrSource
 from arknights_video_recognition.video.frames import VideoFrames
 
-TEST_DIR = Path("/workspace/test")
-DEBUG_DIR = Path("/workspace/debug")
+# 默认定位到仓库根的 test/ 与 debug/。原为 /workspace 绝对路径，
+# Windows 上会解析为当前盘符根目录，开箱不可用
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+TEST_DIR = _REPO_ROOT / "test"
+DEBUG_DIR = _REPO_ROOT / "debug"
 SAMPLE_INTERVAL_SEC = 0.2   # 5 fps
 MAX_DURATION_SEC = 60.0
 
@@ -26,13 +33,16 @@ MAX_DURATION_SEC = 60.0
 def sample_frames(video_path: Path) -> list:
     """打开视频归一化 720p，采样前 60s 帧（5fps），返回 [(ts, frame), ...]。"""
     vf = VideoFrames(str(video_path), resolution=DEFAULT_RESOLUTION)
-    frames = []
-    for ts, frame in vf.sample(interval_sec=SAMPLE_INTERVAL_SEC):
-        if ts > MAX_DURATION_SEC:
-            break
-        frames.append((ts, frame))
-    vf.release()
-    return frames
+    try:
+        frames = []
+        for ts, frame in vf.sample(interval_sec=SAMPLE_INTERVAL_SEC):
+            if ts > MAX_DURATION_SEC:
+                break
+            frames.append((ts, frame))
+        return frames
+    finally:
+        # 异常路径也必须释放句柄，否则 Windows 上文件被占用
+        vf.release()
 
 
 def recognize_one(video_path: Path, ocr_engine: OcrEngine, ocr_tag: str) -> None:

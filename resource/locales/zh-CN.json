@@ -290,6 +290,8 @@
   "tools.recognition.cancel": "取消",
   "tools.recognition.open_output": "打开输出目录",
   "tools.recognition.logs": "运行日志",
+  "log_viewer.copy": "复制",
+  "log_viewer.clear": "清空",
   "tools.recognition.no_video_title": "无视频文件",
   "tools.recognition.no_video_text": "请先添加至少一个视频文件",
   "tools.recognition.already_running_title": "正在运行",

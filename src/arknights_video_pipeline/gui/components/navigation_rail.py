@@ -12,7 +12,6 @@ gui.components.navigation_rail - Material Design 3 Navigation Rail
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
 
 from arknights_video_pipeline.gui.assets.icons.nav_icons import (
@@ -101,7 +100,9 @@ class NavigationRailItem(QWidget):
         self._label.setText(text)
 
     def mousePressEvent(self, event) -> None:
-        self.clicked.emit()
+        # 仅左键触发页面切换，右键/中键不响应
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
         super().mousePressEvent(event)
 
     def _update_style(self) -> None:

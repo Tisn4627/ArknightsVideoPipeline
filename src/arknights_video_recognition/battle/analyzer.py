@@ -26,10 +26,9 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import List, Optional, Sequence, Tuple
 
-import cv2
 import numpy as np
 
-from arknights_video_recognition.config.roi import get_roi, load_roi
+from arknights_video_recognition.config.roi import load_roi
 from arknights_video_recognition.ocr.engine import OcrEngine
 from arknights_video_recognition.tile import get_all_tile_positions
 
@@ -87,6 +86,8 @@ class BattleAnalyzer:
     _DEFAULT_SKILL_RECT_MOVE = [-28, -140, 64, 64]
     _DEFAULT_DIR_RECT_MOVE = [-48, -48, 96, 96]
     _DEFAULT_DET_BOX_MOVE = [0, -50, 60, 60]
+    # tile 反查最近邻回退的距离上限（px^2）：720p 下相邻格子约 60px
+    _MAX_TILE_FALLBACK_DIST_SQ = 80 * 80
 
     def __init__(self, ocr_engine: Optional[OcrEngine] = None):
         if ocr_engine is not None:
@@ -131,7 +132,7 @@ class BattleAnalyzer:
     # --- ROI 裁剪 ----------------------------------------------------------
 
     @staticmethod
-    def _is_valid_oper_name(name: str) -> bool:
+    def is_valid_oper_name(name: str) -> bool:
         """校验干员名是否有效（对齐 Maa BattleData.is_name_invalid）。
 
         规则：
@@ -152,7 +153,7 @@ class BattleAnalyzer:
         return True
 
     @staticmethod
-    def _resolve_oper_name(raw_name: str) -> Optional[str]:
+    def resolve_oper_name(raw_name: str) -> Optional[str]:
         """OCR 干员名模糊校正，返回标准名；未匹配返回 None。
 
         复用 FormationAnalyzer 的别名索引（battle_data.json），先精确别名
@@ -161,10 +162,10 @@ class BattleAnalyzer:
         """
         if not raw_name:
             return None
-        from arknights_video_recognition.formation.analyzer import _load_alias_index
+        from arknights_video_recognition.formation.analyzer import load_alias_index
         import difflib
 
-        aliases, mapping = _load_alias_index()
+        aliases, mapping = load_alias_index()
         if raw_name in mapping:
             return mapping[raw_name]
         has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in raw_name)
@@ -246,10 +247,21 @@ class BattleAnalyzer:
             candidates.sort(key=lambda c: c[0])
             return candidates[0][1]
 
-        # 无命中回退：偏移后 rect 中心做最近邻
-        return screen_pos_to_tile(
+        # 无命中时的受限最近邻（偏离 Maa rect.include 的部分保留，但加
+        # 距离上限）：无上限时 YOLO 误检框（UI 元素等）会被强行安到
+        # 最近格子，幽灵 tile 进入整帧集合投票后产生假 newcomer/假
+        # Deploy。720p 下相邻格子约 60px，取 80px 半径拦截离谱投影
+        nearest = screen_pos_to_tile(
             (rect_cx, rect_cy), level, screen_size, positions=positions
         )
+        if nearest is None:
+            return None
+        row_i, col_i = nearest
+        tx, ty = positions[row_i][col_i]
+        dist_sq = (tx - rect_cx) ** 2 + (ty - rect_cy) ** 2
+        if dist_sq <= self._MAX_TILE_FALLBACK_DIST_SQ:
+            return nearest
+        return None
 
     # --- 双指针主循环（对齐 Maa _run） ------------------------------------
 
@@ -273,7 +285,6 @@ class BattleAnalyzer:
         clips: Sequence,
         detector,
         classifier,
-        matcher,
         formation_opers: Sequence,
         level: dict,
         screen_size: Sequence[int],
@@ -305,6 +316,13 @@ class BattleAnalyzer:
         actions: List[Action] = []
         if not clips:
             return actions
+
+        # 状态重置：这些映射仅在 __init__ 初始化，同一实例跑第二个视频
+        # 会继承上一局的格子↔干员映射并产出错误动作
+        self.operator_locations.clear()
+        self.location_operators.clear()
+        self.all_avatars.clear()
+        self._deploy_times.clear()
 
         try:
             positions = get_all_tile_positions(level, screen_size)
@@ -378,7 +396,7 @@ class BattleAnalyzer:
                 continue
             # Deploy/Retreat 路径：analyze_clip(clip, pre_valid)
             deploy_actions = self._analyze_clip(
-                clip, pre_valid, detector, classifier, matcher,
+                clip, pre_valid, detector, classifier,
                 formation_opers, level, screen_size, positions,
                 deployment_analyzer, video_frames,
             )
@@ -462,18 +480,23 @@ class BattleAnalyzer:
                 continue
             fo_role = char_roles.get(name)
             if fo_role is None:
-                continue  # 对齐 Maa get_role 永远可用，缺条目则跳过该 fo
-            fo_roles = {fo_role}
-            if name == "阿米娅":
-                fo_roles.add("Warrior")  # 阿米娅特例
+                # char_roles.json 滞后于游戏更新的新干员无职业条目：
+                # 与 match_with_formation 的"缺条目不过滤"降级保持一致，
+                # 跳过会导致该干员永不进入 all_avatars，后续部署只能得到
+                # UnknownDeployment 占位名
+                fo_roles = None  # type: ignore[assignment]
+            else:
+                fo_roles = {fo_role}
+                if name == "阿米娅":
+                    fo_roles.add("Warrior")  # 阿米娅特例
 
             # 对齐 Maa BestMatcher：在所有 role 匹配的 slot 中取最高分
             best_score = -1.0
             best_slot_avatar = None
             for slot in slots:
                 slot_role = slot.get("role")
-                if slot_role not in fo_roles:
-                    continue  # role 硬过滤
+                if fo_roles is not None and slot_role not in fo_roles:
+                    continue  # role 硬过滤（缺条目时放弃过滤）
                 slot_av = slot.get("avatar")
                 if slot_av is None or slot_av.size == 0:
                     continue
@@ -660,7 +683,7 @@ class BattleAnalyzer:
         return []
 
     def _analyze_clip(
-        self, clip, pre_valid, detector, classifier, matcher,
+        self, clip, pre_valid, detector, classifier,
         formation_opers, level, screen_size, positions,
         deployment_analyzer, video_frames,
     ) -> List[Action]:

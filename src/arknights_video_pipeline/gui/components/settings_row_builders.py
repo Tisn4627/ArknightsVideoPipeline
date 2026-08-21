@@ -407,11 +407,9 @@ def build_path_row(
         selector.path_changed.connect(on_changed)
 
     def set_value(val: Any, block_signal: bool = True) -> None:
-        if block_signal:
-            selector.blockSignals(True)
-        selector.set_path(str(val) if val else "")
-        if block_signal:
-            selector.blockSignals(False)
+        # 信号由内部 _edit.textChanged 触发，对 selector 自身调用
+        # blockSignals 无法阻断，必须走 FileSelector 的阻断入口
+        selector.set_path(str(val) if val else "", block_signal=block_signal)
 
     def get_value() -> str:
         return selector.path()

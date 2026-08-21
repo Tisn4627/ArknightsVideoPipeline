@@ -41,16 +41,27 @@ def setup_logger(
 
     # 避免重复添加 handler，但仍更新日志级别以反映最新配置
     if logger.handlers:
-        has_file_handler = False
+        file_handler_ok = False
         for handler in list(logger.handlers):
             if isinstance(handler, RotatingFileHandler):
-                has_file_handler = True
-                if not (log_to_file and log_dir):
+                # 参数未变化时复用现有文件 handler；log_dir/轮转参数
+                # 变化时移除重建，否则运行中切换输出目录后日志仍写入
+                # 旧位置，新旧日志割裂
+                same = (
+                    log_to_file and log_dir
+                    and os.path.abspath(handler.baseFilename)
+                    == os.path.abspath(os.path.join(log_dir, "pipeline.log"))
+                    and handler.maxBytes == max_bytes
+                    and handler.backupCount == backup_count
+                )
+                if not same:
                     logger.removeHandler(handler)
                     handler.close()
+                else:
+                    file_handler_ok = True
             elif isinstance(handler, logging.StreamHandler):
                 handler.setLevel(log_level)
-        if log_to_file and log_dir and not has_file_handler:
+        if log_to_file and log_dir and not file_handler_ok:
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, "pipeline.log")
             file_handler = RotatingFileHandler(
@@ -106,10 +117,21 @@ def get_step_logger(
     log_level: int = logging.INFO,
     log_to_file: bool = True,
 ) -> logging.Logger:
-    """获取步骤子 logger，名称格式: pipeline.<step_name>"""
-    return setup_logger(
-        f"pipeline.{step_name}",
+    """获取步骤子 logger，名称格式: pipeline.<step_name>
+
+    子 logger 自身不挂任何 handler，日志经 propagate 交给父
+    "pipeline" logger 统一输出。若为每个子 logger 单独挂 handler，
+    同一条日志会在控制台/文件中各出现两次，且多个 RotatingFileHandler
+    轮转同一 pipeline.log 时在 Windows 上会因文件占用互相失败。
+    """
+    # 确保父 "pipeline" logger 已按当前参数完成配置
+    setup_logger(
+        "pipeline",
         log_dir=log_dir,
         log_level=log_level,
         log_to_file=log_to_file,
     )
+    child = logging.getLogger(f"pipeline.{step_name}")
+    child.setLevel(log_level)
+    child.propagate = True
+    return child

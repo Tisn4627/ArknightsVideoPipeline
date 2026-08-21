@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest import mock
 
 import pytest
@@ -17,6 +18,45 @@ from arknights_video_pipeline.core.exceptions import CopilotBackendError
 from arknights_video_pipeline.core.maa_backend import MAABackend
 
 _MB = "arknights_video_pipeline.core.maa_backend"
+
+
+class TestShortPathConversion:
+    """MAA 后端的非 ASCII 路径 8.3 短路径转换（Windows 已知敏感区）"""
+
+    def test_ascii_path_yields_existing_path(self, tmp_path) -> None:
+        """纯 ASCII 路径：转换结果必须指向真实存在的文件"""
+        from arknights_video_pipeline.core.video_to_copilot import (
+            _get_short_path_name,
+        )
+
+        target = tmp_path / "v.mp4"
+        target.write_bytes(b"")
+        out = _get_short_path_name(str(target))
+        assert isinstance(out, str) and out
+        # 转换失败时回退原路径，两种情况都应存在
+        assert os.path.exists(out)
+
+    def test_non_ascii_path_never_crashes(self, tmp_path) -> None:
+        """非 ASCII 路径：8.3 被禁用时必须回退原路径而非抛异常"""
+        from arknights_video_pipeline.core.video_to_copilot import (
+            _get_short_path_name,
+        )
+
+        sub = tmp_path / "中文目录"
+        sub.mkdir()
+        target = sub / "视频.mp4"
+        target.write_bytes(b"")
+        out = _get_short_path_name(str(target))
+        assert isinstance(out, str)
+        assert os.path.exists(out)
+
+    def test_is_ascii_path(self) -> None:
+        from arknights_video_pipeline.core.video_to_copilot import (
+            _is_ascii_path,
+        )
+
+        assert _is_ascii_path("C:/video/a.mp4")
+        assert not _is_ascii_path("C:/视频/a.mp4")
 
 
 class TestMAABackend:

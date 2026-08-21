@@ -28,7 +28,6 @@ from typing import Optional
 
 import numpy as np
 
-from arknights_video_recognition.config.roi import get_roi
 from arknights_video_recognition.config.settings import AVATAR_DIR, DATA_DIR, SUPPORT_TEMPLATE
 from arknights_video_recognition.ocr.engine import OcrEngine
 
@@ -37,7 +36,7 @@ from arknights_video_recognition.ocr.engine import OcrEngine
 _alias_index: Optional[tuple[list[str], dict[str, str]]] = None
 
 
-def _load_alias_index() -> tuple[list[str], dict[str, str]]:
+def load_alias_index() -> tuple[list[str], dict[str, str]]:
     """加载 battle_data.json，构建 (别名列表, 别名->标准名 映射)。
 
     每个干员的 name / name_en / name_tw / name_jp / name_kr 均作为
@@ -253,7 +252,7 @@ class FormationAnalyzer:
         """
         if not raw_name:
             return None
-        aliases, mapping = _load_alias_index()
+        aliases, mapping = load_alias_index()
 
         # 1) 精确别名匹配（含繁体/英/日/韩名）
         if raw_name in mapping:

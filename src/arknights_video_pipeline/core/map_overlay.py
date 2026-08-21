@@ -196,9 +196,10 @@ def _with_alpha(hex_color: str, alpha: float) -> str:
 
 
 def _number_canvas(text: str, font_size: float, cfg: dict, font_path: str) -> Canvas:
-    """构建地图数字的 Canvas（金色 + 阴影 + 可选半透明背景框）"""
+    """构建地图数字的 Canvas（白色 + 阴影 + 可选半透明背景框）"""
     canvas = Canvas().font_family(font_path).font_size(font_size).color(
-        cfg.get("number_color", "#FFD700")
+        # 回退值须与 DEFAULT_MAP_OVERLAY_CONFIG 一致（白色、默认不打底）
+        cfg.get("number_color", "#FFFFFF")
     )
     if cfg.get("number_shadow_enabled", True):
         canvas = canvas.text_shadows(
@@ -211,7 +212,7 @@ def _number_canvas(text: str, font_size: float, cfg: dict, font_path: str) -> Ca
                 color=cfg.get("number_shadow_color", "#000000"),
             )
         )
-    if cfg.get("number_bg_enabled", True):
+    if cfg.get("number_bg_enabled", False):
         canvas = canvas.background_color(
             _with_alpha(cfg.get("number_bg_color", "#000000"), cfg.get("number_bg_alpha", 0.45))
         )

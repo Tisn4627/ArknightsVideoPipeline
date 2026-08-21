@@ -157,8 +157,13 @@ class OperatorDetector:
         # -> [5, N] -> [N, 5]
         preds = out[0].T  # [N, 5]
 
-        if preds.shape[1] < 5:
-            return []
+        if preds.shape[1] != 5:
+            # 单类别模型通道数固定为 5；若上游 onnx 更新为多类模型，
+            # 第 5 列不再是 conf，继续解析会静默产出垃圾框——显式报错
+            raise ValueError(
+                f"operators_det.onnx 输出形状异常: {out.shape}，"
+                "期望单类别检测模型（通道数=5），请更新或回退模型文件"
+            )
 
         conf = preds[:, 4]
         mask = conf >= conf_threshold

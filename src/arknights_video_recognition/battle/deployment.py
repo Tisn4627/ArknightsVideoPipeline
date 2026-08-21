@@ -30,7 +30,6 @@ from arknights_video_recognition.config.settings import (
     DEPLOYMENT_FLAG_THRESHOLD,
     DEPLOYMENT_MATCH_THRESHOLD,
     DEPLOYMENT_NAME_MATCH_THRESHOLD,
-    TEMPLATE_DIR,
 )
 
 

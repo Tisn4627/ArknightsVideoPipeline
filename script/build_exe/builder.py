@@ -26,7 +26,6 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from script.build_exe.analyzer import DependencyAnalyzer
 from script.build_exe.launchers import get_launcher
@@ -116,14 +115,26 @@ _ALWAYS_EXCLUDE: list[str] = [
     "sphinx",
 ]
 
-# 始终排除的测试模块/子包（确保打包产物不含测试代码）
+# 始终排除的测试模块/子包（确保打包产物不含测试代码）。
+# 测试子模块清单动态派生自 tests 目录实际文件——硬编码清单会随目录
+# 增删漂移（此前 test_app_icon 等就漏在清单外，只是没人断言到）
+def _discover_test_modules() -> list[str]:
+    try:
+        tests_dir = (
+            Path(__file__).resolve().parents[2]
+            / "src" / "arknights_video_pipeline" / "tests"
+        )
+        return sorted(
+            f"arknights_video_pipeline.tests.{p.stem}"
+            for p in tests_dir.glob("test_*.py")
+        )
+    except OSError:
+        return []
+
+
 _TEST_EXCLUDES: list[str] = [
     "arknights_video_pipeline.tests",
-    "arknights_video_pipeline.tests.test_batch_service",
-    "arknights_video_pipeline.tests.test_batch_cli",
-    "arknights_video_pipeline.tests.test_batch_video_list",
-    "arknights_video_pipeline.tests.test_filename_encoding",
-    "arknights_video_pipeline.tests.test_titlebar",
+    *_discover_test_modules(),
     "tests",
     "test",
     "unittest",
@@ -417,7 +428,7 @@ class BuildManager:
                 f"未找到项目包: {avp_init}\n"
                 f"请确认 src/arknights_video_pipeline/ 目录存在"
             )
-        print(f"  [OK] 项目包: arknights_video_pipeline")
+        print("  [OK] 项目包: arknights_video_pipeline")
 
         # 检查图标文件（如果指定）
         if self.config.icon:
@@ -579,7 +590,7 @@ class BuildManager:
 
         # 记录完整命令（用于调试）
         self._pyinstaller_cmd = " ".join(args)
-        print(f"  [INFO] PyInstaller 命令:")
+        print("  [INFO] PyInstaller 命令:")
         print(f"  {self._pyinstaller_cmd}")
         print()
 
@@ -861,7 +872,13 @@ class BuildManager:
                     "--add-data",
                     f"{resource_dir}{sep}resource",
                 ])
-                print(f"  [INFO] 包含 resource 目录")
+                print("  [INFO] 包含 resource 目录")
+                if self.config.onefile:
+                    print(
+                        "  [WARN] onefile + include_resource 会把约 216MB 资源嵌入"
+                        " exe，每次启动都需解压到临时目录，启动显著变慢；"
+                        "建议改用 onedir 模式"
+                    )
             else:
                 print(f"  [WARN] resource 目录不存在，跳过: {resource_dir}")
 
@@ -966,7 +983,8 @@ class BuildManager:
         ]
 
         if self.config.mode == "gui":
-            lines.append(f"       {self.config.name}.exe -- --init-config all")
+            # 注意不要加 "--"：argparse 会把其后内容当位置参数导致报错
+            lines.append(f"       {self.config.name}.exe --init-config all")
         elif self.config.mode == "cli":
             lines.append(f"       {self.config.name}.exe --init-config all")
         else:
@@ -981,7 +999,10 @@ class BuildManager:
         ])
 
         if self.config.include_resource:
-            lines.append("     (已随程序打包，如需替换可覆盖此目录)")
+            lines.append(
+                "     (已随程序打包，运行时优先使用 exe 旁的此目录，"
+                "如需替换资源直接覆盖即可)"
+            )
         else:
             lines.append("     (未打包，需从项目源码复制)")
 

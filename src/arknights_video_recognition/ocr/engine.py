@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
@@ -40,6 +41,9 @@ class OcrSource(str, Enum):
 
 # RapidOCR 实例缓存：同一 source 只加载一次，避免重复加载模型
 _ENGINE_CACHE: dict[str, RapidOCR] = {}
+# 保护 _ENGINE_CACHE 构造与共享实例上的调用（text_score 临时改写）；
+# 也顺带串行化推理，避免并发 worker 的阈值互相踩踏
+_ENGINE_LOCK = threading.RLock()
 
 # Maa finetune 模型文件位置
 _MAA_DET_ONNX = OCR_MAA_DIR / "det" / "inference.onnx"
@@ -87,18 +91,22 @@ def _build_default_engine() -> RapidOCR:
 
 
 def _get_engine(source: str) -> RapidOCR:
-    """按 source 取（必要时构造并缓存）RapidOCR 实例。"""
-    if source not in _ENGINE_CACHE:
-        if source == OcrSource.MAA_MODEL.value:
-            _ENGINE_CACHE[source] = _build_maa_engine()
-        elif source == OcrSource.DEFAULT.value:
-            _ENGINE_CACHE[source] = _build_default_engine()
-        else:
-            raise ValueError(
-                f"未知的 OCR source: {source!r}，可选: "
-                f"{OcrSource.MAA_MODEL.value}, {OcrSource.DEFAULT.value}"
-            )
-    return _ENGINE_CACHE[source]
+    """按 source 取（必要时构造并缓存）RapidOCR 实例。
+
+    加锁保护：批量并发模式下多个 worker 线程可能同时首次触发构造。
+    """
+    with _ENGINE_LOCK:
+        if source not in _ENGINE_CACHE:
+            if source == OcrSource.MAA_MODEL.value:
+                _ENGINE_CACHE[source] = _build_maa_engine()
+            elif source == OcrSource.DEFAULT.value:
+                _ENGINE_CACHE[source] = _build_default_engine()
+            else:
+                raise ValueError(
+                    f"未知的 OCR source: {source!r}，可选: "
+                    f"{OcrSource.MAA_MODEL.value}, {OcrSource.DEFAULT.value}"
+                )
+        return _ENGINE_CACHE[source]
 
 
 def _load_equivalence_rules(path: Path) -> list[tuple[list[str], str]]:
@@ -183,6 +191,11 @@ class OcrEngine:
         # RapidOCR 实例按 source 缓存，构造较慢，确保每个 source 只加载一次
         self._ocr = _get_engine(source)
         self._equivalence_rules = _load_equivalence_rules(_OCR_CONFIG_PATH)
+        # 预构建字符映射表：规则集是静态的，逐识别项重建 dict 是纯浪费
+        self._equivalence_map: dict[str, str] = {}
+        for froms, to in self._equivalence_rules:
+            for ch in froms:
+                self._equivalence_map[ch] = to
         # 读取 ocrReplace 正则替换规则与 replace_full 开关，并预编译正则
         replace_map, replace_full = _load_replace_rules(_OCR_CONFIG_PATH)
         self.set_replace(replace_map, replace_full)
@@ -205,13 +218,9 @@ class OcrEngine:
 
     def _apply_equivalence(self, text: str) -> str:
         """按等价类规则对识别文本做替换。无规则时原样返回。"""
-        if not self._equivalence_rules or not text:
+        if not self._equivalence_map or not text:
             return text
-        mapping: dict[str, str] = {}
-        for froms, to in self._equivalence_rules:
-            for ch in froms:
-                mapping[ch] = to
-        return "".join(mapping.get(ch, ch) for ch in text)
+        return "".join(self._equivalence_map.get(ch, ch) for ch in text)
 
     def _apply_replace(self, text: str) -> str:
         """对 OCR 文本应用正则替换规则。"""
@@ -255,19 +264,29 @@ class OcrEngine:
         img = np.asarray(image)
         offset = (0, 0)
         if roi is not None:
-            x, y, w, h = roi
-            img = img[y:y + h, x:x + w]
-            offset = (int(x), int(y))
+            x, y, w, h = (int(v) for v in roi)
+            # 边界钳制：负坐标会触发 numpy 回绕取到画面尾部，越界 w/h
+            # 会被静默截断；无效 ROI 直接返回空而不是"看似正常"的错裁剪
+            x0, y0 = max(0, x), max(0, y)
+            x1 = min(img.shape[1], x + w)
+            y1 = min(img.shape[0], y + h)
+            if x1 <= x0 or y1 <= y0:
+                return []
+            img = img[y0:y1, x0:x1]
+            offset = (x0, y0)
 
-        # 临时调整 text_score（如需），调用后恢复
-        original_score = getattr(self._ocr, "text_score", None)
-        if text_score is not None and original_score is not None:
-            self._ocr.text_score = text_score
-        try:
-            result, _ = self._ocr(img)
-        finally:
+        # 共享 RapidOCR 实例上的调用全程持锁：text_score 的临时改写
+        # 在并发 worker 下会互相踩踏（见 _ENGINE_LOCK 说明）
+        with _ENGINE_LOCK:
+            # 临时调整 text_score（如需），调用后恢复
+            original_score = getattr(self._ocr, "text_score", None)
             if text_score is not None and original_score is not None:
-                self._ocr.text_score = original_score
+                self._ocr.text_score = text_score
+            try:
+                result, _ = self._ocr(img)
+            finally:
+                if text_score is not None and original_score is not None:
+                    self._ocr.text_score = original_score
         if not result:
             return []
 

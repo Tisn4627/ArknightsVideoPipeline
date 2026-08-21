@@ -83,8 +83,21 @@ class FileSelector(QWidget):
     def path(self) -> str:
         return self._edit.text().strip()
 
-    def set_path(self, path: str) -> None:
+    def set_path(self, path: str, block_signal: bool = False) -> None:
+        """设置路径文本。
+
+        Args:
+            path: 要写入的路径。
+            block_signal: True 时阻断 ``path_changed`` 发射。用于程序化
+                回填（加载配置/重置默认值）场景——信号由内部
+                ``_edit.textChanged`` 触发，对 FileSelector 自身调用
+                ``blockSignals`` 无法阻断它，必须直接阻断子输入框。
+        """
+        if block_signal:
+            self._edit.blockSignals(True)
         self._edit.setText(path)
+        if block_signal:
+            self._edit.blockSignals(False)
 
     def set_valid(self, valid: bool) -> None:
         """设置校验状态：valid=False 时显示 2px error 红色边框"""

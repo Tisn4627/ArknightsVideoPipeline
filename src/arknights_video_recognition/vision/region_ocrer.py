@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -57,8 +56,6 @@ class RegionOCRer:
         self._bin_trim_high: int = 0
         self._bottom_line_height: int = 0
         self._width_threshold: int = 10
-        self._replace_map: List = []
-        self._replace_full: bool = False
 
     # --- 配置 -------------------------------------------------------------
 
@@ -80,68 +77,12 @@ class RegionOCRer:
         self._bin_trim_high = int(high)
 
     def set_bottom_line_height(self, height: int) -> None:
-        """设置底部裁剪高度（去除装饰线）。默认 3。"""
+        """设置底部裁剪高度（去除装饰线）。默认 0（不裁剪）。"""
         self._bottom_line_height = int(height)
 
     def set_width_threshold(self, width: int) -> None:
         """设置最小有效宽度。裁剪后宽度 < 此值返回 None。默认 10。"""
         self._width_threshold = int(width)
-
-    def set_replace(self, replace_map: List, replace_full: bool) -> None:
-        """设置 OCR 后正则替换规则。
-
-        Parameters
-        ----------
-        replace_map:
-            正则替换列表，每条 ``[pattern, replacement]``。
-        replace_full:
-            True 时整串匹配才替换，False 时部分匹配即替换。
-        """
-        self._replace_map = list(replace_map) if replace_map else []
-        self._replace_full = bool(replace_full)
-
-    # --- 内部辅助 ---------------------------------------------------------
-
-    def _apply_replace(self, text: str) -> str:
-        """按 replace_map 对识别文本做正则替换，依次应用每条规则。"""
-        if not self._replace_map or not text:
-            return text
-        for rule in self._replace_map:
-            if not rule or len(rule) < 2:
-                continue
-            pattern, replacement = rule[0], rule[1]
-            if self._replace_full:
-                # 整串匹配才替换，支持反向引用
-                m = re.fullmatch(pattern, text)
-                if m is not None:
-                    text = m.expand(replacement)
-            else:
-                # 部分匹配即替换
-                text = re.sub(pattern, replacement, text)
-        return text
-
-    @staticmethod
-    def _find_blank_gap(col_has_content: np.ndarray,
-                        width_threshold: int) -> Optional[int]:
-        """从左往右逐列扫描，返回第一段长度 >= width_threshold 的全零空白块的起始列。
-
-        不存在则返回 None。用于裁掉名字文本之后的装饰块。
-        """
-        if width_threshold <= 0:
-            return None
-        run = 0
-        run_start = -1
-        for i, has in enumerate(col_has_content.tolist()):
-            if has:
-                run = 0
-                run_start = -1
-            else:
-                if run == 0:
-                    run_start = i
-                run += 1
-                if run >= width_threshold:
-                    return run_start
-        return None
 
     # --- 主入口 -----------------------------------------------------------
 
@@ -173,6 +114,10 @@ class RegionOCRer:
             return None
 
         roi_img = image[y0:y1, x0:x1]
+        # rect 契约要求返回原图坐标系下的 ROI 原始几何；后续的底部
+        # 裁剪与 48px 填充只作用于发送给 OCR 的图像，不得污染此处
+        # 记录的宽高
+        roi_w, roi_h = x1 - x0, y1 - y0
 
         # 1. 二值化仅用于空槽检测（判断是否有文字内容）。
         #    RapidOCR (PaddleOCR) 自带文本检测，不需要手动裁剪——
@@ -226,10 +171,5 @@ class RegionOCRer:
             items = self._ocr_engine.recognize(roi_img, text_score=0.3)
         text = items[0]["text"] if items else ""
 
-        rect = [
-            x0,
-            y0,
-            int(roi_img.shape[1]),
-            int(roi_img.shape[0]),
-        ]
+        rect = [x0, y0, int(roi_w), int(roi_h)]
         return RegionOcrResult(text=text, rect=rect)

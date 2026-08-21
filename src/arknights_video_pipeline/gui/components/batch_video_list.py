@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import List
 
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QProgressBar,
@@ -478,6 +478,11 @@ class BatchVideoList(QWidget):
             event.ignore()
 
     def dropEvent(self, event) -> None:
+        # 与"添加/清空"按钮一致：批次运行中禁止改动列表，否则列表与
+        # 服务端批次索引错位，且会在运行期间改写 config.video_paths
+        if not self._editable:
+            event.ignore()
+            return
         paths: list[str] = []
         for url in event.mimeData().urls():
             if url.isLocalFile():
@@ -498,6 +503,8 @@ class BatchVideoList(QWidget):
         """
         if row.json_path:
             menu = QMenu(self)
+            # exec 后立即销毁：父控件存活期间反复右键会累积子 QMenu 对象
+            menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             replace_act = menu.addAction(tr("batch.tooltip.json.replace"))
             remove_act = menu.addAction(tr("batch.tooltip.json.remove"))
             chosen = menu.exec(self._json_pos(row.json_button()))

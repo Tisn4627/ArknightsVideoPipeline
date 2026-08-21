@@ -290,6 +290,8 @@
   "tools.recognition.cancel": "Cancel",
   "tools.recognition.open_output": "Open Output Directory",
   "tools.recognition.logs": "Logs",
+  "log_viewer.copy": "Copy",
+  "log_viewer.clear": "Clear",
   "tools.recognition.no_video_title": "No Video Files",
   "tools.recognition.no_video_text": "Please add at least one video file first",
   "tools.recognition.already_running_title": "Running",

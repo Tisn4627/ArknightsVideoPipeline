@@ -311,9 +311,17 @@ class TestCellSize:
         assert size == min(min_w, min_h)
 
     def test_precise_matches_projected_min_edge(self, level):
-        """精确法：(row=3, col=6) 最小边长实测 77.532"""
+        """精确法：单格四角投影的最小边长应与全图近似格尺寸同一量级。
+
+        不再硬编码上游 levels.json 的实测几何（资源每周自动同步，
+        数值漂移会造成无声误报），改为相对比较：既能捕获投影整体
+        错位等回归，又不绑定具体地图数据。
+        """
+        approx = compute_approximate_cell_size(level, (1280, 720))
         size = compute_precise_cell_size(level, (1280, 720), 3, 6)
-        assert abs(size - 77.53) < 0.1
+        # approx 是全图最小格尺寸，透视投影下靠前的大格可合理超出数倍；
+        # 区间只需捕获"投影整体错位/量级错误"类回归
+        assert 0.7 * approx < size < 2.5 * approx
 
     def test_precise_different_cells_differ(self, level):
         """精确法逐格不同（透视投影），且均大于 0"""

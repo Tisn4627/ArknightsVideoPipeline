@@ -291,6 +291,12 @@ def build_copilot_json(combat_data):
     Args:
         combat_data: MAA 识别结果原始数据
     """
+    # 识别结果 JSON 顶层可能是列表/标量（文件损坏或格式变更），
+    # 提前给出明确错误而非在 .get() 处抛裸 AttributeError
+    if combat_data is not None and not isinstance(combat_data, dict):
+        raise ValueError(
+            f"识别结果格式异常：顶层应为对象，实际为 {type(combat_data).__name__}"
+        )
     # 如果识别数据已经是完整格式，直接使用
     # 使用 deepcopy 避免后续修改（doc/actions/opers）影响传入的 combat_data
     if combat_data and "stage_name" in combat_data:
@@ -401,6 +407,12 @@ def video_to_copilot(video_path, config, timeout=None):
 
     try:
         result_json_path = run_maa_recognition(maa_path, video_path, timeout=timeout)
+    except (ValueError, OSError, RuntimeError):
+        # 保持异常类型身份：maa_backend 依赖 ValueError/FileNotFoundError
+        # 的原始类型做 retryable 分类，pipeline 重试逻辑依赖 TimeoutError
+        # （OSError 子类）识别超时；统一包装成 RuntimeError 会让确定性
+        # 失败被无差别重试
+        raise
     except Exception as e:
         raise RuntimeError(f"MAA视频识别失败: {e}") from e
 
@@ -432,14 +444,15 @@ def video_to_copilot(video_path, config, timeout=None):
     opers_count = len(copilot_data.get("opers", []))
     stage_name = copilot_data.get("stage_name", "未知")
 
-    print()
-    print("=" * 50)
-    print("  转换完成!")
-    print(f"  关卡: {stage_name}")
-    print(f"  干员数: {opers_count}")
-    print(f"  操作数: {actions_count}")
-    print(f"  输出: {json_path}")
-    print("=" * 50)
+    # 用 logger 而非 print：本函数会被 GUI/MAA 后端在 --noconsole 的
+    # 打包环境下调用，print 输出会完全丢失
+    logger.info("=" * 50)
+    logger.info("  转换完成!")
+    logger.info(f"  关卡: {stage_name}")
+    logger.info(f"  干员数: {opers_count}")
+    logger.info(f"  操作数: {actions_count}")
+    logger.info(f"  输出: {json_path}")
+    logger.info("=" * 50)
 
     return json_path
 
@@ -455,15 +468,16 @@ def main():
     args = parser.parse_args()
 
     config_path = args.config
+    # --init-config 只依赖 --config 路径，必须先于"未指定 --config 则
+    # 落到 test.mp4 演示流程"处理，否则该开关会被静默忽略
+    if args.init_config and config_path:
+        save_default_config(config_path, DEFAULT_CONFIG)
+        return
+
     if not config_path:
         config = DEFAULT_CONFIG.copy()
     else:
-        # 生成默认配置
-        if args.init_config:
-            save_default_config(config_path, DEFAULT_CONFIG)
-            return
-
-        # 加载配置
+        # 加载配置（文件不存在时先生成默认配置）
         if not os.path.exists(config_path):
             save_default_config(config_path, DEFAULT_CONFIG)
 

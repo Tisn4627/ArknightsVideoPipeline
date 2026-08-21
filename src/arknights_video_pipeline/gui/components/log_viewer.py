@@ -27,6 +27,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QMenu
 
+from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 
 
@@ -175,8 +176,10 @@ class LogViewer(QPlainTextEdit):
 
     def _show_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        copy_action = menu.addAction("复制")
-        clear_action = menu.addAction("清空")
+        # exec 后立即销毁：父控件存活期间反复右键会累积子 QMenu 对象
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        copy_action = menu.addAction(tr("log_viewer.copy"))
+        clear_action = menu.addAction(tr("log_viewer.clear"))
         action = menu.exec(self.mapToGlobal(pos))
         if action == copy_action:
             self.copy()

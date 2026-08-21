@@ -137,10 +137,10 @@ def main() -> int:
             sys.stderr.write(f"[{title}] {text}\\n")
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
-            app = QApplication.instance() or QApplication(sys.argv)
+            QApplication.instance() or QApplication(sys.argv)
+            # QMessageBox.critical 自带模态事件循环，关闭即返回；
+            # 再调 app.exec() 会因已无窗口而永久挂起
             QMessageBox.critical(None, title, text)
-            if app.instance() is not None:
-                app.exec()
         except Exception:
             pass
 
@@ -227,10 +227,10 @@ def _run_gui() -> int:
             sys.stderr.write(f"[{title}] {text}\\n")
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
-            app = QApplication.instance() or QApplication(sys.argv)
+            QApplication.instance() or QApplication(sys.argv)
+            # QMessageBox.critical 自带模态事件循环，关闭即返回；
+            # 再调 app.exec() 会因已无窗口而永久挂起
             QMessageBox.critical(None, title, text)
-            if app.instance() is not None:
-                app.exec()
         except Exception:
             pass
 

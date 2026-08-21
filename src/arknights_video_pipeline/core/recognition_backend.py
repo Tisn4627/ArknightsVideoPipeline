@@ -165,6 +165,12 @@ class RecognitionBackend:
             raise error
 
         # 归一化：补齐 opers 默认值，确保与 MAA 后端输出一致（见 docs/merge_plan.md §5）
+        if not isinstance(job_dict, dict):
+            # 管线异常返回 None/其他类型时给出明确错误，避免在
+            # _normalize_copilot 内部抛裸 AttributeError 误导排障
+            raise RuntimeError(
+                f"Recognition 返回了非法结果: {job_dict!r}"
+            )
         job_dict = _normalize_copilot(job_dict)
 
         # 落盘

@@ -12,7 +12,6 @@ import json
 
 from arknights_video_recognition.config.settings import (
     CONFIG_DIR,
-    DEFAULT_RESOLUTION,
 )
 
 ROI_FILE = CONFIG_DIR / "roi.json"

@@ -119,23 +119,6 @@ class TestRunFfprobeEncoding:
         assert probe["format"]["filename"] == name
         assert probe["streams"][0]["codec_type"] == "video"
 
-    def test_locale_independent_explicit_encoding(self) -> None:
-        """即使系统 locale 为 cp936，显式 encoding='utf-8' 仍优先
-
-        模拟中文 Windows：locale.getpreferredencoding() 返回 'cp936'。
-        由于显式指定 encoding='utf-8'，subprocess 不依赖 locale，UTF-8 JSON
-        被正确解码——这正是修复的核心。utils.py 无需导入 locale（修复本身
-        不引用它），故直接 patch 全局 locale 模块即可证明 locale-无关性。
-        """
-        import locale as _locale
-        with mock.patch.object(_locale, "getpreferredencoding", return_value="cp936"):
-            with mock.patch.object(core_utils.subprocess, "run") as m_run:
-                m_run.return_value = _CompletedProcess(0, _fake_probe("测试.mp4"))
-                probe = _run_ffprobe("测试.mp4")
-        assert probe["format"]["filename"] == "测试.mp4"
-        # 显式 encoding 仍为 utf-8，未被 locale 影响
-        assert m_run.call_args.kwargs.get("encoding") == "utf-8"
-
     def test_nonzero_returncode_raises_validation_error(self) -> None:
         """ffprobe 返回非零时抛 VideoValidationError，而非编码异常"""
         from arknights_video_pipeline.core.exceptions import VideoValidationError

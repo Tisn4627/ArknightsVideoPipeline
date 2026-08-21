@@ -20,7 +20,7 @@ gui.components.settings_page - 设置页面
 from __future__ import annotations
 
 import sys
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -1514,19 +1514,11 @@ class SettingsPage(QWidget):
 
     def set_maa_path(self, path: str) -> None:
         """设置 MAA 路径（阻塞信号，避免触发 maa_path_changed 回写）"""
-        self._maa_selector.blockSignals(True)
-        try:
-            self._maa_selector.set_path(path)
-        finally:
-            self._maa_selector.blockSignals(False)
+        self._maa_selector.set_path(path, block_signal=True)
 
     def set_output_dir(self, path: str) -> None:
         """设置 Output 路径（阻塞信号，避免触发 output_dir_changed 回写）"""
-        self._output_selector.blockSignals(True)
-        try:
-            self._output_selector.set_path(path)
-        finally:
-            self._output_selector.blockSignals(False)
+        self._output_selector.set_path(path, block_signal=True)
 
     def set_log_level(self, level: str) -> None:
         """设置日志级别（阻塞信号，避免触发 log_level_changed 回写）"""
@@ -1691,11 +1683,7 @@ class SettingsPage(QWidget):
         """设置 FFmpeg 路径（阻塞信号，避免触发回写）"""
         if getattr(self, "_ffmpeg_selector", None) is None:
             return
-        self._ffmpeg_selector.blockSignals(True)
-        try:
-            self._ffmpeg_selector.set_path(path)
-        finally:
-            self._ffmpeg_selector.blockSignals(False)
+        self._ffmpeg_selector.set_path(path, block_signal=True)
 
     def set_ffmpeg_enabled(self, enabled: bool) -> None:
         """启用/禁用 FFmpeg 配置控件（流水线运行期间调用）"""
@@ -1948,21 +1936,36 @@ class SettingsPage(QWidget):
         two_col_cards = w >= 720
         two_col_checkboxes = w >= 1000
         vertical_buttons = w < 480
-        self._apply_grid_layout(two_column=two_col_cards)
-        self._reflow_checkbox_grid(two_col=two_col_checkboxes)
-        self._reflow_button_rows(vertical=vertical_buttons)
+        # 断点未跨越时跳过重排：_apply_grid_layout/_reflow_* 是全量
+        # remove/add 操作，连续拖拽窗口时逐帧执行会明显卡顿
+        if (
+            two_col_cards != getattr(self, "_last_two_col_cards", None)
+            or two_col_checkboxes != getattr(self, "_last_two_col_cb", None)
+            or vertical_buttons != getattr(self, "_last_vertical_btn", None)
+        ):
+            self._last_two_col_cards = two_col_cards
+            self._last_two_col_cb = two_col_checkboxes
+            self._last_vertical_btn = vertical_buttons
+            self._apply_grid_layout(two_column=two_col_cards)
+            self._reflow_checkbox_grid(two_col=two_col_checkboxes)
+            self._reflow_button_rows(vertical=vertical_buttons)
         # 页面边距随宽度收缩
         root_layout = self.layout()
         if isinstance(root_layout, QVBoxLayout):
-            if w < 560:
-                root_layout.setContentsMargins(20, 24, 20, 24)
-            else:
-                root_layout.setContentsMargins(40, 40, 40, 40)
+            margin = (20, 24, 20, 24) if w < 560 else (40, 40, 40, 40)
+            if getattr(self, "_last_margins", None) != margin:
+                self._last_margins = margin
+                root_layout.setContentsMargins(*margin)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         # 首次显示时强制根据当前宽度刷新一次布局，避免初始默认布局
         # 与响应式断点不一致（例如默认是 2 列卡片 + 2 列复选框）。
+        # 清除断点缓存以强制 resizeEvent/showEvent 路径真正执行重排
+        for attr in ("_last_two_col_cards", "_last_two_col_cb",
+                     "_last_vertical_btn", "_last_margins"):
+            if hasattr(self, attr):
+                delattr(self, attr)
         if getattr(self, "_cards_grid", None) is not None:
             w = self.width()
             self._apply_grid_layout(two_column=w >= 720)

@@ -15,9 +15,7 @@ from typing import Optional, List, Tuple
 import cv2
 import numpy as np
 
-from arknights_video_recognition.config.roi import get_roi, load_roi
 from arknights_video_recognition.config.settings import (
-    AVATAR_DIR, SUPPORT_TEMPLATE, SUPPORT_MATCH_THRESHOLD,
     SUPPORT_EMPTY_THRESHOLD, START_BUTTON_STABLE_FRAMES,
     SUPPORT_DETECT_MAX_SEC, DATA_DIR, SUPPORT_SLOT_ROI,
     START_BUTTON_FORMATION_ROI,
@@ -38,16 +36,14 @@ class SupportOperatorRecognizer:
         if self.support_template is None:
             raise RuntimeError(f"读取助战空槽模板失败：{self.template_path}")
         self._slot_roi = list(SUPPORT_SLOT_ROI)  # [x, y, w, h]
-        # 预加载头像库：char_*.png 与 sp_char_*.png，每个文件名/图像对
-        self._avatar_lib: List[Tuple[str, np.ndarray]] = []
+        # 预扫描头像库文件名（此处不读图像数据：图像在下方构建 SIFT
+        # 描述子时以 BGRA 单次读入。旧实现先整库读 BGR 存一份、再整库
+        # 重读 BGRA，数百 MB 级资源内存占用直接翻倍且 BGR 份无人消费）
+        self._avatar_files: List[str] = []
         if self.avatar_dir.is_dir():
             candidates = list(self.avatar_dir.glob("char_*.png"))
             candidates.extend(self.avatar_dir.glob("sp_char_*.png"))
-            for p in sorted(candidates):
-                img = cv2.imread(str(p))
-                if img is None:
-                    continue
-                self._avatar_lib.append((p.name, img))
+            self._avatar_files = [p.name for p in sorted(candidates)]
         # 缓存 battle_data.json 的 chars 字典，charId -> {name, ...}
         self._chars_map: dict = {}
         battle_data_path = DATA_DIR / "battle_data.json"
@@ -57,13 +53,9 @@ class SupportOperatorRecognizer:
             self._chars_map = data.get("chars") or {}
         # 别名索引（懒构建）：alias -> 标准中文名，用于校正 OCR 干员名
         self._alias_map: dict = {}
-        # 开始按钮 ROI 与文本（来自 StartButton1 任务）
-        self._start_button_roi = get_roi("StartButton1")
-        start_task = load_roi().get("StartButton1") or {}
-        self._start_button_texts = list(
-            start_task.get("text") or ["开始行动", "开始作战", "开始推演", "开始突袭"]
-        )
-        # 编队页面开始按钮 ROI（修正后，覆盖编队页面的按钮文字区域）
+        # 编队页面开始按钮 ROI（覆盖编队页面的按钮文字区域）。
+        # 注：roi.json 中无 StartButton1 条目，开始按钮检测走
+        # START_BUTTON_FORMATION_ROI + "开始"前缀匹配（见 detect_start_button）
         self._formation_btn_roi = list(START_BUTTON_FORMATION_ROI)
         # 预计算头像库 SIFT 描述子。matchTemplate 对编队页面半身像 vs 库
         # 方形头像无判别力（库头像与编队页面渲染不同源，最高分仅 0.6-0.74
@@ -75,9 +67,9 @@ class SupportOperatorRecognizer:
             dict(algorithm=1, trees=5), dict(checks=50)  # FLANN_INDEX_KDTREE
         )
         self._lib_sift: List[Tuple[str, list, np.ndarray]] = []
-        for fn, _img in self._avatar_lib:
+        for fn in self._avatar_files:
             bgra = cv2.imread(str(self.avatar_dir / fn), cv2.IMREAD_UNCHANGED)
-            if bgra is None or bgra.shape[2] != 4:
+            if bgra is None or bgra.ndim != 3 or bgra.shape[2] != 4:
                 continue
             g = cv2.cvtColor(bgra[:, :, :3], cv2.COLOR_BGR2GRAY)
             kp, des = self._sift.detectAndCompute(g, None)

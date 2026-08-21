@@ -32,6 +32,8 @@ __all__ = ["apply_pictex_patches"]
 _patched = False
 
 _typeface_cache: dict[str, object] = {}
+# value = (typeface 强引用, hb_font)：必须同时持有 typeface 引用，
+# 否则对象被 GC 后 id 可能被新对象复用，导致命中陈旧缓存
 _hb_font_cache: dict[tuple[int, float], tuple] = {}
 
 _original_load_from_file = TypefaceLoader.load_from_file
@@ -45,10 +47,13 @@ def _cached_load_from_file(filepath: str):
 
 
 def _shared_get_or_create_hb_font(self, font):
-    key = (id(font.getTypeface()), font.getSize())
-    if key not in _hb_font_cache:
-        _hb_font_cache[key] = _original_get_or_create_hb_font(self, font)
-    return _hb_font_cache[key]
+    typeface = font.getTypeface()
+    key = (id(typeface), font.getSize())
+    entry = _hb_font_cache.get(key)
+    if entry is None:
+        entry = (typeface, _original_get_or_create_hb_font(self, font))
+        _hb_font_cache[key] = entry
+    return entry[1]
 
 
 def apply_pictex_patches() -> None:

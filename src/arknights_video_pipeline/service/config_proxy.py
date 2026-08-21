@@ -230,12 +230,6 @@ class ConfigProxy(QObject):
     def set_skip_steps(self, steps: set[str]) -> None:
         self.set("skip_steps", list(steps))
 
-    def log_to_file(self) -> bool:
-        return self.get("log_to_file", True)
-
-    def set_log_to_file(self, enabled: bool) -> None:
-        self.set("log_to_file", enabled)
-
     # ── Copilot 后端配置 ──────────────────────────────────
 
     COPILOT_BACKENDS: tuple[str, ...] = ("recognition", "maa")
@@ -365,7 +359,9 @@ class ConfigProxy(QObject):
 
     def set_ffmpeg_path(self, path: str) -> None:
         self.set("ffmpeg_path", path or "")
-        # 同步到 utils 模块全局
+        # 同步到 utils 模块全局。注意：这是进程级共享状态，批量运行
+        # 期间修改会让在途 worker 在下一次子进程解析时读到新值，产生
+        # "半旧半新"批次——GUI 侧应在批次运行中禁用这两项设置
         from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(self.get("ffmpeg_custom_enabled", False), path or "")
 

@@ -18,10 +18,11 @@ def _show_startup_error(title: str, text: str) -> None:
     sys.stderr.write(f"[{title}] {text}\n")
     try:
         from PyQt6.QtWidgets import QApplication, QMessageBox
-        app = QApplication.instance() or QApplication(sys.argv)
+        QApplication.instance() or QApplication(sys.argv)
+        # QMessageBox.critical 自带模态事件循环，弹窗关闭后直接返回；
+        # 不能再调用 app.exec()——此时已无任何窗口，事件循环启动后
+        # 永远等不到 quitOnLastWindowClosed，进程会假死只能任务管理器杀
         QMessageBox.critical(None, title, text)
-        if app.instance() is not None:
-            app.exec()
     except Exception:
         # PyQt6 未安装或无法初始化，仅 stderr 输出
         pass
@@ -66,4 +67,8 @@ if __name__ == "__main__":
                 _s.flush()
             except Exception:
                 pass
+    # 有意使用 os._exit 立即退出：绕过 Python 关机序列中残留的
+    # 非 daemon 线程/Qt 对象析构崩溃（GUI 退出阶段的已知问题源）。
+    # stdout/stderr 已在上方手工 flush，其余 atexit 清理被跳过是
+    # 接受的代价
     os._exit(_exit_code)

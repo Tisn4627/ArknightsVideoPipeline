@@ -9,6 +9,8 @@ Maa 的 ``BattlefieldMatcher::pause_button_analyze`` /
 """
 from __future__ import annotations
 
+import logging
+
 import cv2
 import numpy as np
 
@@ -20,6 +22,8 @@ from arknights_video_recognition.config.settings import (
     BATTLE_SPEED_ROI,
     BATTLE_SPEED_VALUE_THR,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BattleButtonDetector:
@@ -67,14 +71,29 @@ class BattleButtonDetector:
 
             oper_is_clicked = !speed_button || !pause_button
 
+        fail-closed：无效帧/ROI 越界时返回 False（视为详情页未打开）。
+        旧实现返回 True，会让切片器把普通战斗帧当详情页、误触发
+        ends_oper_name OCR；按钮检测失败（has_* 返回 False）同样按
+        未打开处理并记日志便于发现配置问题。
+
         Parameters
         ----------
         frame:
-            BGR 帧。为 None 或空时视为按钮消失（返回 True）。
+            BGR 帧。为 None 或空时返回 False。
         """
         if frame is None or frame.size == 0:
-            return True
-        return not self.has_speed(frame) or not self.has_pause(frame)
+            return False
+        has_speed = self.has_speed(frame)
+        has_pause = self.has_pause(frame)
+        if not (has_speed and has_pause):
+            # 区分"按钮真的消失（详情页打开）"与"ROI 检测失败"：
+            # _roi_gray 返回 None 时两个按钮都测不到，此时不能断言打开
+            speed_roi = self._roi_gray(frame, BATTLE_SPEED_ROI)
+            pause_roi = self._roi_gray(frame, BATTLE_PAUSE_ROI)
+            if speed_roi is None or pause_roi is None:
+                logger.warning("详情页按钮 ROI 越界或帧无效，按未打开处理")
+                return False
+        return not has_speed or not has_pause
 
     @staticmethod
     def _roi_gray(

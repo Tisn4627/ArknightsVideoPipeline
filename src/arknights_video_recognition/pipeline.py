@@ -22,7 +22,6 @@ import numpy as np
 
 from arknights_video_recognition.battle import (
     Action as BattleAction,
-    AvatarMatcher,
     BattleAnalyzer,
     BattleClassifier,
     OperatorDetector,
@@ -31,8 +30,6 @@ from arknights_video_recognition.config.settings import (
     DEFAULT_OCR_SOURCE,
     DEFAULT_RESOLUTION,
     MINIMUM_REQUIRED,
-    RESOURCE_DIR,
-    ResourceMissingError,
     check_resource,
 )
 from arknights_video_recognition.copilot import (
@@ -66,6 +63,16 @@ _BATTLE_DIR_TO_COPILOT = {
     "Up": Direction.UP,
     "None": Direction.NONE,
 }
+
+# 部署栏 diff 匹配失败时的占位干员名（battle/analyzer.py 的
+# UnknownDeployment / Unknown_EndsEmpty，以及内部哨兵 Unknown）。
+# 这些名字进入最终 copilot JSON 后，MAA 执行到该动作会因干员不存在
+# 而卡住，转换层必须过滤
+_PLACEHOLDER_OPER_NAMES = frozenset({
+    "Unknown",
+    "UnknownDeployment",
+    "Unknown_EndsEmpty",
+})
 
 
 class StageNotRecognizedError(ValueError):
@@ -116,6 +123,15 @@ class VideoRecognitionPipeline:
 
         self.ocr_source = ocr_source
         self.resolution = (int(resolution[0]), int(resolution[1]))
+        # 所有 ROI 常量与模板尺寸均按 1280x720 标定（config/roi.py），
+        # 其他分辨率下模板匹配与 ROI 裁剪会整体错位且无多尺度回退，
+        # 识别结果静默全废——必须 fail-fast 而不是带病运行
+        if tuple(self.resolution) != tuple(DEFAULT_RESOLUTION):
+            raise ValueError(
+                f"暂仅支持 {DEFAULT_RESOLUTION[0]}x{DEFAULT_RESOLUTION[1]} "
+                f"识别分辨率（所有 ROI 按此标定），当前传入: "
+                f"{self.resolution[0]}x{self.resolution[1]}"
+            )
 
         # 各子模块统一复用同一个 OCR 引擎（OcrEngine 内部按 source 缓存）
         self.ocr_engine = OcrEngine(source=ocr_source)
@@ -123,8 +139,9 @@ class VideoRecognitionPipeline:
         self.stage_recognizer = StageRecognizer(ocr_engine=self.ocr_engine)
         self.operator_detector = OperatorDetector()
         self.battle_classifier = BattleClassifier()
-        self.avatar_matcher = AvatarMatcher()
         self.battle_analyzer = BattleAnalyzer(ocr_engine=self.ocr_engine)
+        # 注：AvatarMatcher（灰度多尺度场上匹配）当前未接入动作推断链路，
+        # 场上定名走部署栏头像回填路线，故不再构造
 
         # 复用 FormationAnalyzer 的懒加载 support_recognizer（用于编队页开始按钮检测）
         self._support_recognizer = self.formation_analyzer.support_recognizer
@@ -167,6 +184,13 @@ class VideoRecognitionPipeline:
             # 2) 采样开头若干帧做编队 + 关卡识别
             opening = self._scan_formation_frames(video_frames)
             formation_opers = self._recognize_formation(opening)
+            if not formation_opers:
+                # 编队全失败时不得继续：否则会切片、推断并产出 opers 为空、
+                # Deploy 动作全是占位名的"结构合法但完全不可用"作业
+                raise StageNotRecognizedError(
+                    "编队识别失败：视频开头未识别到任何编队干员。"
+                    "请确认视频满足 MAA 要求（1080P、16:9、开头为编队页）"
+                )
             level = self._recognize_stage(
                 opening, stage_override=stage_override, video_frames=video_frames,
             )
@@ -192,7 +216,6 @@ class VideoRecognitionPipeline:
                 clips,
                 self.operator_detector,
                 self.battle_classifier,
-                self.avatar_matcher,
                 formation_opers,
                 level,
                 self.resolution,
@@ -440,6 +463,17 @@ class VideoRecognitionPipeline:
         for ba in battle_actions:
             act_type = _BATTLE_TYPE_TO_COPILOT.get(ba.type, ba.type)
 
+            # 过滤占位名 Deploy：部署栏 diff 匹配失败的 slot 名（见
+            # _PLACEHOLDER_OPER_NAMES）进入作业后会让 MAA 卡死在该动作
+            if act_type == ActionType.DEPLOY and (
+                not ba.name or ba.name in _PLACEHOLDER_OPER_NAMES
+            ):
+                print(
+                    f"警告：丢弃无法确定干员名的 Deploy 动作（t={ba.ts:.1f}s）",
+                    file=sys.stderr,
+                )
+                continue
+
             # ba.location 已是 [col, row]（对齐 Maa [loc.x, loc.y]），直接透传
             location: Optional[List[int]] = None
             if ba.location is not None and len(ba.location) >= 2:
@@ -473,5 +507,5 @@ class VideoRecognitionPipeline:
 
         video_stem = Path(video_path).stem
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        cache_dir = RESOURCE_DIR.parent / "cache"
+        cache_dir = Path.cwd() / "cache"
         return cache_dir / f"MaaAI_{stage_id}_{video_stem}_{timestamp}.json"

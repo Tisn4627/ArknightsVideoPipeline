@@ -95,7 +95,10 @@ def build_sync_plan(tilepos_dir, maa_dir):
 def sync_file(src, dest_dir, dry_run):
     """同步单个文件到目标目录（保留文件名）。
 
-    返回 (ok, message)：ok=True 表示已处理（含 dry-run），ok=False 表示源缺失已跳过。
+    与 sync_avatars 一致做 mtime+size 幂等判断：目标已与源相同则跳过，
+    避免每次运行都重复拷贝大体积 ONNX/模板。
+
+    返回 (ok, message)：ok=True 表示已处理（含 dry-run/跳过），ok=False 表示源缺失已跳过。
     """
     src = Path(src)
     dest_dir = Path(dest_dir)
@@ -105,9 +108,21 @@ def sync_file(src, dest_dir, dry_run):
     size = src.stat().st_size
     if dry_run:
         return True, f"✓ [dry-run] {src} -> {dest} ({format_size(size)})"
+    # 幂等：mtime 与 size 都一致视为已同步
+    if dest.is_file() and _same_file(src, dest):
+        return True, f"= 已是最新，跳过: {dest}"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)  # copy2 保留时间戳
+    try:
+        shutil.copy2(src, dest)  # copy2 保留时间戳
+    except OSError as exc:
+        return False, f"✗ 拷贝失败（文件被占用？）: {src} -> {dest}: {exc}"
     return True, f"✓ {src} -> {dest} ({format_size(size)})"
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """mtime（1 秒精度）与大小均一致视为同一文件。"""
+    sa, sb = a.stat(), b.stat()
+    return sa.st_size == sb.st_size and int(sa.st_mtime) == int(sb.st_mtime)
 
 
 def regen_roi(tasks_json_path, roi_json_path, dry_run):
@@ -117,8 +132,12 @@ def regen_roi(tasks_json_path, roi_json_path, dry_run):
     if not tasks_json_path.is_file():
         print(f"✗ 无法重新生成 roi.json：未找到 {tasks_json_path}")
         return False
-    with open(tasks_json_path, encoding="utf-8") as f:
-        tasks = json.load(f)
+    try:
+        with open(tasks_json_path, encoding="utf-8") as f:
+            tasks = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"✗ tasks.json 解析失败: {tasks_json_path}: {exc}")
+        return False
     roi = {}
     missing = []
     for name in VIDEO_RECOGNITION_TASK_NAMES:
@@ -151,8 +170,12 @@ def sync_ocr_replace(tasks_json_path, ocr_config_path, dry_run):
     if not tasks_json_path.is_file():
         print(f"✗ 未找到 {tasks_json_path}，跳过 CharsNameOcrReplace 同步")
         return False
-    with open(tasks_json_path, encoding="utf-8") as f:
-        tasks = json.load(f)
+    try:
+        with open(tasks_json_path, encoding="utf-8") as f:
+            tasks = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"✗ tasks.json 解析失败: {tasks_json_path}: {exc}")
+        return False
     task = tasks.get("CharsNameOcrReplace")
     if not task or "ocrReplace" not in task:
         print("✗ tasks.json 中未找到 CharsNameOcrReplace.ocrReplace，跳过")
@@ -168,8 +191,12 @@ def sync_ocr_replace(tasks_json_path, ocr_config_path, dry_run):
         return True
     # 读取现有 ocr_config.json，保留其它字段（如 equivalence_classes）
     if ocr_config_path.is_file():
-        with open(ocr_config_path, encoding="utf-8") as f:
-            config = json.load(f)
+        try:
+            with open(ocr_config_path, encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"✗ ocr_config.json 解析失败: {ocr_config_path}: {exc}")
+            return False
     else:
         config = {}
     config["ocrReplace"] = new_ocr_replace
@@ -263,16 +290,25 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--dry-run", action="store_true", help="只打印将做什么，不实际复制")
+    # 默认路径定位：resource 取本仓库根；上游仓库默认取仓库根的同级目录。
+    # 原为 /workspace、/Maa 等 POSIX 绝对路径，Windows 上会解析为当前
+    # 盘符根目录（如 C:\Maa），几乎必然不存在，首次运行即报错退出
+    _REPO_ROOT = Path(__file__).resolve().parents[1]
     parser.add_argument(
-        "--resource-dir", default="/workspace/resource", help="目标 resource 根目录"
+        "--resource-dir", default=str(_REPO_ROOT / "resource"),
+        help="目标 resource 根目录",
     )
     parser.add_argument(
-        "--tilepos-dir", default="/Arknights-Tile-Pos", help="Arknights-Tile-Pos 仓库根目录"
+        "--tilepos-dir", default=str(_REPO_ROOT.parent / "Arknights-Tile-Pos"),
+        help="Arknights-Tile-Pos 仓库根目录",
     )
-    parser.add_argument("--maa-dir", default="/Maa", help="Maa 仓库根目录")
+    parser.add_argument(
+        "--maa-dir", default=str(_REPO_ROOT.parent / "Maa"),
+        help="Maa 仓库根目录",
+    )
     parser.add_argument(
         "--arknights-resources-dir",
-        default="/ArknightsResources",
+        default=str(_REPO_ROOT.parent / "ArknightsResources"),
         help="ArknightsResources 仓库根目录（干员头像来源）",
     )
     parser.add_argument(
@@ -338,6 +374,7 @@ def main():
             f"未找到 {arknights_resources_dir}，请先 git clone "
             f"https://github.com/yuanyan3060/ArknightsGameResource，跳过头像同步"
         )
+        fail_count += 1
     else:
         avatar_src = arknights_resources_dir / "avatar"
         avatar_dst = resource_dir / "avatar"
@@ -358,13 +395,15 @@ def main():
     print("--- CharsNameOcrReplace 规则同步 ---")
     tasks_json = maa_dir / "resource" / "tasks" / "tasks.json"
     ocr_config = resource_dir / "data" / "ocr_config.json"
-    sync_ocr_replace(tasks_json, ocr_config, args.dry_run)
+    if not sync_ocr_replace(tasks_json, ocr_config, args.dry_run):
+        fail_count += 1
 
     # 处理 roi.json：常规同步不覆盖；--regen-roi 时重新生成
     roi_json = resource_dir / "config" / "roi.json"
     if args.regen_roi:
         print()
-        regen_roi(tasks_json, roi_json, args.dry_run)
+        if not regen_roi(tasks_json, roi_json, args.dry_run):
+            fail_count += 1
     elif roi_json.exists():
         print(
             f"ℹ 已保留 {roi_json}（项目自有产物，未被覆盖；如需重新生成请使用 --regen-roi）"

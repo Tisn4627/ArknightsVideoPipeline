@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
 
@@ -17,6 +18,8 @@ import numpy as np
 from arknights_video_recognition.config.roi import get_roi, load_roi
 from arknights_video_recognition.ocr.engine import OcrEngine
 from arknights_video_recognition.tile import find_level
+
+logger = logging.getLogger(__name__)
 
 # BattleStageName ROI 兜底值（与 resource/config/roi.json 一致，缺失时使用）
 _DEFAULT_STAGE_ROI = [250, 435, 800, 100]
@@ -60,13 +63,19 @@ def _normalize_code(text: str) -> str:
     """对 code 类文本做更激进的归一化：把易混字母还原为数字。
 
     OCR 常把 ``2-10`` 识成 ``2-l0`` / ``2-IO``。仅当文本看起来像 code
-    （归一化后只含 ascii 字母数字与连字符）时启用，避免破坏中文名。
+    （归一化后只含 ascii 字母数字与连字符）时启用；字符还原只作用于
+    最后一个连字符之后的段（关卡序号），不动字母前缀——否则前缀里的
+    易混字母（如 ``LS-6``）会被归一成数字造成结构性撞车。
     """
     norm = _normalize(text)
-    if norm and re.fullmatch(r"[a-z0-9\-]+", norm):
-        table = str.maketrans({"i": "1", "l": "1", "o": "0", "s": "5", "z": "2"})
-        return norm.translate(table)
-    return norm
+    if not (norm and re.fullmatch(r"[a-z0-9\-]+", norm)):
+        return norm
+    head, sep, tail = norm.rpartition("-")
+    if not sep:
+        # 无连字符不做字符还原，避免纯字母串被误转成数字
+        return norm
+    table = str.maketrans({"i": "1", "l": "1", "o": "0", "s": "5", "z": "2"})
+    return head + sep + tail.translate(table)
 
 
 class StageRecognizer:
@@ -90,7 +99,7 @@ class StageRecognizer:
         """识别视频帧中的关卡名，返回命中的关卡 dict，未命中返回 None。"""
         if frame is None:
             return None
-        roi = get_roi("BattleStageName") or _DEFAULT_STAGE_ROI
+        roi = self._stage_roi()
         text = self.ocr.recognize_text(frame, roi=roi)
         return self._match(text)
 
@@ -103,10 +112,21 @@ class StageRecognizer:
         """
         if frame is None:
             return None, []
-        roi = get_roi("BattleStageName") or _DEFAULT_STAGE_ROI
+        roi = self._stage_roi()
         text = self.ocr.recognize_text(frame, roi=roi)
         level = self._match(text)
         return level, []
+
+    @staticmethod
+    def _stage_roi() -> list[int]:
+        """取 BattleStageName ROI，缺失时回退内置 720p 兜底值并告警。"""
+        roi = get_roi("BattleStageName")
+        if roi is not None:
+            return roi
+        # 双真相漂移难以察觉，资源缺失必须可被发现；兜底值按 720p
+        # 坐标空间标定，非 720p 输入下不可用
+        logger.warning("roi.json 缺失 BattleStageName 条目，使用内置 720p 兜底 ROI")
+        return list(_DEFAULT_STAGE_ROI)
 
     def recognize_by_manual(self, stage_key: str) -> Optional[dict]:
         """用户手动指定关卡（code/name/stageId 任一），直接查表。"""

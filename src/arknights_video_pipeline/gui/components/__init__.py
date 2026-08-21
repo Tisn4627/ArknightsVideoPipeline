@@ -15,7 +15,6 @@ from arknights_video_pipeline.gui.components.material_switch import MaterialSwit
 from arknights_video_pipeline.gui.components.navigation_rail import NavigationRail
 from arknights_video_pipeline.gui.components.progress_card import ProgressCard
 from arknights_video_pipeline.gui.components.settings_page import SettingsPage
-from arknights_video_pipeline.gui.components.step_panel import StepPanel
 from arknights_video_pipeline.gui.components.tools_page import ToolsPage
 
 __all__ = [
@@ -31,6 +30,5 @@ __all__ = [
     "NavigationRail",
     "ProgressCard",
     "SettingsPage",
-    "StepPanel",
     "ToolsPage",
 ]

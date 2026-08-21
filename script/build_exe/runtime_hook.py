@@ -55,9 +55,15 @@ def _ensure_recognition_resource_dir() -> None:
     if os.environ.get("AVR_RESOURCE_DIR"):
         # 用户显式指定的资源目录优先
         return
-    bundle_dir = getattr(sys, "_MEIPASS", None) or os.path.dirname(
-        os.path.abspath(sys.argv[0])
-    )
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    bundle_dir = getattr(sys, "_MEIPASS", None) or exe_dir
+    # --include-resource 构建会同时产出 exe 旁的外部 resource/ 与 bundle
+    # 内嵌副本，而 info.txt 指引用户通过覆盖外部目录替换资源。故外部
+    # 目录存在时必须优先于内嵌副本，否则用户替换资源静默无效
+    external_dir = os.path.join(exe_dir, "resource")
+    if os.path.isdir(external_dir):
+        os.environ["AVR_RESOURCE_DIR"] = external_dir
+        return
     resource_dir = os.path.join(bundle_dir, "resource")
     if os.path.isdir(resource_dir):
         os.environ["AVR_RESOURCE_DIR"] = resource_dir
@@ -105,7 +111,13 @@ def _ensure_ffmpeg_in_path() -> None:
             sys_path = winreg.QueryValueEx(key, "Path")[0]
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
             user_path = winreg.QueryValueEx(key, "Path")[0]
-        os.environ["PATH"] = sys_path + ";" + user_path + ";" + machine_path
+        # 与 core.utils.ensure_ffmpeg_in_path 保持一致：REG_EXPAND_SZ
+        # 需展开环境变量；注册表条目追加在后，不反超现有版本
+        os.environ["PATH"] = (
+            machine_path + ";"
+            + winreg.ExpandEnvironmentStrings(sys_path) + ";"
+            + winreg.ExpandEnvironmentStrings(user_path)
+        )
     except Exception:
         # 非 Windows 或注册表读取失败，静默跳过
         pass

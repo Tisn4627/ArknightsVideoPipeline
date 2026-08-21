@@ -28,7 +28,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QVBoxLayout,
@@ -41,7 +40,6 @@ from arknights_video_pipeline.gui.components.log_viewer import LogViewer
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
 from arknights_video_pipeline.gui.components.message_dialog import (
-    ConfirmDialog,
     InfoDialog,
     WarningDialog,
 )
@@ -115,8 +113,18 @@ class _VideoListWidget(QListWidget):
             if local and os.path.isfile(local):
                 paths.append(local)
         if paths:
-            self.window().add_video_paths(paths)  # type: ignore[attr-defined]
-            event.acceptProposedAction()
+            # 向上查找实现了 add_video_paths 的祖先控件（RecognitionTool）。
+            # 不能假设 window() 就是该控件：列表被 ToolDialog 包裹时
+            # window() 是对话框本身，直接调用会 AttributeError 并在
+            # PyQt6 事件回调中直接崩溃进程
+            w = self.parentWidget()
+            while w is not None and not hasattr(w, "add_video_paths"):
+                w = w.parentWidget()
+            if w is not None:
+                w.add_video_paths(paths)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
         else:
             event.ignore()
 
@@ -553,6 +561,22 @@ class RecognitionTool(ToolView):
             self._worker.cancel()
             self._cancel_btn.setEnabled(False)
 
+    def request_shutdown(self) -> None:
+        """对话框关闭前的兜底：请求取消并等待 worker 退出。
+
+        ToolDialog 设有 WA_DeleteOnClose，关闭即析构整棵控件树；若此时
+        QThread 仍在运行会触发 "QThread destroyed while running" 直接
+        abort 进程。cancel 只在步骤边界生效，故限时等待后仍需 terminate
+        兜底（与 PipelineService.force_terminate_workers 同一策略）。
+        """
+        self._cancelled = True
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            if not worker.wait(3000):
+                worker.terminate()
+                worker.wait(1000)
+
     def _on_open_output(self) -> None:
         """打开输出目录（识别产物所在目录）"""
         out_dir = self._output_selector.path().strip()
@@ -625,4 +649,5 @@ class RecognitionTool(ToolView):
         self._stage_row.set_value(self._config_proxy.stage_override(), True)
         self._video_time_row.set_value(self._config_proxy.with_video_time(), True)
         out_dir = self._config_proxy.output_dir() or "output"
-        self._output_selector.set_path(out_dir)
+        # 从配置回填 UI，阻断信号避免触发 path_changed 回写配置
+        self._output_selector.set_path(out_dir, block_signal=True)

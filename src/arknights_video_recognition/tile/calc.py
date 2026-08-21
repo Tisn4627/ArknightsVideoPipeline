@@ -103,6 +103,9 @@ class _Calc:
             level["view"][1][1],
             level["view"][1][2],
         )
+        # 世界→屏幕矩阵缓存：矩阵只依赖 (side, offset)，逐点重建
+        # （多次 4x4 matmul）在 get_all_tile_positions 等批量投影中是纯浪费
+        self._matrix_cache: Dict[Any, np.ndarray] = {}
 
     def adapter(self) -> Tuple[float, float]:
         """宽高比适配，返回对相机 y/z 的偏移。
@@ -116,8 +119,13 @@ class _Calc:
         return _ADAPTER_Y_SCALE * t, _ADAPTER_Z_SCALE * t
 
     def _get_tile(self, row: int, col: int) -> Optional[Dict[str, Any]]:
-        """取 ``tiles[row][col]``，越界返回 None（边界判断沿用原版宽松逻辑）。"""
-        if 0 <= row <= self.level["height"] and 0 <= col <= self.level["width"]:
+        """取 ``tiles[row][col]``，越界返回 None。
+
+        边界用半开区间 ``< height``/``< width``：tiles 恰有 height 行 /
+        width 列，原版宽松的 ``<=`` 在查询最边缘外一格时会以裸 IndexError
+        崩溃而非返回 None。
+        """
+        if 0 <= row < self.level["height"] and 0 <= col < self.level["width"]:
             return self.level["tiles"][row][col]
         return None
 
@@ -132,7 +140,13 @@ class _Calc:
         x = tile_x - (self.level["width"] - 1) / 2
         y = (self.level["height"] - 1) / 2 - tile_y
         tile = self._get_tile(tile_y, tile_x)
-        assert tile is not None
+        if tile is None:
+            # 显式错误而非 assert：python -O 会剥离 assert，届时越界访问
+            # 以无上下文的裸 IndexError 崩溃
+            raise ValueError(
+                f"格子坐标越界: (col={tile_x}, row={tile_y})，"
+                f"关卡尺寸 {self.level['width']}x{self.level['height']}"
+            )
         z = tile["heightType"] * _HEIGHT_TYPE_SCALE
         return (x, y, z)
 
@@ -191,7 +205,11 @@ class _Calc:
         归一化方式与原版一致：x'=(1+x/w)/2，y'=(1+y/w)/2，
         返回 ``(x' * screen_width, (1 - y') * screen_height)``。
         """
-        matrix = self.world_to_screen_matrix(side, offset)
+        cache_key = (bool(side), tuple(offset) if offset is not None else None)
+        matrix = self._matrix_cache.get(cache_key)
+        if matrix is None:
+            matrix = self.world_to_screen_matrix(cache_key[0], offset)
+            self._matrix_cache[cache_key] = matrix
         x, y, _, w = np.dot(matrix, np.array([pos[0], pos[1], pos[2], 1]))
         x = (1 + x / w) / 2
         y = (1 + y / w) / 2

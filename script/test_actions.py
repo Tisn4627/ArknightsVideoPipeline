@@ -14,14 +14,21 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+# 支持未安装包（pip install -e .）时直接运行：把仓库 src 目录加入路径
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from arknights_video_recognition.config.settings import DEFAULT_RESOLUTION
 from arknights_video_recognition.pipeline import (
     StageNotRecognizedError,
     VideoRecognitionPipeline,
 )
 
-TEST_DIR = Path("/workspace/test")
-DEBUG_DIR = Path("/workspace/debug")
+# 默认定位到仓库根的 test/ 与 debug/。原为 /workspace 绝对路径，
+# Windows 上会解析为当前盘符根目录，开箱不可用
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+TEST_DIR = _REPO_ROOT / "test"
+DEBUG_DIR = _REPO_ROOT / "debug"
 
 
 def recognize_one(
@@ -119,9 +126,13 @@ def main() -> int:
         print(f"OCR 引擎: {src}")
         print(f"{'='*50}")
         for video in videos:
-            recognize_one(
-                video, src, args.with_video_time, args.stage
-            )
+            # 单个视频失败（损坏、格式异常等）不应中断整批用例
+            try:
+                recognize_one(
+                    video, src, args.with_video_time, args.stage
+                )
+            except Exception as exc:
+                print(f"  处理 {video.name} 时出错: {exc}")
 
     print("\n全部完成")
     return 0

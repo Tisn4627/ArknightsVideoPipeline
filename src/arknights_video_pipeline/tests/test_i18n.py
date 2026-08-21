@@ -122,12 +122,16 @@ class TestI18nCore:
         inst = I18n(locales_dir=str(tmp_path))
         assert inst.tr("nonexistent") == "nonexistent"
 
-    def test_tr_placeholder_formatting(self) -> None:
-        """tr 支持 {placeholder} 占位符格式化"""
-        inst = I18n()  # 真实 locale 文件
-        result = inst.tr("settings.config.status_generated", n=3)
-        assert "3" in result
-        assert "已生成" in result
+    def test_tr_placeholder_formatting(self, tmp_path: Path) -> None:
+        """tr 支持 {placeholder} 占位符格式化。
+
+        用自建 locale 条目而非绑定真实文案：真实措辞微调不应让
+        占位符机制测试误报。
+        """
+        _write_locale(tmp_path, "zh-CN", {"progress": "进度 {n}/{total}"})
+        inst = I18n(locales_dir=str(tmp_path), language="zh-CN")
+        result = inst.tr("progress", n=3, total=10)
+        assert result == "进度 3/10"
 
     def test_tr_placeholder_missing_kwarg_returns_unformatted(
         self, tmp_path: Path

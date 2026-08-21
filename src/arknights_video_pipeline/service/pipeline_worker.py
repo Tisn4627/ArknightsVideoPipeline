@@ -85,8 +85,9 @@ class PipelineWorker(QThread):
         self._log_handler: QtLogHandler | None = None
 
     def cancel(self) -> None:
+        # 取消提示由 PipelineService.cancel_pipeline 统一发一次，
+        # 避免并发模式下每个在途 worker 各刷一条相同日志
         self._cancel_event.set()
-        self.log_emitted.emit("INFO", "用户请求取消，将在当前步骤结束后停止")
 
     def run(self) -> None:
         report_dict: dict[str, Any] = {}

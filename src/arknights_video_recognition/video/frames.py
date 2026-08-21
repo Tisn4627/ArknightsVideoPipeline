@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
+from collections import OrderedDict
 from typing import Iterator, Optional, Tuple
 
 import cv2
@@ -19,6 +22,28 @@ from ..config.settings import DEFAULT_RESOLUTION
 
 # 默认插值方法：抽帧把画面缩小到标准分辨率时用 INTER_AREA，避免摩尔纹。
 _DEFAULT_INTERP = cv2.INTER_AREA
+
+# 帧缓存上限（LRU）：每帧 1280x720x3 ≈ 2.6MB，32 帧 ≈ 84MB。
+# 不设上限或上限过大（如 500 帧 ≈ 1.3GB）易在长视频 track 步中耗尽内存
+_FRAME_CACHE_SIZE = 32
+
+
+def _get_short_path(path: str) -> Optional[str]:
+    """返回 Windows 8.3 短路径；非 Windows 或转换失败返回 None。
+
+    cv2.VideoCapture 对非 ASCII 路径的兼容性依 OpenCV 构建/后端而异，
+    打开失败时用短路径重试是与 MAA 后端一致的兜底方案。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+        if 0 < n < len(buf):
+            return buf.value
+    except Exception:
+        pass
+    return None
 
 
 class VideoFrames:
@@ -49,6 +74,11 @@ class VideoFrames:
     ) -> None:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
+            # Windows 非 ASCII 路径兜底：取 8.3 短路径重试一次
+            short = _get_short_path(video_path)
+            if short and short != video_path:
+                cap = cv2.VideoCapture(short)
+        if not cap.isOpened():
             raise ValueError(f"无法打开视频文件: {video_path}")
 
         self._cap = cap
@@ -76,9 +106,10 @@ class VideoFrames:
 
         self.sample_fps = sample_fps
 
-        # 帧缓存：避免对同一时间点反复 seek
-        # key=frame_idx, value=postprocessed frame
-        self._frame_cache: dict[int, np.ndarray] = {}
+        # 帧缓存：避免对同一时间点反复 seek。
+        # key=frame_idx, value=postprocessed frame；OrderedDict 实现
+        # 小容量 LRU（见 _FRAME_CACHE_SIZE 说明）
+        self._frame_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
         # 当前 VideoCapture 位置（帧索引），用于判断是否可顺序读取
         self._cur_pos: int = 0
 
@@ -145,6 +176,9 @@ class VideoFrames:
 
         从第 0 帧开始顺序读取到结尾，每帧 resize 到目标分辨率。
         """
+        if self._cap is None:
+            # release() 后再访问：优雅终止而非 AttributeError
+            return
         self._set_pos_frames(0)
         idx = 0
         while True:
@@ -170,6 +204,9 @@ class VideoFrames:
         """
         if interval_sec <= 0:
             raise ValueError("interval_sec 必须 > 0")
+        if self._cap is None:
+            # release() 后再访问：优雅终止而非 AttributeError
+            return
 
         duration = self.duration_sec
         # fps 缺失时退化为单帧
@@ -218,6 +255,9 @@ class VideoFrames:
         """
         if interval_sec <= 0 or self._fps <= 0:
             return
+        if self._cap is None:
+            # release() 后再访问：优雅终止而非 AttributeError
+            return
         step = max(1, int(round(self._fps * interval_sec)))
         start_idx = max(0, int(round(start_ts * self._fps)))
         total = self._source_frame_count
@@ -257,6 +297,9 @@ class VideoFrames:
         """
         if timestamp_sec < 0:
             return None
+        if self._cap is None:
+            # release() 后再访问：返回 None 而非 AttributeError
+            return None
         if self._fps <= 0:
             frame_idx = 0
         else:
@@ -265,9 +308,11 @@ class VideoFrames:
             if total > 0 and frame_idx >= total:
                 frame_idx = total - 1
 
-        # 缓存命中
-        if frame_idx in self._frame_cache:
-            return self._frame_cache[frame_idx]
+        # 缓存命中（LRU：命中后移到最新端）
+        cached = self._frame_cache.pop(frame_idx, None)
+        if cached is not None:
+            self._frame_cache[frame_idx] = cached
+            return cached
 
         # 决定是否 seek：目标在当前位置之前，或距离太远（>30帧）时 seek
         # 否则顺序读取（read 跳帧），大幅减少 seek 开销
@@ -287,9 +332,10 @@ class VideoFrames:
             return None
         self._cur_pos = frame_idx + 1
         frame = self._postprocess(frame)
-        # 缓存（限制大小防止内存爆炸）
-        if len(self._frame_cache) < 500:
-            self._frame_cache[frame_idx] = frame
+        # 写入缓存并按 LRU 淘汰最旧帧
+        self._frame_cache[frame_idx] = frame
+        if len(self._frame_cache) > _FRAME_CACHE_SIZE:
+            self._frame_cache.popitem(last=False)
         return frame
 
     def release(self) -> None:

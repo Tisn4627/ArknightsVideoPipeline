@@ -93,7 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ResourceMissingError as e:
         print(f"错误：资源缺失。\n{e}", file=sys.stderr)
         print(
-            "请运行 `python scripts/update_resources.py` 获取所需资源后重试。",
+            "请运行 `python script/update_resources.py` 获取所需资源后重试。",
             file=sys.stderr,
         )
         sys.exit(1)

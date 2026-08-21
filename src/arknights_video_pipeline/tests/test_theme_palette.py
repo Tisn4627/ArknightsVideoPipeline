@@ -86,10 +86,20 @@ class TestPaletteMapping:
         assert pal.color(QPalette.ColorRole.ButtonText) == QColor("#FFFFFF")
 
     def test_apply_palette_sets_app_globally(self, qapp) -> None:
-        apply_palette(MaterialColors.light())
-        assert qapp.palette().color(QPalette.ColorRole.Window) == QColor("#FFFBFE")
-        apply_palette(MaterialColors.dark())
-        assert qapp.palette().color(QPalette.ColorRole.Window) == QColor("#141218")
+        # QApplication 是进程级单例：测试结束必须恢复原 palette，
+        # 否则深色主题泄漏给同会话后续运行的 GUI 测试（顺序耦合）
+        original = qapp.palette()
+        try:
+            apply_palette(MaterialColors.light())
+            assert qapp.palette().color(
+                QPalette.ColorRole.Window
+            ) == QColor("#FFFBFE")
+            apply_palette(MaterialColors.dark())
+            assert qapp.palette().color(
+                QPalette.ColorRole.Window
+            ) == QColor("#141218")
+        finally:
+            qapp.setPalette(original)
 
 
 # ── QSS 覆盖 ────────────────────────────────────────────────

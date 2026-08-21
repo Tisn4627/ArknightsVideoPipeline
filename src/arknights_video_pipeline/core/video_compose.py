@@ -208,6 +208,8 @@ def create_text_clip(text, start, duration, text_config, project_root):
             )
         )
 
+    # padding=10 与 map_overlay._PANEL_PADDING / text_fit.PANEL_PADDING
+    # 三处必须逐值一致，否则面板高亮与主文本错位产生残影；调整需同步
     canvas = canvas.background_color("#00000000").padding(10)
 
     # 创建TextClip
@@ -312,11 +314,21 @@ def compose_video(config):
                 os.path.join(PROJECT_ROOT, text_config.get("font_dir", "resource/font"))
             )
 
+            # 视频显示区域 = 原生分辨率 × video_scale。旧实现用输出尺寸
+            # × scale，仅当原生分辨率恰好等于输出尺寸时才正确；非
+            # 1920x1080 输入会基于错误的可用空间计算字号
+            try:
+                _probe = validate_video_file(video_source)
+                native_w = _probe["width"] or output_size[0]
+                native_h = _probe["height"] or output_size[1]
+            except VideoValidationError:
+                native_w, native_h = output_size
+
             # 计算字幕可用宽度
             available_width = text_config.get("auto_fit_available_width")
             if available_width is None:
                 # 自动计算：根据视频区域和字幕位置推断可用宽度
-                video_width = int(output_size[0] * config["video_scale"])
+                video_width = int(native_w * config["video_scale"])
                 text_x = text_config.get("text_x", 50)
 
                 if text_x < config["video_x"]:
@@ -335,7 +347,7 @@ def compose_video(config):
                 available_width = min(available_width, int(output_size[0] * 0.4))
 
             # 计算可用高度：底板高度减去视频区域高度
-            video_height = int(output_size[1] * config["video_scale"])
+            video_height = int(native_h * config["video_scale"])
             available_height = output_size[1] - config["video_y"] - video_height
 
             auto_font_size = compute_auto_fit_font_size(

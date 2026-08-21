@@ -46,6 +46,21 @@ class MaterialSwitch(QWidget):
             self.toggled.emit(self._checked)
             self.update()
 
+    def set_checked_silent(self, checked: bool) -> None:
+        """程序化回填且不发射 toggled。
+
+        供加载配置/重置默认值场景使用，替代调用方手写
+        ``blockSignals(True) + set_checked + blockSignals(False)``
+        样板（Qt 的 QAbstractButton.setChecked 即为静默语义）。
+        """
+        if self._checked == checked:
+            return
+        self.blockSignals(True)
+        try:
+            self.set_checked(checked)
+        finally:
+            self.blockSignals(False)
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.set_checked(not self._checked)
