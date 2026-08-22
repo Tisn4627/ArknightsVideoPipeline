@@ -92,7 +92,7 @@ class TestToolConstruction:
 
     def test_initial_video_list_empty(self, qapp) -> None:
         tool = _make_tool(qapp)
-        assert tool._video_list.count() == 0
+        assert tool._video_list.video_paths() == []
 
     def test_start_button_initially_enabled(self, qapp) -> None:
         tool = _make_tool(qapp)
@@ -109,33 +109,32 @@ class TestVideoListOperations:
     def test_add_video_paths_appends(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool.add_video_paths(["a.mp4", "b.mkv"])
-        assert tool._video_list.count() == 2
+        assert len(tool._video_list.video_paths()) == 2
 
     def test_add_video_paths_filters_unsupported(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool.add_video_paths(["a.mp4", "b.txt", "c.png"])
         # 仅 .mp4 通过过滤
-        assert tool._video_list.count() == 1
+        assert len(tool._video_list.video_paths()) == 1
 
     def test_add_video_paths_dedupes(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool.add_video_paths(["a.mp4"])
         tool.add_video_paths(["a.mp4", "b.mp4"])
-        assert tool._video_list.count() == 2
+        assert len(tool._video_list.video_paths()) == 2
 
     def test_clear_all_empties_list(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool.add_video_paths(["a.mp4", "b.mp4"])
-        tool._on_clear_all()
-        assert tool._video_list.count() == 0
+        tool._video_list.clear()
+        assert tool._video_list.video_paths() == []
 
-    def test_remove_selected_removes_one(self, qapp) -> None:
+    def test_delete_row_removes_one(self, qapp) -> None:
         tool = _make_tool(qapp)
         tool.add_video_paths(["a.mp4", "b.mp4"])
-        # 选中第一项
-        tool._video_list.setCurrentRow(0)
-        tool._on_remove_selected()
-        assert tool._video_list.count() == 1
+        # 点击第一行的删除按钮
+        tool._video_list._rows[0].delete_button().click()
+        assert len(tool._video_list.video_paths()) == 1
 
     def test_video_paths_returns_absolute(self, qapp, tmp_path) -> None:
         tool = _make_tool(qapp)

@@ -132,6 +132,10 @@ class BatchVideoRow(QWidget):
         self._del_btn.setEnabled(editable)
         self._json_btn.setEnabled(editable)
 
+    def set_json_button_visible(self, visible: bool) -> None:
+        """隐藏/显示 JSON 绑定按钮（识别工具自身生成 JSON，无需该按钮）"""
+        self._json_btn.setVisible(visible)
+
     def set_status(self, status: str, percent: int | None = None) -> None:
         self._status = status
         if percent is not None:
@@ -301,11 +305,13 @@ class BatchVideoList(QWidget):
 
     video_paths_changed = pyqtSignal(list)
 
-    def __init__(self, colors: MaterialColors, parent: QWidget | None = None) -> None:
+    def __init__(self, colors: MaterialColors, parent: QWidget | None = None,
+                 show_json_button: bool = True) -> None:
         super().__init__(parent)
         self._colors = colors
         self._rows: List[BatchVideoRow] = []
         self._editable = True
+        self._show_json_button = show_json_button
 
         self.setAcceptDrops(True)
 
@@ -392,6 +398,8 @@ class BatchVideoList(QWidget):
                 continue  # 去重
             row = BatchVideoRow(p, self._colors)
             row.set_editable(self._editable)
+            if not self._show_json_button:
+                row.set_json_button_visible(False)
             row.up_button().clicked.connect(lambda _, r=row: self._move_up(r))
             row.down_button().clicked.connect(lambda _, r=row: self._move_down(r))
             row.delete_button().clicked.connect(lambda _, r=row: self._remove(r))

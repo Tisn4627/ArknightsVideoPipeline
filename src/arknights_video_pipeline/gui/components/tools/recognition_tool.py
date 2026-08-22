@@ -23,18 +23,13 @@ import os
 from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
-    QFileDialog,
-    QFrame,
     QHBoxLayout,
-    QListWidget,
-    QListWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from arknights_video_pipeline.core.utils import SUPPORTED_VIDEO_EXTENSIONS
+from arknights_video_pipeline.gui.components.batch_video_list import BatchVideoList
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.log_viewer import LogViewer
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
@@ -54,79 +49,6 @@ from arknights_video_pipeline.gui.components.tools.base import ToolView
 from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 from arknights_video_pipeline.service.recognition_worker import RecognitionWorker
-
-
-class _VideoListWidget(QListWidget):
-    """支持拖放的视频文件列表"""
-
-    def __init__(self, colors: MaterialColors, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._colors = colors
-        self.setAcceptDrops(True)
-        self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(220)
-        self._apply_qss(colors)
-
-    def _apply_qss(self, c: MaterialColors) -> None:
-        self.setStyleSheet(
-            "QListWidget {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline_variant};"
-            f"  border-radius: 12px;"
-            f"  padding: 6px;"
-            "}"
-            "QListWidget::item { padding: 4px 6px; border: none; }"
-            "QListWidget::item:selected {"
-            f"  background-color: {c.primary_container};"
-            f"  color: {c.on_primary_container};"
-            "}"
-        )
-
-    def set_colors(self, colors: MaterialColors) -> None:
-        self._colors = colors
-        self._apply_qss(colors)
-
-    # ── 拖放 ──────────────────────────────────────────────
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        if not event.mimeData().hasUrls():
-            super().dropEvent(event)
-            return
-        paths: list[str] = []
-        for url in event.mimeData().urls():
-            local = url.toLocalFile()
-            if local and os.path.isfile(local):
-                paths.append(local)
-        if paths:
-            # 向上查找实现了 add_video_paths 的祖先控件（RecognitionTool）。
-            # 不能假设 window() 就是该控件：列表被 ToolDialog 包裹时
-            # window() 是对话框本身，直接调用会 AttributeError 并在
-            # PyQt6 事件回调中直接崩溃进程
-            w = self.parentWidget()
-            while w is not None and not hasattr(w, "add_video_paths"):
-                w = w.parentWidget()
-            if w is not None:
-                w.add_video_paths(paths)
-                event.acceptProposedAction()
-            else:
-                event.ignore()
-        else:
-            event.ignore()
 
 
 class RecognitionTool(ToolView):
@@ -156,38 +78,14 @@ class RecognitionTool(ToolView):
         root.setSpacing(24)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # ── 视频选择卡片 ──────────────────────────────────
+        # ── 视频选择卡片（与主页"视频文件"相同的批量列表样式） ──
         self._video_card = MaterialCard(tr("tools.recognition.video_input"))
         self._video_card.set_surface_color(c.surface)
         v_layout = self._video_card.layout()
 
-        self._video_list = _VideoListWidget(c)
+        # 识别工具自身生成 copilot JSON，无需每行的 JSON 绑定按钮
+        self._video_list = BatchVideoList(colors=c, show_json_button=False)
         v_layout.addWidget(self._video_list)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
-        self._add_btn = MaterialButton(
-            tr("tools.recognition.add_videos"),
-            variant=MaterialButton.VARIANT_OUTLINED,
-        )
-        self._add_btn.clicked.connect(self._on_add_videos)
-        btn_row.addWidget(self._add_btn)
-
-        self._remove_btn = MaterialButton(
-            tr("tools.recognition.remove_selected"),
-            variant=MaterialButton.VARIANT_OUTLINED,
-        )
-        self._remove_btn.clicked.connect(self._on_remove_selected)
-        btn_row.addWidget(self._remove_btn)
-
-        self._clear_btn = MaterialButton(
-            tr("tools.recognition.clear_all"),
-            variant=MaterialButton.VARIANT_OUTLINED,
-        )
-        self._clear_btn.clicked.connect(self._on_clear_all)
-        btn_row.addWidget(self._clear_btn)
-        btn_row.addStretch()
-        v_layout.addLayout(btn_row)
 
         root.addWidget(self._video_card)
 
@@ -331,49 +229,13 @@ class RecognitionTool(ToolView):
     # ── 公开接口（供 ToolsPage 拖放回调） ────────────────
 
     def add_video_paths(self, paths: list[str]) -> None:
-        """向视频列表追加路径（去重，仅保留支持的视频扩展名）"""
-        existing = set()
-        for i in range(self._video_list.count()):
-            existing.add(self._video_list.item(i).data(Qt.ItemDataRole.UserRole) or "")
-        for p in paths:
-            abs_p = os.path.abspath(p)
-            ext = os.path.splitext(abs_p)[1].lower()
-            if ext not in SUPPORTED_VIDEO_EXTENSIONS:
-                continue
-            if abs_p in existing:
-                continue
-            item = QListWidgetItem(os.path.basename(abs_p))
-            item.setToolTip(abs_p)
-            item.setData(Qt.ItemDataRole.UserRole, abs_p)
-            self._video_list.addItem(item)
+        """向视频列表追加路径（去重、扩展名过滤由 BatchVideoList 处理）"""
+        self._video_list.add_paths(paths)
 
     # ── 视频列表操作 ──────────────────────────────────────
 
-    def _on_add_videos(self) -> None:
-        filter_str = (
-            "Video files (*.mp4 *.avi *.mkv *.mov *.flv *.wmv);;All files (*.*)"
-        )
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, tr("tools.recognition.select_videos"), "", filter_str
-        )
-        if paths:
-            self.add_video_paths(paths)
-
-    def _on_remove_selected(self) -> None:
-        for item in self._video_list.selectedItems():
-            self._video_list.takeItem(self._video_list.row(item))
-
-    def _on_clear_all(self) -> None:
-        self._video_list.clear()
-
     def _video_paths(self) -> list[str]:
-        paths: list[str] = []
-        for i in range(self._video_list.count()):
-            item = self._video_list.item(i)
-            p = item.data(Qt.ItemDataRole.UserRole)
-            if p:
-                paths.append(p)
-        return paths
+        return self._video_list.video_paths()
 
     # ── 参数变更 ──────────────────────────────────────────
 
@@ -434,6 +296,7 @@ class RecognitionTool(ToolView):
         # 重置 UI 状态
         self._progress_card.reset()
         self._log_viewer.clear_logs()
+        self._video_list.reset_states()
         self._cancelled = False
         self._set_running_ui(True)
 
@@ -457,6 +320,8 @@ class RecognitionTool(ToolView):
 
         video_path = self._pending_paths[self._current_index]
         self._current_json_path = ""
+        # 行级状态：当前行进入"运行中"（与主页批量列表一致）
+        self._video_list.set_file_running(self._current_index)
         self._log_viewer.append(
             "INFO",
             tr(
@@ -476,10 +341,15 @@ class RecognitionTool(ToolView):
         )
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_finished.connect(self._on_step_finished)
-        self._worker.progress_updated.connect(self._progress_card.set_progress)
+        self._worker.progress_updated.connect(self._on_progress_updated)
         self._worker.log_emitted.connect(self._log_viewer.append)
         self._worker.recognition_finished.connect(self._on_recognition_finished)
         self._worker.start()
+
+    def _on_progress_updated(self, percent: int, message: str) -> None:
+        """进度同时刷新进度卡与当前行内进度条（与主页批量列表一致）"""
+        self._progress_card.set_progress(percent, message)
+        self._video_list.set_file_progress(self._current_index, percent, message)
 
     def _on_step_started(self, step_key: str, step_desc: str) -> None:
         self._log_viewer.append("INFO", f"[{step_key}] {step_desc}")
@@ -501,6 +371,11 @@ class RecognitionTool(ToolView):
         """单个视频识别完成回调"""
         video_path = self._pending_paths[self._current_index]
         name = os.path.basename(video_path)
+
+        # 行级状态：成功/失败/已取消（与主页批量列表一致）
+        self._video_list.set_file_finished(
+            self._current_index, bool(success and json_path), cancelled
+        )
 
         if success and json_path:
             self._success_count += 1
@@ -600,9 +475,8 @@ class RecognitionTool(ToolView):
     def _set_running_ui(self, running: bool) -> None:
         self._start_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
-        self._add_btn.setEnabled(not running)
-        self._remove_btn.setEnabled(not running)
-        self._clear_btn.setEnabled(not running)
+        # 批量列表：禁用添加/清空按钮、行内编辑与拖放
+        self._video_list.set_editable(not running)
         for row in self._rows.values():
             row.set_enabled(not running)
         self._output_selector.setEnabled(not running)
@@ -628,9 +502,6 @@ class RecognitionTool(ToolView):
         self._param_card.set_title(tr("tools.recognition.params"))
         self._output_card.set_title(tr("tools.recognition.output_dir"))
         self._log_card.set_title(tr("tools.recognition.logs"))
-        self._add_btn.setText(tr("tools.recognition.add_videos"))
-        self._remove_btn.setText(tr("tools.recognition.remove_selected"))
-        self._clear_btn.setText(tr("tools.recognition.clear_all"))
         self._start_btn.setText(tr("tools.recognition.start"))
         self._cancel_btn.setText(tr("tools.recognition.cancel"))
         self._open_output_btn.setText(tr("tools.recognition.open_output"))
