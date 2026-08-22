@@ -302,6 +302,53 @@ class TestProjectHiddenImports:
             assert found, f"PyInstaller 参数缺少 hidden import: {mod}"
 
 
+# ── rapidocr_onnxruntime 数据文件收集 ───────────────────────
+
+
+class TestRapidocrDataCollection:
+    """验证 PyInstaller 参数包含 --collect-data rapidocr_onnxruntime。
+
+    RapidOCR 构造时固定读取包内 config.yaml（main.py 的 DEFAULT_CFG_PATH），
+    maamodel 源也不例外；models/ 下是 default 源的默认 onnx 模型。这些非
+    .py 数据文件不会被 PyInstaller 自动收集，缺失时运行时报
+    FileNotFoundError（_internal/rapidocr_onnxruntime/config.yaml），识别
+    后端整体失败——回归测试防止该参数被移除。
+    """
+
+    @pytest.fixture
+    def project_root(self) -> str:
+        return os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                )
+            )
+        )
+
+    def test_pyinstaller_args_include_rapidocr_collect_data(
+        self, project_root: str
+    ) -> None:
+        """PyInstaller 命令参数包含相邻对 --collect-data rapidocr_onnxruntime"""
+        config = BuildConfig(mode="gui", project_root=project_root)
+        manager = BuildManager(config)
+        excludes = manager._analyze_dependencies()
+        args = manager._build_pyinstaller_args("/tmp/launcher.py", excludes)
+
+        found = False
+        for i, arg in enumerate(args):
+            if (
+                arg == "--collect-data"
+                and i + 1 < len(args)
+                and args[i + 1] == "rapidocr_onnxruntime"
+            ):
+                found = True
+                break
+        assert found, (
+            "PyInstaller 参数缺少 --collect-data rapidocr_onnxruntime，"
+            "打包产物运行时 RapidOCR 将因缺 config.yaml 失败"
+        )
+
+
 # ── DependencyAnalyzer: 隐藏导入的传递依赖保护 ──────────────
 
 

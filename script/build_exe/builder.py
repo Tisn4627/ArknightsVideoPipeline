@@ -898,6 +898,14 @@ class BuildManager:
         # 收集 movielite 数据文件
         args.extend(["--collect-data", "movielite"])
 
+        # 收集 rapidocr_onnxruntime 数据文件（config.yaml + models/*.onnx）：
+        # RapidOCR 构造时固定读取包内 config.yaml（main.py: DEFAULT_CFG_PATH =
+        # Path(__file__).parent / "config.yaml"），maamodel 源也不例外；冻结后
+        # __file__ 指向 _internal/rapidocr_onnxruntime/，PyInstaller 不会自动
+        # 收集非 .py 数据文件，缺失时报 FileNotFoundError。models/ 是 default
+        # 源的默认模型，一并收集（约 16MB）
+        args.extend(["--collect-data", "rapidocr_onnxruntime"])
+
         # UPX 压缩（可选）：指定 upx 目录并排除不可压缩的系统 DLL
         if self.config.use_upx and self._upx_dir:
             args.extend(["--upx-dir", self._upx_dir])
