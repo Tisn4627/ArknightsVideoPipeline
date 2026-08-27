@@ -140,3 +140,14 @@ class TestConvertActionsGuard:
                                location=None, direction="None", ts=4.0)
         actions = pipeline._convert_actions([phantom], level=None)
         assert actions == []
+
+    def test_placeholder_retreat_filtered(self, pipeline):
+        """占位名 Retreat（如召唤物格残留的 Unknown_EndsEmpty）也被丢弃。
+
+        自动召唤物（不占部署栏）可能残余占位名，若 Retreat 透传，MAA 执行时
+        会对不存在的干员重复撤退而卡死——故 Deploy 与 Retreat 一视同仁。
+        """
+        phantom = BattleAction(type="Retreat", name="Unknown_EndsEmpty",
+                               location=[1, 1], direction="None", ts=5.0)
+        actions = pipeline._convert_actions([phantom], level=LEVEL)
+        assert actions == []

@@ -529,13 +529,16 @@ class VideoRecognitionPipeline:
         for ba in battle_actions:
             act_type = _BATTLE_TYPE_TO_COPILOT.get(ba.type, ba.type)
 
-            # 过滤占位名 Deploy：部署栏 diff 匹配失败的 slot 名（见
-            # _PLACEHOLDER_OPER_NAMES）进入作业后会让 MAA 卡死在该动作
-            if act_type == ActionType.DEPLOY and (
+            # 过滤占位名动作：部署栏 diff 匹配失败的 slot 名（见
+            # _PLACEHOLDER_OPER_NAMES）进入作业后会让 MAA 卡死在该动作。
+            # Deploy 与 Retreat 均需拦截——召唤物格（数量守卫已避免入映射）
+            # 可能残余的 Unknown / UnknownDeployment / Unknown_EndsEmpty
+            # Retreat 若透传，MAA 执行时会对不存在的干员重复撤退而卡死
+            if act_type in (ActionType.DEPLOY, ActionType.RETREAT) and (
                 not ba.name or ba.name in _PLACEHOLDER_OPER_NAMES
             ):
                 print(
-                    f"警告：丢弃无法确定干员名的 Deploy 动作（t={ba.ts:.1f}s）",
+                    f"警告：丢弃无法确定干员名的 {act_type} 动作（t={ba.ts:.1f}s）",
                     file=sys.stderr,
                 )
                 continue

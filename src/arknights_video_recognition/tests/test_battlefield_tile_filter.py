@@ -197,12 +197,16 @@ class TestDetectBattlefieldFilter:
         """相邻可部署格上的真实干员不受白名单影响：正常 newcomer + Deploy。
 
         传入空战场 pre_valid（而非 None）以触发 newcomer 标记与方向分类
-        （对齐生产语义：首个片段不做方向分类）。
+        （对齐生产语义：首个片段不做方向分类）。pre_valid.deployment 提供
+        真实消失槽位（该干员），使 deployed 含有效名 → 产出带真名的 Deploy
+        （修复自动召唤物误判后，无名字不再退回 Unknown_EndsEmpty）。
         """
         detector = StubDetector([BOX_A])
         clip = _clip()
-        pre_valid_detect = SimpleNamespace(deployment=[], battlefield={},
-                                           ends_oper_name="")
+        pre_valid_detect = SimpleNamespace(
+            deployment=[{"name": "能天使", "role": "Sniper"}],
+            battlefield={}, ends_oper_name="",
+        )
         bf = analyzer._detect_battlefield_voted(
             clip, pre_valid_detect, None, detector, StubClassifier(),
             _level(), SCREEN_SIZE, POSITIONS,
@@ -216,6 +220,7 @@ class TestDetectBattlefieldFilter:
         assert len(actions) == 1
         act = actions[0]
         assert act.type == "Deploy"
+        assert act.name == "能天使"
         # location 输出为 [col, row]
         assert act.location == [TILE_A[1], TILE_A[0]]
         assert act.direction == "Right"

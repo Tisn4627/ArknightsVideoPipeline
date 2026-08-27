@@ -22,15 +22,28 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+import cv2
 
 from arknights_video_recognition.config.roi import load_roi
 from arknights_video_recognition.ocr.engine import OcrEngine
 from arknights_video_recognition.tile import get_all_tile_positions
+
+logger = logging.getLogger(__name__)
+
+# 自动召唤干员白名单：这些干员在部署/开技能时会自动在可部署格上部署召唤物，
+# 召唤物不占部署栏槽位（出现与撤退均不改变部署栏），只增加场上新生格子。
+# 召唤物守卫（Deploy 数量守卫 + 头像仲裁）仅对白名单干员生效；其他干员的
+# 部署保留 Maa 兜底配对（ends_oper_name → Unknown_EndsEmpty），避免其
+# M > N（检测异常）时误丢真实部署。
+# 维什戴尔：部署时在攻击范围内自动部署一个召唤物（延后约 0.2s，周围四格
+# 存在可部署地块时）；开三技能后再自动部署两个（最多三个）。
+_AUTO_SUMMON_OPERATORS = frozenset({"维什戴尔"})
 
 
 @dataclass
@@ -867,6 +880,7 @@ class BattleAnalyzer:
         buildable = self._buildable_tiles(level)
         set_votes: dict[frozenset, int] = {}
         set_boxes: dict[frozenset, dict[tuple, list]] = {}  # 集合 -> {tile: box}
+        set_frames: dict[frozenset, np.ndarray] = {}  # 集合 -> 最后一次投该集合的帧（供头像裁剪）
         for frame in frames:
             if frame is None or frame.size == 0:
                 continue
@@ -892,6 +906,10 @@ class BattleAnalyzer:
             if key not in set_boxes:
                 set_boxes[key] = {}
             set_boxes[key].update(cur_boxes)
+            # 整体覆盖，帧与 cur_boxes 同源（同为该采样帧）：
+            # 召唤物比干员晚约 0.2s 出现，最晚投票帧上召唤物必然在场，裁出的
+            # 头像才对应最终战场状态（供 M>N 场景头像仲裁使用）。
+            set_frames[key] = frame
 
         # 取众数（对齐 Maa max_element(oper_det_samping)）
         if not set_votes:
@@ -931,6 +949,8 @@ class BattleAnalyzer:
                     dir_sampling[tile] += probs
 
         # 构造 _OperState
+        final_frame = set_frames.get(mode_set)
+        final_boxes = set_boxes[mode_set]
         battlefield: dict = {}
         for tile in mode_tiles:
             is_newcomer = tile in newcomers and pre_valid is not None
@@ -952,10 +972,15 @@ class BattleAnalyzer:
                 # pre_valid=None（第一个 clip）或 prev_bf 无此格子：方向未知
                 direction = "None"
             name = self.location_operators.get(tile, "Unknown")
-            box = set_boxes[mode_set].get(tile, [0, 0, 0, 0])
+            box = final_boxes.get(tile, [0, 0, 0, 0])
+            # 战场头像（供 M>N 场景 _score_tile_name_pairs 仲裁使用）
+            avatar = (
+                self._crop_avatar_from_box(final_frame, box)
+                if final_frame is not None else None
+            )
             battlefield[tile] = _OperState(
                 name=name, tile=tile, direction=direction,
-                skill_ready="n", box=box,
+                skill_ready="n", box=box, avatar=avatar,
                 new_here=is_newcomer,  # 对齐 Maa：newcomer 标记 new_here=True
             )
         return battlefield
@@ -1024,6 +1049,14 @@ class BattleAnalyzer:
 
         - Unknown 分支：其他情况，只 warn 不生成 action
 
+        有意偏离 Maa（自动召唤物防护，仅 ``_AUTO_SUMMON_OPERATORS`` 白名单
+        干员生效，见方法内注释与 ``_pair_newcomers``）：
+        - Deploy 侧：白名单干员在本批部署中或已在场上且新增格多于消失名
+          （M > N）时，多余格视为其自动召唤物跳过（数量守卫 + 头像仲裁）；
+          其他干员保留 Maa 兜底配对（ends_oper_name → Unknown_EndsEmpty）。
+        - Retreat 侧：从未入映射的消失格不产出空名/占位名 Retreat（召唤物
+          的出现与撤退均不经部署栏，无从命名）。
+
         严格对齐：
         - ``prev_bf`` 用 ``pre_valid.battlefield``（对齐 Maa pre_clip.battlefield）
         - Deploy 目标格子用 ``oper.new_here``（对齐 Maa，由 classify_direction 设置）
@@ -1048,27 +1081,58 @@ class BattleAnalyzer:
         )
 
         if deploy_branch:
-            # === Deploy 分支（对齐 Maa 行 690-741）===
+            # === Deploy 分支（对齐 Maa 行 690-741，有意偏离点见下）===
             # deployed：pre.dep 中有但 clip.dep 中没有的 name（按 pre.dep 顺序）
             cur_names = {d.get("name", "") for d in deployment}
             deployed = [
                 d.get("name", "") for d in prev_dep
                 if d.get("name", "") and d.get("name", "") not in cur_names
             ]
-            ends_name = getattr(pre_valid, "ends_oper_name", "")
 
-            deployed_iter = iter(deployed)
-            # 对齐 Maa：遍历 clip.bf 中 new_here=True 的格子
-            for loc, oper in battlefield.items():
-                if not getattr(oper, "new_here", False):
-                    continue
-                # 对齐 Maa：deployed 用完用 ends_oper_name，仍空用 "Unknown_EndsEmpty"
-                try:
-                    name = next(deployed_iter)
-                except StopIteration:
-                    name = ends_name
-                if not name:
-                    name = "Unknown_EndsEmpty"
+            # 召唤物守卫（有意偏离 Maa，仅 _AUTO_SUMMON_OPERATORS 白名单干员生效）：
+            # 白名单干员（维什戴尔）的召唤物随部署/开技能自动部署在可部署格上，
+            # 不占部署栏槽位（出现与撤退均不改变部署栏），只增加场上新生格子，
+            # 使新增格多于部署栏消失名（M > N）。守卫生效时多余格视为召唤物
+            # 跳过（数量守卫 + 头像仲裁，不产出 Deploy、不写入映射），防止召唤物
+            # 被误判为手动部署或抢占真干员的名字。
+            # 守卫范围：本批部署含白名单干员（部署触发召唤），或白名单干员已在
+            # 场上（其技能召唤物可在后续任意 clip 浮现）。
+            # 其他干员不启用守卫：其 M > N 属检测异常，保留 Maa 兜底配对
+            # （ends_oper_name → Unknown_EndsEmpty），避免误丢真实部署。
+            new_tiles = sorted(
+                loc for loc, oper in battlefield.items()
+                if getattr(oper, "new_here", False)
+            )
+            summon_guard = (
+                any(n in _AUTO_SUMMON_OPERATORS for n in deployed)
+                or any(
+                    n in _AUTO_SUMMON_OPERATORS
+                    for n in self.operator_locations
+                )
+            )
+            if summon_guard and new_tiles and len(new_tiles) > len(deployed):
+                pairs = self._pair_newcomers(new_tiles, deployed, battlefield)
+                logger.warning(
+                    "场上新增 %d 个单位但部署栏仅消失 %d 个槽位，多余 %d 个"
+                    "疑似白名单干员自动召唤物，已跳过其 Deploy/映射",
+                    len(new_tiles), len(deployed), len(new_tiles) - len(deployed),
+                )
+            else:
+                # Maa 兜底配对（对齐 Maa 行 715-734）：按格子坐标序配 deployed
+                # 名，耗尽后回退 pre_clip.ends_oper_name，仍空用占位名
+                ends_name = getattr(pre_valid, "ends_oper_name", "")
+                pairs = []
+                name_iter = iter(deployed)
+                for loc in new_tiles:
+                    try:
+                        name = next(name_iter)
+                    except StopIteration:
+                        name = ends_name
+                    if not name:
+                        name = "Unknown_EndsEmpty"
+                    pairs.append((loc, name))
+            for loc, name in pairs:
+                oper = battlefield[loc]
                 oper.name = name
                 actions.append(Action(
                     type="Deploy", name=name,
@@ -1092,6 +1156,11 @@ class BattleAnalyzer:
                     continue
                 # name 来自 m_location_operators[pre_loc]（对齐 Maa）
                 name = self.location_operators.get(loc, "")
+                # 有意偏离 Maa：从未入映射的格子（白名单干员的自动召唤物，
+                # 其出现与撤退均不改变部署栏，无从命名）不产出空名/占位名
+                # Retreat，避免假撤退污染最终 JSON
+                if not name:
+                    continue
                 actions.append(Action(
                     type="Retreat", name=name,
                     # 对齐 Maa 行 752: location = [pre_loc.x, pre_loc.y] = [col, row]
@@ -1105,6 +1174,131 @@ class BattleAnalyzer:
         # else: Unknown 分支（对齐 Maa 行 762-771）：只 warn 不生成 action
 
         return actions
+
+    # --- 自动召唤物防护：Deploy 配对（有意偏离 Maa）--------------------------
+
+    def _pair_newcomers(self, new_tiles, deployed, battlefield):
+        """把 ``new_here`` 格子与新部署干员名配对（数量守卫 + 头像仲裁）。
+
+        背景：手动部署必然伴随部署栏槽位减少（``deployed`` 长度 N = 消失槽位数），
+        而白名单干员（``_AUTO_SUMMON_OPERATORS``，如维什戴尔）的自动召唤物
+        **出现时不经部署栏流程**（随本体部署或开技能自动上场上），只会增加
+        场上新生格子。故在守卫生效的 clip 中：
+        - ``M = len(new_tiles)`` 恒等于 手动部署数 + 自动召唤物数；
+        - ``M > N``  ⟺  存在自动召唤物（假设检测无误差）。
+
+        注：本方法仅由 ``_process_changes`` Deploy 分支在召唤物守卫生效
+        （白名单干员部署/在场且 M > N）时调用；其他干员的 M > N 走 Maa
+        兜底配对（见 _process_changes）。召唤物的出现与撤退均不经部署栏。
+
+        配对规则：
+        - ``M <= N``：无自动召唤物，按格子坐标序全配对（对齐 Maa battlefield=
+          ``std::map`` 的有序遍历），多余名字丢弃。
+        - ``M > N``：存在自动召唤物。用战场头像↔部署栏已定名头像的相对匹配
+          分数贪心配对前 N 个格子，其余格子视为召唤物跳过（不产出 Deploy、
+          不写入映射）。
+        - 头像数据不可用（``all_avatars`` 缺失 / 战场头像未采集）时回退为按坐标
+          序取前 N 个——仲裁是相对增强，不作为硬依赖，保证不比旧行为更差。
+        - ``deployed`` 为空但 ``new_tiles`` 非空（纯召唤物 clip）：返回空，全部跳过。
+
+        Parameters
+        ----------
+        new_tiles:
+            按 ``(row, col)`` 排序的本次新部署格列表。
+        deployed:
+            部署栏 diff 出的本批干员名列表（调用方已过滤空名与当前仍在槽位的名字）。
+        battlefield:
+            当前 clip 战场 ``{tile: _OperState}``。
+
+        Returns
+        -------
+        list[tuple[tuple, str]]
+            ``[(tile, name), ...]`` 配对结果，长度 <= ``min(M, N)``。
+        """
+        if not new_tiles or not deployed:
+            return []
+        if len(new_tiles) <= len(deployed):
+            return list(zip(new_tiles, deployed[:len(new_tiles)]))
+        # M > N：优先头像仲裁
+        scores = self._score_tile_name_pairs(new_tiles, deployed, battlefield)
+        if scores is None:
+            # 回退：按坐标序取前 N（确定性的保守策略，不产生任何名字兜底）
+            return list(zip(new_tiles[:len(deployed)], deployed))
+        # 贪心：反复取剩余 (tile, name) 中分数最高者，直到名字耗尽。
+        # 只用相对排序，不设绝对阈值——不会因召唤物头像匹配分偏低而误杀真干员。
+        pairs = []
+        used_tiles = set()
+        used_names = set()
+        for _ in range(len(deployed)):
+            best = None
+            for score, tile, name in scores:
+                if tile in used_tiles or name in used_names:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, tile, name)
+            if best is None:
+                break
+            _, tile, name = best
+            pairs.append((tile, name))
+            used_tiles.add(tile)
+            used_names.add(name)
+        return pairs
+
+    def _score_tile_name_pairs(self, new_tiles, deployed, battlefield):
+        """为 M>N 场景计算 ``(tile, name)`` 的头像匹配分数。
+
+        用战场头像（``_OperState.avatar``，_detect_battlefield_voted 采集）作 scene、
+        ``self.all_avatars[name]``（部署栏已定名头像）作模板，TM_CCOEFF_NORMED 打分。
+
+        任一数据缺失（``all_avatars`` 为空 / 某格或某名头像未采集）返回 ``None``，
+        调用方回退为坐标序配对。
+
+        Returns
+        -------
+        list[tuple[float, tuple, str]] or None
+            ``[(score, tile, name), ...]``；数据不可用时返回 ``None``。
+        """
+        if not self.all_avatars:
+            return None
+        scores = []
+        for tile in new_tiles:
+            oper = battlefield.get(tile)
+            avatar = getattr(oper, "avatar", None) if oper else None
+            if avatar is None or avatar.size == 0:
+                return None  # 任一格子缺头像 → 整体回退
+            for name in deployed:
+                tpl = self.all_avatars.get(name)
+                if tpl is None or tpl.size == 0:
+                    return None
+                if tpl.shape != avatar.shape:
+                    tpl_r = cv2.resize(
+                        tpl, (avatar.shape[1], avatar.shape[0]),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                else:
+                    tpl_r = tpl
+                # 对齐 DeploymentAnalyzer：BGR 彩色 TM_CCOEFF_NORMED
+                r = cv2.matchTemplate(avatar, tpl_r, cv2.TM_CCOEFF_NORMED)
+                s = float(r.max()) if r.size else -1.0
+                scores.append((s, tile, name))
+        return scores
+
+    @staticmethod
+    def _crop_avatar_from_box(frame, box):
+        """从 YOLO 检测框裁剪战场单位头像（供 M>N 场景头像仲裁）。
+
+        直接用框坐标在帧上裁剪；尺寸不必为 60×60，打分侧会缩放到与部署栏
+        头像一致。框非法或越界返回 ``None``。
+        """
+        if frame is None or frame.size == 0 or not box or len(box) < 4:
+            return None
+        x, y, w, h = (int(v) for v in box[:4])
+        x0, y0 = max(0, x), max(0, y)
+        x1 = min(frame.shape[1], x + w)
+        y1 = min(frame.shape[0], y + h)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return frame[y0:y1, x0:x1]
 
     def _skill_ready_at(
         self, frame, tile, classifier, level, screen_size, positions,
