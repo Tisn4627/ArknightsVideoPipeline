@@ -60,6 +60,50 @@ from arknights_video_pipeline.core.utils import (
 
 
 # ══════════════════════════════════════════════════════════
+#  识别重试策略（step_video_to_copilot 及两个后端共用约定）
+# ══════════════════════════════════════════════════════════
+
+# 指数退避：第 n 次失败后等待 min(2^n, 上限) 秒（2/4/8/.../10）
+RETRY_BACKOFF_CAP_SECONDS = 10
+# 退避等待期间以该粒度（秒）轮询取消请求，保证用户取消可及时生效
+RETRY_CANCEL_CHECK_INTERVAL = 0.5
+
+# 可重试异常：环境/瞬时类失败（识别引擎异常、超时、IO 抖动），重试有成功可能
+_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TimeoutError,
+    RuntimeError,
+    OSError,
+)
+
+# 不可重试异常：确定性失败（数据/配置/编程错误），重试必然得到同样结果。
+# 注意 StageNotRecognizedError 继承 ValueError（识别包 pipeline.py），
+# 关卡未识别对同一视频是确定性的，同样不应重试——此处显式声明而非依赖
+# "恰好不在捕获元组里"的隐式巧合。
+_NON_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ValueError,  # 含 StageNotRecognizedError / 识别结果格式异常
+    TypeError,
+    KeyError,
+    AttributeError,
+)
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    """判定识别异常是否值得重试（重试循环唯一判定入口）
+
+    规则（先命中先生效）：
+    1. CopilotBackendError 以后端显式声明的 retryable 属性为准；
+    2. 命中不可重试清单（确定性错误）→ False；
+    3. 命中可重试清单（超时/运行时/IO 瞬时错误）→ True；
+    4. 其余未知类型保守视为不可重试，避免为未知语义付出整次识别成本。
+    """
+    if isinstance(exc, CopilotBackendError):
+        return exc.retryable
+    if isinstance(exc, _NON_RETRYABLE_EXCEPTIONS):
+        return False
+    return isinstance(exc, _RETRYABLE_EXCEPTIONS)
+
+
+# ══════════════════════════════════════════════════════════
 #  流水线核心
 # ══════════════════════════════════════════════════════════
 
@@ -166,6 +210,7 @@ class Pipeline:
         )
         result.mark_running()
         start = time.time()
+        retry_errors: list[str] = []
 
         try:
             from arknights_video_pipeline.core.copilot_backend import (
@@ -180,17 +225,26 @@ class Pipeline:
             timeout = self.config.get_copilot_timeout()
             max_retries = self.config.get_copilot_max_retries()
             if max_retries < 1:
-                raise CopilotBackendError(
-                    f"copilot_max_retries 必须大于 0，当前值: {max_retries}"
+                # 兼容 GUI 历史设置/手改配置中的 0：语义为"只执行一次、不重试"，
+                # 而非让整个步骤直接失败（旧实现此处抛错，与 GUI 允许的
+                # minimum=0 冲突）
+                self.logger.warning(
+                    f"copilot_max_retries={max_retries} < 1，按 1 次尝试执行"
                 )
+                max_retries = 1
 
             self.logger.info(f"输入视频: {self.video_path}")
             self.logger.info(f"识别后端: {backend.name}")
             if backend_name == "maa":
                 self.logger.info(f"MAA路径: {self.config.get_maa_path()}")
 
-            # 带重试机制的识别
+            # 带重试机制的识别（copilot_max_retries 语义为"总尝试次数"）
             for attempt in range(1, max_retries + 1):
+                # 重试前的取消检查：取消后不再发起下一次高成本识别尝试
+                if attempt > 1 and self._is_cancelled():
+                    raise CopilotBackendError(
+                        "识别重试前检测到取消请求，停止重试", retryable=False
+                    )
                 try:
                     self.logger.info(
                         f"{backend.name}识别尝试 {attempt}/{max_retries}"
@@ -204,15 +258,19 @@ class Pipeline:
                     )
                     self.copilot_json_path = json_path
                     break
-                except (RuntimeError, TimeoutError, OSError, CopilotBackendError) as exc:
-                    # 配置/环境类错误（retryable=False）重试无意义，直接失败
-                    if isinstance(exc, CopilotBackendError) and not exc.retryable:
+                except Exception as exc:
+                    if not _is_retryable_error(exc):
+                        # 确定性失败（配置/资源/数据/关卡未识别）：重试必然
+                        # 同样失败，直接失败并保留原始异常语义
                         raise
+                    retry_errors.append(f"第{attempt}次: {exc}")
                     if attempt < max_retries:
+                        delay = min(2 ** attempt, RETRY_BACKOFF_CAP_SECONDS)
                         self.logger.warning(
-                            f"{backend.name}识别第{attempt}次尝试失败: {exc}，正在重试..."
+                            f"{backend.name}识别第{attempt}次尝试失败: {exc}，"
+                            f"{delay}s 后重试..."
                         )
-                        time.sleep(min(2 ** attempt, 10))
+                        self._interruptible_sleep(delay)
                     else:
                         raise CopilotBackendError(
                             f"{backend.name}后端识别在{max_retries}次尝试后均失败: {exc}"
@@ -223,10 +281,27 @@ class Pipeline:
                     f"{backend.name}识别完成但未返回有效的JSON文件路径"
                 )
 
+            # 重试状态记录进步骤元数据（修复：旧实现仅打日志，报告不可观测）
+            if retry_errors:
+                result.metadata["retry"] = {
+                    "attempts": len(retry_errors) + 1,
+                    "errors": retry_errors,
+                }
+                result.add_warning(
+                    f"识别经历 {len(retry_errors)} 次失败重试后成功"
+                )
+
             result.mark_success(output_files=[self.copilot_json_path])
             self.logger.info(f"输出JSON: {self.copilot_json_path}")
 
         except Exception as exc:
+            if retry_errors:
+                # 失败路径同样记录重试轨迹，报告/排障可观测每次失败原因
+                result.metadata["retry"] = {
+                    "attempts": len(retry_errors),
+                    "errors": retry_errors,
+                    "failed": True,
+                }
             result.mark_failed(str(exc))
             raise PipelineStepError(
                 str(exc), step_name="video_to_copilot", step_index=1, cause=exc
@@ -236,6 +311,25 @@ class Pipeline:
             self.report.steps.append(result)
 
         return result
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """可中断的退避等待：以固定粒度轮询取消请求
+
+        旧实现用 time.sleep() 整段阻塞，用户取消后仍需等完整个退避时长
+        才能响应；现以 RETRY_CANCEL_CHECK_INTERVAL 粒度轮询，检测到取消
+        时抛出不可重试的 CopilotBackendError 终止重试循环。
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if self._is_cancelled():
+                raise CopilotBackendError(
+                    "识别重试退避期间检测到取消请求，停止重试",
+                    retryable=False,
+                )
+            time.sleep(min(RETRY_CANCEL_CHECK_INTERVAL, remaining))
 
     # ── 步骤2：编队配置转文本 ─────────────────────────────
 

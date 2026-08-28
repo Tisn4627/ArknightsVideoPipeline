@@ -16,12 +16,14 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
+from arknights_video_pipeline.core.exceptions import CopilotBackendError
 from arknights_video_pipeline.core.recognition_backend import (
     RecognitionBackend,
     _normalize_copilot,
@@ -207,17 +209,101 @@ class TestRecognitionBackendRecognize:
                     config={},
                 )
 
-    def test_resource_missing_wrapped_with_hint(self, tmp_path) -> None:
-        """ResourceMissingError 包装为 RuntimeError 并提示检查资源目录"""
+    def test_resource_missing_not_retryable(self, tmp_path) -> None:
+        """ResourceMissingError 包装为不可重试的 CopilotBackendError（不再进入重试）"""
         class NoResPipeline(FakePipeline):
             def run(self, *a, **kw):
                 raise FakeResourceError("tile/levels.json 缺失")
 
         backend = RecognitionBackend({})
         with _mock_import(NoResPipeline):
-            with pytest.raises(RuntimeError, match="顶层 resource/ 目录"):
+            with pytest.raises(CopilotBackendError) as exc_info:
                 backend.recognize(
                     video_path=str(tmp_path / "b.mp4"),
                     output_dir=str(tmp_path / "out"),
                     config={},
                 )
+        assert exc_info.value.retryable is False
+        assert "顶层 resource/ 目录" in str(exc_info.value)
+
+    def test_timeout_retry_resumes_same_worker(self, tmp_path) -> None:
+        """超时后的重试调用续等同一后台线程，不重新启动识别
+
+        修复验证：旧实现重试会并行启动第二个识别线程（CPU 争抢 +
+        重复劳动 + 并发写同一输出文件）；新实现重试 = 续等旧线程。
+        """
+        release = threading.Event()
+        run_count = {"n": 0}
+
+        class ControlledPipeline(FakePipeline):
+            def run(self, *a, **kw):
+                run_count["n"] += 1
+                release.wait(5)  # 由测试控制何时完成
+                return {"actions": [], "opers": []}
+
+        backend = RecognitionBackend({})
+        video = str(tmp_path / "b.mp4")
+        with _mock_import(ControlledPipeline):
+            # 第 1 次：超时失败，后台线程继续运行
+            with pytest.raises(TimeoutError):
+                backend.recognize(video, str(tmp_path / "out"), {}, timeout=0.05)
+            assert run_count["n"] == 1
+            assert backend._worker is not None and backend._worker.is_alive()
+
+            # 0.2s 后放行识别线程（期间第 2 次调用已进入续等分支）
+            threading.Timer(0.2, release.set).start()
+
+            # 第 2 次（重试）：续等旧线程并复用结果，而非重启识别
+            out_path = backend.recognize(video, str(tmp_path / "out"), {}, timeout=10)
+
+        assert run_count["n"] == 1  # pipe.run 仅执行一次：重试未重启识别
+        assert out_path.endswith("recognition_copilot_b.json")
+        assert json.loads(Path(out_path).read_text(encoding="utf-8"))["actions"] == []
+        # 结果已消费清理，防止后续调用误入续等分支
+        assert backend._worker is None
+
+    def test_timeout_retry_timeout_again_keeps_worker(self, tmp_path) -> None:
+        """续等再次超时：仍抛 TimeoutError，且不重启识别"""
+        release = threading.Event()
+        run_count = {"n": 0}
+
+        class ControlledPipeline(FakePipeline):
+            def run(self, *a, **kw):
+                run_count["n"] += 1
+                release.wait(5)
+                return {"actions": [], "opers": []}
+
+        backend = RecognitionBackend({})
+        video = str(tmp_path / "b.mp4")
+        with _mock_import(ControlledPipeline):
+            with pytest.raises(TimeoutError):
+                backend.recognize(video, str(tmp_path / "out"), {}, timeout=0.05)
+            # 第 2 次（重试）续等旧线程，仍然超时
+            with pytest.raises(TimeoutError):
+                backend.recognize(video, str(tmp_path / "out"), {}, timeout=0.05)
+        assert run_count["n"] == 1  # 未重启识别
+        release.set()  # 收尾：放行残留 daemon 线程
+
+    def test_worker_error_after_timeout_consumed_on_resume(self, tmp_path) -> None:
+        """超时后续等：后台线程以异常结束时，重试调用取到该异常"""
+        gate = threading.Event()
+        run_count = {"n": 0}
+
+        class FailingLaterPipeline(FakePipeline):
+            def run(self, *a, **kw):
+                run_count["n"] += 1
+                gate.wait(5)
+                raise FakeResourceError("资源在中途损坏")
+
+        backend = RecognitionBackend({})
+        video = str(tmp_path / "b.mp4")
+        with _mock_import(FailingLaterPipeline):
+            with pytest.raises(TimeoutError):
+                backend.recognize(video, str(tmp_path / "out"), {}, timeout=0.05)
+            # 0.2s 后放行识别线程（期间第 2 次调用已进入续等分支）
+            threading.Timer(0.2, gate.set).start()
+            # 第 2 次（重试）续等，取到线程内的确定性错误而非重启识别
+            with pytest.raises(CopilotBackendError) as exc_info:
+                backend.recognize(video, str(tmp_path / "out"), {}, timeout=5)
+        assert run_count["n"] == 1
+        assert exc_info.value.retryable is False

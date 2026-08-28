@@ -18,6 +18,8 @@ import sys
 import threading
 from pathlib import Path
 
+from arknights_video_pipeline.core.exceptions import CopilotBackendError
+
 # === 关键：在 import arknights_video_recognition 之前设置资源目录 ===
 # 识别资源（avatar/config/data/ocr/onnx/template/tile）并入父项目顶层 resource/。
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
@@ -90,6 +92,12 @@ class RecognitionBackend:
 
     def __init__(self, config: dict):
         self._config = config or {}
+        # 超时后仍在后台运行的识别线程及其结果槽（见 recognize 的"续等"机制）。
+        # backend 实例在流水线重试循环外仅创建一次，实例状态可跨重试保留。
+        self._worker: threading.Thread | None = None
+        self._worker_video: str | None = None
+        self._worker_job: dict = {}
+        self._worker_error: BaseException | None = None
 
     def recognize(
         self,
@@ -112,55 +120,90 @@ class RecognitionBackend:
         except (ValueError, AttributeError):
             resolution = (1280, 720)
 
-        # 首次导入前应用配置级资源目录覆盖（优先级最高）
+        # 首次导入前应用配置级资源目录覆盖（优先级最高）。导入幂等
+        # （模块缓存），续等路径也需异常类用于结果分类。
         VideoRecognitionPipeline, StageNotRecognizedError, ResourceMissingError = (
             _import_recognition_pipeline(resource_dir)
         )
 
-        # VideoRecognitionPipeline 构造时自动调用 check_resource() 校验资源
-        pipe = VideoRecognitionPipeline(
-            ocr_source=ocr_source,
-            resolution=resolution,
+        # 超时重试的"续等"机制：上一次 recognize() 超时后，后台识别线程
+        # 仍在运行。此时重试不应重新启动识别——否则两个线程并行争抢 CPU
+        # （各自更慢、更易连锁超时）、重复劳动、并发写同一输出文件——而是
+        # 继续等待同一线程的进度并复用其结果（修复：超时重试 = 续等）。
+        resumable_worker = (
+            self._worker is not None
+            and self._worker.is_alive()
+            and self._worker_video == video_path
         )
 
-        # run() 返回 dict，需落盘为 JSON 文件以匹配流水线"文件路径"接口。
-        # 识别在 daemon 线程中执行，超时为"中断式"：到点立即失败返回，
-        # 而非等识别跑完再事后判定（旧实现会白等约 20 分钟再丢弃慢而
-        # 成功的结果，并触发无意义重试）。超时后线程仍在后台继续跑完，
-        # 其产物（cache/MaaAI_*.json）可通过 --copilot-json 复用。
-        job_dict: dict = {}
-        error: BaseException | None = None
-
-        def _run() -> None:
-            nonlocal job_dict, error
-            try:
-                job_dict = pipe.run(
-                    video_path=video_path,
-                    stage_override=stage_override,
-                    output_path=None,  # 由本适配层统一控制输出路径
-                    with_video_time=with_video_time,
+        if resumable_worker:
+            worker = self._worker
+            worker.join(timeout)
+            if worker.is_alive():
+                raise TimeoutError(
+                    f"Recognition 识别超时（>{timeout}s），后台识别仍在继续，"
+                    "下次重试将续等该识别的进度而非重新开始"
                 )
-            # 线程内异常全部捕获后重抛：超时/重试语义由外层流水线处理
-            except Exception as exc:  # noqa: BLE001 - 线程异常传播必须全量捕获
-                error = exc
-
-        worker = threading.Thread(target=_run, daemon=True)
-        worker.start()
-        worker.join(timeout)
-
-        if worker.is_alive():
-            raise TimeoutError(
-                f"Recognition 识别超时（>{timeout}s），已中止等待；"
-                "后台识别仍在继续，完成后可复用 cache/ 下产物"
+        else:
+            # VideoRecognitionPipeline 构造时自动调用 check_resource() 校验资源
+            pipe = VideoRecognitionPipeline(
+                ocr_source=ocr_source,
+                resolution=resolution,
             )
+
+            # run() 返回 dict，需落盘为 JSON 文件以匹配流水线"文件路径"接口。
+            # 识别在 daemon 线程中执行，超时为"中断式"：到点立即失败返回，
+            # 而非等识别跑完再事后判定（旧实现会白等约 20 分钟再丢弃慢而
+            # 成功的结果，并触发无意义重试）。超时后线程仍在后台继续跑完，
+            # 其产物（cache/MaaAI_*.json）可通过 --copilot-json 复用。
+            self._worker_job = {}
+            self._worker_error = None
+            self._worker_video = video_path
+
+            def _run() -> None:
+                try:
+                    self._worker_job = pipe.run(
+                        video_path=video_path,
+                        stage_override=stage_override,
+                        output_path=None,  # 由本适配层统一控制输出路径
+                        with_video_time=with_video_time,
+                    )
+                # 线程内异常全部捕获后重抛：超时/重试语义由外层流水线处理
+                except Exception as exc:  # noqa: BLE001 - 线程异常传播必须全量捕获
+                    self._worker_error = exc
+
+            worker = threading.Thread(
+                target=_run,
+                daemon=True,
+                name=f"recognition-{Path(video_path).stem}",
+            )
+            self._worker = worker
+            worker.start()
+            worker.join(timeout)
+
+            if worker.is_alive():
+                raise TimeoutError(
+                    f"Recognition 识别超时（>{timeout}s），已中止等待；"
+                    "后台识别仍在继续，完成后可复用 cache/ 下产物"
+                )
+
+        # 线程已结束：取出结果并清理，防止下一次调用误入"续等"分支
+        job_dict = self._worker_job
+        error = self._worker_error
+        self._worker = None
+        self._worker_video = None
 
         if error is not None:
             if isinstance(error, StageNotRecognizedError):
                 raise error
             if isinstance(error, ResourceMissingError):
-                raise RuntimeError(
+                # 资源缺失是环境类错误，重试必然同样失败：与 MAA 后端的
+                # retryable=False 约定对齐（旧实现包装为 RuntimeError 会被
+                # 流水线重试，白白浪费数轮识别时间）
+                raise CopilotBackendError(
                     f"Recognition 资源缺失: {error}\n"
-                    "请检查顶层 resource/ 目录（识别资源已随仓库分发，不应缺失）"
+                    "请检查顶层 resource/ 目录（识别资源已随仓库分发，不应缺失）",
+                    retryable=False,
                 ) from error
             raise error
 

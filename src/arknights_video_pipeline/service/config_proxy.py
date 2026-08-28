@@ -259,9 +259,10 @@ class ConfigProxy(QObject):
 
     def copilot_max_retries(self) -> int:
         try:
-            return int(self.get("copilot_max_retries", 2))
+            # 默认值与 core/config.py PIPELINE_DEFAULTS 统一（总尝试次数）
+            return int(self.get("copilot_max_retries", 1))
         except (TypeError, ValueError):
-            return 2
+            return 1
 
     def set_copilot_max_retries(self, n: int) -> None:
         self.set("copilot_max_retries", int(n))

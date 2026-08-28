@@ -537,8 +537,9 @@ class SettingsPage(QWidget):
         self._tr_labels.append((row.set_label, "settings.global.log_backup_count"))
 
         # Copilot 超时（秒）：recognition/maa 两后端共用的统一超时
+        # （默认值与 core/config.py PIPELINE_DEFAULTS 的 2400 统一）
         row = build_int_row(
-            tr("settings.global.copilot_timeout"), default=600,
+            tr("settings.global.copilot_timeout"), default=2400,
             minimum=10, maximum=7200, step=10,
             colors=self._colors,
             on_changed=self.copilot_timeout_changed.emit,
@@ -547,10 +548,12 @@ class SettingsPage(QWidget):
         self._pipeline_field_rows["copilot_timeout_seconds"] = row
         self._tr_labels.append((row.set_label, "settings.global.copilot_timeout"))
 
-        # Copilot 最大重试次数：recognition/maa 两后端共用的统一重试
+        # Copilot 识别尝试次数（含首次）：recognition/maa 两后端共用。
+        # 语义为"总尝试次数"（1=不重试）；minimum=1 与流水线的兜底语义对齐
+        # （<1 时流水线按 1 次执行并告警）。
         row = build_int_row(
-            tr("settings.global.copilot_retries"), default=2,
-            minimum=0, maximum=10, step=1,
+            tr("settings.global.copilot_retries"), default=1,
+            minimum=1, maximum=10, step=1,
             colors=self._colors,
             on_changed=self.copilot_max_retries_changed.emit,
         )
