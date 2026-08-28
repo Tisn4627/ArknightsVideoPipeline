@@ -108,6 +108,7 @@ db.sqlite3-journal
 # ================================
 # Framework and tool specific
 # ================================
+_numba_cache/
 instance/
 .webassets-cache
 .scrapy
