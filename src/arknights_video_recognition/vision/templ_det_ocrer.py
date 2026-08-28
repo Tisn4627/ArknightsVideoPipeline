@@ -19,6 +19,27 @@ from arknights_video_recognition.vision.region_ocrer import RegionOCRer, RegionO
 
 logger = logging.getLogger(__name__)
 
+# 模板图缓存：按模板任务名缓存解码后的 ndarray，避免同一模板反复读盘解码。
+# 下游 MultiMatcher 仅读取模板（matchTemplate 不修改输入），缓存原数组即可，
+# 语义与每次重新解码保持一致。
+_TEMPLATE_CACHE: dict[str, np.ndarray | None] = {}
+
+
+def _load_template_cached(templ_task_name: str, template_path) -> np.ndarray | None:
+    """读取并缓存模板图，缺失或解码失败时返回 ``None`` 并告警。"""
+    if templ_task_name in _TEMPLATE_CACHE:
+        return _TEMPLATE_CACHE[templ_task_name]
+    template: np.ndarray | None = None
+    if template_path.is_file():
+        # Windows 上 cv2.imread 无法打开非 ASCII 路径（用户名为中文时
+        # 整个模板目录不可读），改用 fromfile+imdecode 读取
+        buf = np.fromfile(str(template_path), dtype=np.uint8)
+        template = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+    if template is None:
+        logger.warning("模板加载失败（文件缺失或不可解码）: %s", template_path)
+    _TEMPLATE_CACHE[templ_task_name] = template
+    return template
+
 
 @dataclass
 class TemplDetOcrResult:
@@ -97,21 +118,9 @@ class TemplDetOCRer:
         self._roi = templ_task.get("roi")
         self._threshold = templ_task.get("templThreshold", 0.6)
         # 模板文件：文件名 = 任务名 + ".png"，在 TEMPLATE_DIR 下。
-        # Windows 上 cv2.imread 无法打开非 ASCII 路径（用户名为中文时
-        # 整个模板目录不可读），改用 fromfile+imdecode 读取；缺失或
-        # 解码失败时告警，避免 analyze() 静默返回空列表难以排障
+        # 缺失或解码失败时告警，避免 analyze() 静默返回空列表难以排障
         template_path = TEMPLATE_DIR / f"{templ_task_name}.png"
-        if template_path.is_file():
-            buf = np.fromfile(str(template_path), dtype=np.uint8)
-            self._template = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        else:
-            self._template = None
-        if self._template is None:
-            logger.warning("模板加载失败（文件缺失或不可解码）: %s", template_path)
-
-        # --- OCR 任务 ---
-        ocr_task = roi_data.get(ocr_task_name) or {}
-        self._flag_rect_move = ocr_task.get("roi")  # [dx,dy,w,h] 相对偏移
+        self._template = _load_template_cached(templ_task_name, template_path)
 
         # --- OCR 任务 ---
         ocr_task = roi_data.get(ocr_task_name) or {}

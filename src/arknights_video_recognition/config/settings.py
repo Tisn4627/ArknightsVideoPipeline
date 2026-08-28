@@ -1,20 +1,19 @@
-"""Project-wide resource paths and configuration constants.
+"""项目全局资源路径与配置常量。
 
-Resource layout (under ``RESOURCE_DIR``)::
+资源目录布局（``RESOURCE_DIR`` 下）::
 
     resource/
-        tile/levels.json            # standard Arknights-Tile-Pos map data
+        tile/levels.json            # 标准 Arknights-Tile-Pos 地图数据
         onnx/*.onnx                 # skill_ready_cls / deploy_direction_cls / operators_det
-        ocr/maa/det/                # PaddleOCR detection model (Maa flavour)
-        ocr/maa/rec/                # PaddleOCR recognition model (Maa flavour)
-        data/battle_data.json       # operator avatar / battle metadata
-        data/ocr_config.json        # OCR equivalence classes
-        template/empty.png          # avatar placeholder template
-        config/roi.json             # extracted ROI task definitions
+        ocr/maa/det/                # PaddleOCR 检测模型（Maa 版本）
+        ocr/maa/rec/                # PaddleOCR 识别模型（Maa 版本）
+        data/battle_data.json       # 干员头像 / 战斗元数据
+        data/ocr_config.json        # OCR 等价类
+        template/empty.png          # 头像占位模板
+        config/roi.json             # 提取出的 ROI 任务定义
 
-The default resource directory is the ``resource`` folder at the project
-root, but it can be overridden with the ``AVR_RESOURCE_DIR`` environment
-variable.
+默认资源目录为项目根目录下的 ``resource`` 文件夹，
+可通过环境变量 ``AVR_RESOURCE_DIR`` 覆盖。
 """
 
 import os
@@ -122,15 +121,16 @@ _REQUIRED_ONNX_MODELS = (
 
 
 class ResourceMissingError(Exception):
-    """Raised when a required resource file is absent from RESOURCE_DIR."""
+    """当必需的资源文件不在 RESOURCE_DIR 中时抛出。"""
 
 
 def check_resource():
-    """Verify that every required resource file is present.
+    """校验所有必需的资源文件是否存在。
 
-    Checks for ``tile/levels.json``, the three ONNX models and
-    ``data/battle_data.json``. Raises :class:`ResourceMissingError` listing
-    every missing file and hinting at ``scripts/update_resources.py``.
+    检查 ``tile/levels.json``、三个 ONNX 模型以及
+    ``data/battle_data.json``。若有缺失文件则抛出
+    :class:`ResourceMissingError`，列出全部缺失项并提示运行
+    ``scripts/update_resources.py``。
     """
     missing = []
 

@@ -50,6 +50,32 @@ def format_requirements(requirements, config):
     return level_text, module_text
 
 
+def _format_oper_line(oper: dict, config: dict, prefix: str) -> str:
+    """组装单个干员行：前缀 + 练度 + 模组 + 技能 + 干员名
+
+    opers 与 groups 内干员的行组装共用（两者仅前缀不同）。
+    """
+    name = oper.get("name", "未知")
+    skill = oper.get("skill", 1)
+    requirements = oper.get("requirements", {})
+
+    # 技能信息（默认值与 DEFAULT_CONFIG 中 show_skill=False 保持一致）
+    skill_text = f"{skill}技能" if config.get("show_skill", False) else ""
+
+    # 练度和模组
+    level_text, module_text = format_requirements(requirements, config)
+
+    parts = [prefix]
+    if level_text:
+        parts.append(level_text)
+    if module_text:
+        parts.append(module_text)
+    if skill_text:
+        parts.append(skill_text)
+    parts.append(name)
+    return " ".join(parts)
+
+
 def formation_to_text(data, config):
     """将编队数据转为文本"""
     lines = []
@@ -61,55 +87,17 @@ def formation_to_text(data, config):
 
     # 处理 opers 中的干员
     for oper in opers:
-        name = oper.get("name", "未知")
-        skill = oper.get("skill", 1)
-        requirements = oper.get("requirements", {})
-
-        # 技能信息（默认值与 DEFAULT_CONFIG 中 show_skill=False 保持一致）
-        skill_text = f"{skill}技能" if config.get("show_skill", False) else ""
-
-        # 练度和模组
-        level_text, module_text = format_requirements(requirements, config)
-
-        # 组装行：序号. 练度 模组 技能 干员名
-        parts = [f"{index}."]
-        if level_text:
-            parts.append(level_text)
-        if module_text:
-            parts.append(module_text)
-        if skill_text:
-            parts.append(skill_text)
-        parts.append(name)
-        lines.append(" ".join(parts))
-
+        lines.append(_format_oper_line(oper, config, f"{index}."))
         index += 1
 
     # 处理 groups 中的干员组
     for group in groups:
         group_name = group.get("name", "未知组")
-        group_opers = group.get("opers", [])
 
         lines.append(f"{index}.【{group_name}】")
 
-        for oper in group_opers:
-            name = oper.get("name", "未知")
-            skill = oper.get("skill", 1)
-            requirements = oper.get("requirements", {})
-
-            skill_text = f"{skill}技能" if config.get("show_skill", False) else ""
-
-            level_text, module_text = format_requirements(requirements, config)
-
-            # 组装行：- 练度 模组 技能 干员名
-            parts = ["  -"]
-            if level_text:
-                parts.append(level_text)
-            if module_text:
-                parts.append(module_text)
-            if skill_text:
-                parts.append(skill_text)
-            parts.append(name)
-            lines.append(" ".join(parts))
+        for oper in group.get("opers", []):
+            lines.append(_format_oper_line(oper, config, "  -"))
 
         index += 1
 

@@ -5,7 +5,7 @@ gui.components.navigation_rail - Material Design 3 Navigation Rail
 支持浅色/深色主题切换。
 
 图标使用 MD3 24dp Material Icons (Filled)：
-    Home、Settings、Tools、Info。图标资源在 gui/assets/icons/nav/，
+    Home、Settings、Tools、Info。图标资源在 gui/assets/icons/svg/，
     加载/着色由 gui.assets.icons.nav_icons 提供。
 """
 
@@ -147,7 +147,11 @@ class NavigationRail(QFrame):
         self.setFrameShape(QFrame.Shape.NoFrame)
 
         self._items: list[NavigationRailItem] = []
-        self._current_index = 0
+        # -1 表示尚未选中任何项（初始 set_selected(0) 必须真正执行），
+        # 同时供 set_selected 同值早退判断
+        self._current_index = -1
+        # 折叠状态记录，供 set_compact 同值早退判断
+        self._compact = False
         # 导航项 (icon_name, 翻译 key) —— 标签文本由 _retranslate 经 tr() 设置
         self._item_specs: list[tuple[str, str]] = [
             ("home", "nav.home"),
@@ -187,6 +191,9 @@ class NavigationRail(QFrame):
             item.set_colors(colors)
 
     def set_selected(self, index: int) -> None:
+        if index == self._current_index:
+            # 同值早退：避免重复刷新样式并重复发射 selection_changed
+            return
         if 0 <= index < len(self._items):
             self._items[self._current_index].set_selected(False)
             self._current_index = index
@@ -194,6 +201,10 @@ class NavigationRail(QFrame):
             self.selection_changed.emit(index)
 
     def set_compact(self, compact: bool) -> None:
+        if compact == self._compact:
+            # 同值早退：避免重复设置固定尺寸与逐项刷新
+            return
+        self._compact = compact
         self.setFixedWidth(56 if compact else 88)
         # margins 同步收缩：compact 56 - 8*2 = 40（与 item 40px 居中匹配）
         # normal 88 - 12*2 = 64（与 item 64px 居中匹配）

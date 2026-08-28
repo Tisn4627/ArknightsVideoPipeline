@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from copy import deepcopy
 from typing import Any
 
 from arknights_video_pipeline.core.exceptions import ConfigError
+# utils 的深合并实现目前仅此一处使用，沿用其私有实现（见合并逻辑归属约定）
 from arknights_video_pipeline.core.utils import _deep_merge_dict
 
 logger = logging.getLogger(__name__)
@@ -252,7 +254,15 @@ class ConfigManager:
 
         Returns:
             配置文件的绝对路径
+
+        Raises:
+            ValueError: 风格名包含非法字符（防止路径注入，与
+                pipeline._STYLE_MODULES / config_proxy.set_style 白名单对齐）
         """
         style_name = style or self.get_video_compose_style()
+        # 纵深防御：风格名拼入路径前校验合法性，防止 "../" 之类输入
+        # 遍历到配置目录之外（上游 set_style 已有正则校验，此处兜底）
+        if not re.fullmatch(r"[A-Za-z0-9_]+", str(style_name)):
+            raise ValueError(f"非法的视频合成风格名: {style_name!r}")
         config_path = f"config/video_compose/{style_name}.json"
         return self.resolve_path(config_path)

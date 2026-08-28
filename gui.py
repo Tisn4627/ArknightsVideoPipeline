@@ -23,9 +23,10 @@ def _show_startup_error(title: str, text: str) -> None:
         # 不能再调用 app.exec()——此时已无任何窗口，事件循环启动后
         # 永远等不到 quitOnLastWindowClosed，进程会假死只能任务管理器杀
         QMessageBox.critical(None, title, text)
-    except Exception:
-        # PyQt6 未安装或无法初始化，仅 stderr 输出
-        pass
+    except Exception as exc:
+        # PyQt6 未安装或无法初始化：弹窗失败原因保留在 stderr，
+        # 不再静默吞掉（原信息现场丢失导致排障困难）
+        sys.stderr.write(f"[{title}] 弹出错误消息框失败: {exc}\n")
 
 
 def main() -> int:
@@ -35,11 +36,26 @@ def main() -> int:
         from arknights_video_pipeline.gui.main_window import MainWindow
         from arknights_video_pipeline.service import ConfigProxy
     except ImportError as exc:
-        _show_startup_error("依赖缺失", f"无法加载必要的依赖: {exc}\n请通过 pip install -r requirements.txt 安装依赖。")
+        # 依据缺失模块名区分提示：项目自身模块导入失败提示排查安装
+        # 完整性，第三方依赖（PyQt6 等）缺失提示安装依赖——统一提示
+        # 重装依赖会误导排障方向
+        missing = exc.name or ""
+        if missing.startswith("arknights_video_pipeline"):
+            _show_startup_error(
+                "启动错误",
+                f"项目模块加载失败: {exc}\n请检查安装完整性或重新安装本程序。",
+            )
+        else:
+            _show_startup_error(
+                "依赖缺失",
+                f"无法加载必要的依赖: {exc}\n请通过 pip install -r requirements.txt 安装依赖。",
+            )
         return 1
 
     try:
-        app = create_application(sys.argv)
+        # QApplication 实例由 Qt 单例（QApplication.instance()）持有，
+        # 无需本地引用保活
+        create_application(sys.argv)
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()
@@ -60,7 +76,12 @@ if __name__ == "__main__":
     try:
         _exit_code = main() or 0
     except SystemExit as exc:
-        _exit_code = exc.code if isinstance(exc.code, int) else 1
+        # 与 main.py 入口语义对齐：裸 sys.exit()（code=None）表示
+        # 成功，映射为 0 而非 1
+        if isinstance(exc.code, int):
+            _exit_code = exc.code
+        else:
+            _exit_code = 0 if exc.code is None else 1
     for _s in (sys.stdout, sys.stderr):
         if _s is not None:
             try:

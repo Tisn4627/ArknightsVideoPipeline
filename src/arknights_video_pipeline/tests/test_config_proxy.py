@@ -67,7 +67,7 @@ class TestSubConfigPersistence:
 
     def test_worker_snapshot_sees_latest_sub_config(self, qapp, tmp_path) -> None:
         """GUI 运行前保存后，worker 快照 + 合成步骤组合必须看到最新子配置"""
-        style1_path = _write_style1(str(tmp_path), enabled=False)
+        _write_style1(str(tmp_path), enabled=False)
         proxy = ConfigProxy(project_dir=str(tmp_path))
         proxy.set_sub("style1", "map_overlay.enabled", True)
         proxy.save_all()

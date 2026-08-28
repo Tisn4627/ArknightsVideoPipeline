@@ -28,6 +28,8 @@ from PyQt6.QtWidgets import (
     QComboBox, QSpinBox, QSizePolicy,
 )
 
+# 复用 CLI 初始化入口（core.pipeline 的私有函数）：暂无公开等价物，
+# ruff 默认规则不检查私有成员导入，故保留并注明原因
 from arknights_video_pipeline.core.pipeline import _init_config
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
@@ -120,7 +122,8 @@ class SettingsPage(QWidget):
         self._is_dark = is_dark
         self._typo = MaterialTypography()
         self._status_is_error = False
-        self._log_level_valid = True
+        # showEvent 全量重排守卫：仅首次显示时执行（见 showEvent）
+        self._shown_once = False
 
         # 记录所有需要随主题刷新的辅助文本控件，便于统一更新颜色
         self._dim_labels: list[QLabel] = []
@@ -269,7 +272,7 @@ class SettingsPage(QWidget):
         self._tr_labels.append((card.set_title, "settings.appearance.title"))
         # 让卡片内所有内容靠上对齐，避免外观标题与下方控件之间
         # 出现大片空白（双列网格中两卡片同高时尤为明显）。
-        card._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        card.set_content_alignment(Qt.AlignmentFlag.AlignTop)
 
         row = QHBoxLayout()
         row.setSpacing(16)
@@ -807,6 +810,20 @@ class SettingsPage(QWidget):
         self._sub_field_rows[(config_name, field_path)] = row
         return row
 
+    def _make_row_registrar(self, layout: QBoxLayout,
+                            config_name: str) -> Callable[[str, FieldRow, str], None]:
+        """生成参数化行注册闭包，统一 add / add_bs / add_adv 重复写法。
+
+        返回的闭包执行三件事：控件加入指定布局、登记到子配置行注册表、
+        挂接重翻译条目。track / compose 各卡片（含 battle_start 子区与
+        高级字段容器）均复用本工厂。
+        """
+        def register(field_path: str, row: FieldRow, label_key: str) -> None:
+            layout.addWidget(row.widget)
+            self._register_sub_row(config_name, field_path, row)
+            self._tr_labels.append((row.set_label, label_key))
+        return register
+
     def _on_track_mode_changed(self, mode: str) -> None:
         """识别模式切换：同步进入战斗检测子区显隐，并广播配置变更"""
         self.sub_config_changed.emit("track", "track_mode", mode)
@@ -831,11 +848,8 @@ class SettingsPage(QWidget):
 
         cn = "track"
         c = self._colors
-
-        def add(field_path: str, row: FieldRow, label_key: str) -> None:
-            layout.addWidget(row.widget)
-            self._register_sub_row(cn, field_path, row)
-            self._tr_labels.append((row.set_label, label_key))
+        # 行注册闭包（控件加入 track 卡片主布局）
+        add = self._make_row_registrar(layout, cn)
 
         add("track_mode", build_combo_row(
             tr("settings.track.track_mode"),
@@ -914,10 +928,8 @@ class SettingsPage(QWidget):
         bs_layout.addWidget(bs_title)
         self._tr_labels.append((bs_title.setText, "settings.track.battle_start.title"))
 
-        def add_bs(field_path: str, row: FieldRow, label_key: str) -> None:
-            bs_layout.addWidget(row.widget)
-            self._register_sub_row(cn, field_path, row)
-            self._tr_labels.append((row.set_label, label_key))
+        # 行注册闭包（控件加入 battle_start 子区布局）
+        add_bs = self._make_row_registrar(bs_layout, cn)
 
         add_bs("battle_start.time_limit", build_int_row(
             tr("settings.track.battle_start.time_limit"), default=30, minimum=1, maximum=600,
@@ -1029,11 +1041,8 @@ class SettingsPage(QWidget):
 
         cn = style
         c = self._colors
-
-        def add(field_path: str, row: FieldRow, label_key: str) -> None:
-            layout.addWidget(row.widget)
-            self._register_sub_row(cn, field_path, row)
-            self._tr_labels.append((row.set_label, label_key))
+        # 行注册闭包（控件加入 compose 卡片主布局）
+        add = self._make_row_registrar(layout, cn)
 
         # 顶层字段
         add("output_width", build_int_row(
@@ -1120,10 +1129,8 @@ class SettingsPage(QWidget):
         adv_layout.setContentsMargins(0, 0, 0, 0)
         adv_layout.setSpacing(16)
 
-        def add_adv(field_path: str, row: FieldRow, label_key: str) -> None:
-            adv_layout.addWidget(row.widget)
-            self._register_sub_row(cn, field_path, row)
-            self._tr_labels.append((row.set_label, label_key))
+        # 行注册闭包（控件加入高级字段容器布局）
+        add_adv = self._make_row_registrar(adv_layout, cn)
 
         add_adv(f"{tp}.font", build_string_row(
             tr("settings.compose.font"), default="SOURCEHANSANSCN-HEAVY.OTF", colors=c,
@@ -1190,68 +1197,73 @@ class SettingsPage(QWidget):
                 on_changed=self._emit_sub(cn, f"{tp}.bottom_margin")), "settings.compose.bottom_margin")
 
         if style == "style1":
-            add_adv(f"{mp}.number_size_mode", build_combo_row(
-                tr("settings.compose.map_overlay_number_size_mode"),
-                items=["approximate", "precise"], default="approximate", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_size_mode")), "settings.compose.map_overlay_number_size_mode")
-            add_adv(f"{mp}.resolution", build_string_row(
-                tr("settings.compose.map_overlay_resolution"), default="1280x720", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.resolution")), "settings.compose.map_overlay_resolution")
-            add_adv(f"{mp}.number_font_ratio", build_float_row(
-                tr("settings.compose.map_overlay_number_font_ratio"), default=0.5,
-                minimum=0.1, maximum=1.0, step=0.05, decimals=2, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_font_ratio")), "settings.compose.map_overlay_number_font_ratio")
-            add_adv(f"{mp}.number_color", build_color_row(
-                tr("settings.compose.map_overlay_number_color"), default="#FFD700", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_color")), "settings.compose.map_overlay_number_color")
-            add_adv(f"{mp}.panel_highlight_enabled", build_switch_row(
-                tr("settings.compose.map_overlay_panel_highlight_enabled"), default=True, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_enabled")), "settings.compose.map_overlay_panel_highlight_enabled")
-            add_adv(f"{mp}.panel_highlight_color", build_color_row(
-                tr("settings.compose.map_overlay_panel_highlight_color"), default="#FFD700", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_color")), "settings.compose.map_overlay_panel_highlight_color")
-            add_adv(f"{mp}.number_shadow_enabled", build_switch_row(
-                tr("settings.compose.map_overlay_number_shadow_enabled"), default=True, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_enabled")), "settings.compose.map_overlay_number_shadow_enabled")
-            add_adv(f"{mp}.number_shadow_offset_x", build_int_row(
-                tr("settings.compose.map_overlay_number_shadow_offset_x"), default=2, minimum=-50, maximum=50, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_offset_x")), "settings.compose.map_overlay_number_shadow_offset_x")
-            add_adv(f"{mp}.number_shadow_offset_y", build_int_row(
-                tr("settings.compose.map_overlay_number_shadow_offset_y"), default=2, minimum=-50, maximum=50, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_offset_y")), "settings.compose.map_overlay_number_shadow_offset_y")
-            add_adv(f"{mp}.number_shadow_blur", build_int_row(
-                tr("settings.compose.map_overlay_number_shadow_blur"), default=4, minimum=0, maximum=50, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_blur")), "settings.compose.map_overlay_number_shadow_blur")
-            add_adv(f"{mp}.number_shadow_color", build_color_row(
-                tr("settings.compose.map_overlay_number_shadow_color"), default="#000000", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_shadow_color")), "settings.compose.map_overlay_number_shadow_color")
-            add_adv(f"{mp}.number_bg_enabled", build_switch_row(
-                tr("settings.compose.map_overlay_number_bg_enabled"), default=True, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_bg_enabled")), "settings.compose.map_overlay_number_bg_enabled")
-            add_adv(f"{mp}.number_bg_color", build_color_row(
-                tr("settings.compose.map_overlay_number_bg_color"), default="#000000", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_bg_color")), "settings.compose.map_overlay_number_bg_color")
-            add_adv(f"{mp}.number_bg_alpha", build_float_row(
-                tr("settings.compose.map_overlay_number_bg_alpha"), default=0.45,
-                minimum=0.0, maximum=1.0, step=0.05, decimals=2, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_bg_alpha")), "settings.compose.map_overlay_number_bg_alpha")
-            add_adv(f"{mp}.number_padding", build_int_row(
-                tr("settings.compose.map_overlay_number_padding"), default=2, minimum=0, maximum=50, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_padding")), "settings.compose.map_overlay_number_padding")
-            add_adv(f"{mp}.number_min_font_size", build_int_row(
-                tr("settings.compose.map_overlay_number_min_font_size"), default=8, minimum=1, maximum=200, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.number_min_font_size")), "settings.compose.map_overlay_number_min_font_size")
-            add_adv(f"{mp}.panel_highlight_background", build_color_row(
-                tr("settings.compose.map_overlay_panel_highlight_background"), default="#000000", colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_background")), "settings.compose.map_overlay_panel_highlight_background")
-            add_adv(f"{mp}.panel_highlight_bg_alpha", build_float_row(
-                tr("settings.compose.map_overlay_panel_highlight_bg_alpha"), default=0.55,
-                minimum=0.0, maximum=1.0, step=0.05, decimals=2, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_highlight_bg_alpha")), "settings.compose.map_overlay_panel_highlight_bg_alpha")
-            add_adv(f"{mp}.panel_fade_duration", build_float_row(
-                tr("settings.compose.map_overlay_panel_fade_duration"), default=0.3,
-                minimum=0.0, maximum=5.0, step=0.1, decimals=2, colors=c,
-                on_changed=self._emit_sub(cn, f"{mp}.panel_fade_duration")), "settings.compose.map_overlay_panel_fade_duration")
+            # map_overlay 高级字段：数据驱动注册，字段清单与构建参数
+            # 与原先的重复 add_adv 行逐一对应（行构建函数与键名完全一致）
+            mp_fields: list[tuple[str, Callable[..., FieldRow], dict[str, Any]]] = [
+                ("number_size_mode", build_combo_row, dict(
+                    label=tr("settings.compose.map_overlay_number_size_mode"),
+                    items=["approximate", "precise"], default="approximate")),
+                ("resolution", build_string_row, dict(
+                    label=tr("settings.compose.map_overlay_resolution"),
+                    default="1280x720")),
+                ("number_font_ratio", build_float_row, dict(
+                    label=tr("settings.compose.map_overlay_number_font_ratio"),
+                    default=0.5, minimum=0.1, maximum=1.0, step=0.05, decimals=2)),
+                ("number_color", build_color_row, dict(
+                    label=tr("settings.compose.map_overlay_number_color"),
+                    default="#FFD700")),
+                ("panel_highlight_enabled", build_switch_row, dict(
+                    label=tr("settings.compose.map_overlay_panel_highlight_enabled"),
+                    default=True)),
+                ("panel_highlight_color", build_color_row, dict(
+                    label=tr("settings.compose.map_overlay_panel_highlight_color"),
+                    default="#FFD700")),
+                ("number_shadow_enabled", build_switch_row, dict(
+                    label=tr("settings.compose.map_overlay_number_shadow_enabled"),
+                    default=True)),
+                ("number_shadow_offset_x", build_int_row, dict(
+                    label=tr("settings.compose.map_overlay_number_shadow_offset_x"),
+                    default=2, minimum=-50, maximum=50)),
+                ("number_shadow_offset_y", build_int_row, dict(
+                    label=tr("settings.compose.map_overlay_number_shadow_offset_y"),
+                    default=2, minimum=-50, maximum=50)),
+                ("number_shadow_blur", build_int_row, dict(
+                    label=tr("settings.compose.map_overlay_number_shadow_blur"),
+                    default=4, minimum=0, maximum=50)),
+                ("number_shadow_color", build_color_row, dict(
+                    label=tr("settings.compose.map_overlay_number_shadow_color"),
+                    default="#000000")),
+                ("number_bg_enabled", build_switch_row, dict(
+                    label=tr("settings.compose.map_overlay_number_bg_enabled"),
+                    default=True)),
+                ("number_bg_color", build_color_row, dict(
+                    label=tr("settings.compose.map_overlay_number_bg_color"),
+                    default="#000000")),
+                ("number_bg_alpha", build_float_row, dict(
+                    label=tr("settings.compose.map_overlay_number_bg_alpha"),
+                    default=0.45, minimum=0.0, maximum=1.0, step=0.05, decimals=2)),
+                ("number_padding", build_int_row, dict(
+                    label=tr("settings.compose.map_overlay_number_padding"),
+                    default=2, minimum=0, maximum=50)),
+                ("number_min_font_size", build_int_row, dict(
+                    label=tr("settings.compose.map_overlay_number_min_font_size"),
+                    default=8, minimum=1, maximum=200)),
+                ("panel_highlight_background", build_color_row, dict(
+                    label=tr("settings.compose.map_overlay_panel_highlight_background"),
+                    default="#000000")),
+                ("panel_highlight_bg_alpha", build_float_row, dict(
+                    label=tr("settings.compose.map_overlay_panel_highlight_bg_alpha"),
+                    default=0.55, minimum=0.0, maximum=1.0, step=0.05, decimals=2)),
+                ("panel_fade_duration", build_float_row, dict(
+                    label=tr("settings.compose.map_overlay_panel_fade_duration"),
+                    default=0.3, minimum=0.0, maximum=5.0, step=0.1, decimals=2)),
+            ]
+            for name, builder, kwargs in mp_fields:
+                field_path = f"{mp}.{name}"
+                kwargs["colors"] = c
+                kwargs["on_changed"] = self._emit_sub(cn, field_path)
+                add_adv(field_path, builder(**kwargs),
+                        f"settings.compose.map_overlay_{name}")
 
         adv_container.setVisible(False)
         card.add_widget(adv_container)
@@ -1728,11 +1740,9 @@ class SettingsPage(QWidget):
             )
         # 高级卡片内 Log level 下拉框：与 FileSelector 内 QLineEdit
         # 保持完全一致的视觉规格（surface_variant 底色、outline_variant
-        # 边框、12px 圆角、聚焦 2px primary 边框），并保留当前校验状态
+        # 边框、12px 圆角、聚焦 2px primary 边框）
         if getattr(self, "_log_level_combo", None) is not None:
-            self._log_level_combo.setStyleSheet(
-                self._log_level_combo_qss(error=not self._log_level_valid)
-            )
+            self._log_level_combo.setStyleSheet(self._log_level_combo_qss())
         # 语言切换卡片内下拉框：同步主题色到内联样式（含下拉箭头、
         # hover/focus 状态、二级菜单配色），确保深色模式下颜色正确
         if getattr(self, "_lang_combo", None) is not None:
@@ -1847,13 +1857,6 @@ class SettingsPage(QWidget):
             "}"
         )
 
-    def set_log_level_valid(self, valid: bool) -> None:
-        """设置 Log level 下拉框的校验状态（与 FileSelector.set_valid
-        行为一致：``valid=False`` 时显示 2px error 边框）。"""
-        self._log_level_combo.setStyleSheet(
-            self._log_level_combo_qss(error=not valid)
-        )
-
     def _lang_combo_qss(self) -> str:
         """语言下拉框内联样式：与 Log level 下拉框（``_log_level_combo_qss``）
         及 ``settings_row_builders._combo_qss`` 保持完全一致的视觉规格 ——
@@ -1962,6 +1965,12 @@ class SettingsPage(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        # 仅首次显示时执行全量重排：showEvent 在每次切换页面/恢复窗口时
+        # 都会触发，重复执行 _apply_grid_layout 等全量 remove/add 操作
+        # 会造成明显卡顿，后续显示直接跳过（断点变化由 resizeEvent 处理）
+        if self._shown_once:
+            return
+        self._shown_once = True
         # 首次显示时强制根据当前宽度刷新一次布局，避免初始默认布局
         # 与响应式断点不一致（例如默认是 2 列卡片 + 2 列复选框）。
         # 清除断点缓存以强制 resizeEvent/showEvent 路径真正执行重排

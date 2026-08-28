@@ -10,7 +10,9 @@
 
 ``screen_pos_to_tile`` 用 :func:`~arknights_video_recognition.tile.get_all_tile_positions`
 算出所有格子的屏幕坐标，做欧氏距离最近邻，把屏幕坐标反查为格子 ``(row, col)``。
-这是把场上头像位置转成作业 ``location [row, col]`` 的关键。
+这是把场上头像位置转成作业 ``location [col, row]`` 的关键：反查得到
+``(row, col)`` 后，输出 ``Action.location = [col, row]``（与 Maa
+``location = [loc.x, loc.y]`` 的列在前语义一致）。
 """
 
 from __future__ import annotations
@@ -78,9 +80,17 @@ class AvatarMatcher:
         return frame[y0:y1, x0:x1]
 
     def _match_one(
-        self, patch: np.ndarray, formation_opers: Sequence
+        self, patch: np.ndarray, formation_opers: Sequence,
+        avatar_grays: Optional[Sequence[Optional[np.ndarray]]] = None,
     ) -> Tuple[str, float]:
-        """对一个 patch 与所有编队头像匹配，返回 (name, score)。"""
+        """对一个 patch 与所有编队头像匹配，返回 (name, score)。
+
+        Parameters
+        ----------
+        avatar_grays:
+            可选的预转换灰度头像列表（与 ``formation_opers`` 按下标一一
+            对应），为 ``None`` 时现场转换。
+        """
         best_name = "Unknown"
         best_score = -1.0
         if patch is None or patch.size == 0:
@@ -89,11 +99,15 @@ class AvatarMatcher:
         patch_gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
         ph, pw = patch_gray.shape[:2]
 
-        for fo in formation_opers:
+        for idx, fo in enumerate(formation_opers):
             avatar = getattr(fo, "avatar", None)
             if avatar is None or avatar.size == 0:
                 continue
-            avatar_gray = cv2.cvtColor(avatar, cv2.COLOR_BGR2GRAY)
+            avatar_gray = (
+                avatar_grays[idx]
+                if avatar_grays is not None
+                else cv2.cvtColor(avatar, cv2.COLOR_BGR2GRAY)
+            )
             ah, aw = avatar_gray.shape[:2]
 
             # matchTemplate 要求 template 不大于 image。编队头像与场上头像
@@ -151,12 +165,23 @@ class AvatarMatcher:
                 ))
             return results
 
+        # 编队头像在多次 _match_one 调用间不变：循环外统一预转换灰度，
+        # 避免每个检测框重复做 cvtColor（转换结果只读，resize 产生新数组）
+        avatar_grays: List[Optional[np.ndarray]] = []
+        for fo in formation_opers:
+            avatar = getattr(fo, "avatar", None)
+            avatar_grays.append(
+                cv2.cvtColor(avatar, cv2.COLOR_BGR2GRAY)
+                if avatar is not None and avatar.size != 0
+                else None
+            )
+
         for det in detections:
             box = list(det.box)
             cx = box[0] + box[2] // 2
             cy = box[1] + box[3] // 2
             patch = self._crop_patch(frame, box) if frame is not None else None
-            name, score = self._match_one(patch, formation_opers)
+            name, score = self._match_one(patch, formation_opers, avatar_grays)
             if score < self.match_threshold:
                 name = "Unknown"
             results.append(MatchedOper(

@@ -230,6 +230,26 @@ def create_text_clip(text, start, duration, text_config, project_root):
     return clip
 
 
+def _read_copilot_json(input_json: str) -> dict | None:
+    """读取 copilot JSON；失败时告警并返回 None（调用方降级跳过对应功能）"""
+    try:
+        with open(input_json, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(f"读取 copilot JSON 失败: {exc}")
+        return None
+
+
+def _probe_native_size(video_source: str) -> tuple[int, int] | None:
+    """ffprobe 获取视频原生分辨率；失败时告警并返回 None"""
+    try:
+        info = validate_video_file(video_source)
+        return (info["width"], info["height"])
+    except VideoValidationError as exc:
+        logger.warning(f"无法获取视频原生分辨率: {exc}")
+        return None
+
+
 def compose_video(config):
     """根据配置合成视频"""
     output_size = (config["output_width"], config["output_height"])
@@ -297,6 +317,30 @@ def compose_video(config):
         formation_config = inputs["formation_config"]
         actions_config = inputs["actions_config"]
 
+        # 共享输入一次加载：copilot JSON、actions 配置、视频原生分辨率。
+        # 范围限定 / 逐操作显示 / 字幕自适应多处复用，避免各分支
+        # 重复读盘与重复 ffprobe（原实现最多读 2 次 JSON、2 次 ffprobe）
+        need_range_limit = (
+            text_config.get("max_text_right") is not None
+            or text_config.get("max_text_bottom") is not None
+        )
+        need_map_overlay = config.get("map_overlay", {}).get("enabled", False)
+        input_data = (
+            _read_copilot_json(input_json)
+            if (need_range_limit or need_map_overlay) else None
+        )
+        actions_cfg = (
+            load_config(inputs["actions_config"], {})
+            if (need_range_limit or need_map_overlay) else {}
+        )
+        native_size = (
+            _probe_native_size(video_source)
+            if (
+                need_map_overlay
+                or text_config.get("subtitle_auto_fit", False)
+            ) else None
+        )
+
         # 获取切换时间点
         switch_time = get_switch_time(track_result)
         video_duration = video.duration
@@ -317,11 +361,9 @@ def compose_video(config):
             # 视频显示区域 = 原生分辨率 × video_scale。旧实现用输出尺寸
             # × scale，仅当原生分辨率恰好等于输出尺寸时才正确；非
             # 1920x1080 输入会基于错误的可用空间计算字号
-            try:
-                _probe = validate_video_file(video_source)
-                native_w = _probe["width"] or output_size[0]
-                native_h = _probe["height"] or output_size[1]
-            except VideoValidationError:
+            if native_size is not None and native_size[0] > 0 and native_size[1] > 0:
+                native_w, native_h = native_size
+            else:
                 native_w, native_h = output_size
 
             # 计算字幕可用宽度
@@ -363,8 +405,7 @@ def compose_video(config):
             )
 
             # 覆盖 font_size 配置，font_scale 保持为 1
-            # 浅拷贝避免污染传入的 config 字典（批量处理时影响后续视频）
-            text_config = dict(text_config)
+            # （text_config 已在文本叠加分支入口浅拷贝，此处直接修改副本）
             text_config["font_size"] = auto_font_size
             text_config["font_scale"] = 1
 
@@ -384,12 +425,7 @@ def compose_video(config):
             float(text_config.get("text_y", 240)),
         )
         if max_text_right is not None or max_text_bottom is not None:
-            input_data = None
-            try:
-                with open(input_json, "r", encoding="utf-8") as f:
-                    input_data = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
-                logger.warning(f"读取 copilot JSON 失败，跳过 Actions 范围限定: {exc}")
+            # input_data 已在共享输入加载处一次性读取
             if input_data:
                 from arknights_video_pipeline.core.actions_to_text import (
                     format_actions_lines,
@@ -401,7 +437,6 @@ def compose_video(config):
                         PROJECT_ROOT, text_config.get("font_dir", "resource/font")
                     ),
                 )
-                actions_cfg = load_config(inputs["actions_config"], {})
                 raw_actions_lines = format_actions_lines(input_data, actions_cfg)
                 actions_fitted_lines, actions_line_groups, dropped_count = (
                     fit_actions_lines(
@@ -496,13 +531,7 @@ def compose_video(config):
             )
             from arknights_video_pipeline.core.actions_to_text import format_actions_lines
 
-            input_data = None
-            try:
-                with open(inputs["input_json"], "r", encoding="utf-8") as f:
-                    input_data = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
-                logger.warning(f"读取 copilot JSON 失败，跳过逐操作显示: {exc}")
-
+            # input_data / actions_cfg / 原生分辨率已在共享输入加载处一次获取
             actions = (input_data or {}).get("actions", [])
             if not has_video_time(actions):
                 logger.warning(
@@ -513,7 +542,6 @@ def compose_video(config):
                 # 面板逐行文本：优先复用范围限定后的拟合行（与主操作文本块逐字一致，
                 # 换行展开后每操作对应多行）；分页显示时逐页构建（pages 参数）；
                 # 未配置范围限定时回退到原始逐操作行
-                actions_cfg = load_config(inputs["actions_config"], {})
                 if actions_pages is not None:
                     lines = format_actions_lines(input_data, actions_cfg)
                     line_groups = None
@@ -529,13 +557,9 @@ def compose_video(config):
 
                 level = load_level((input_data or {}).get("stage_name", ""))
 
-                # 视频原生分辨率（识别坐标 -> 视频坐标等比映射所需）
-                video_native_size = None
-                try:
-                    video_info = validate_video_file(video_source)
-                    video_native_size = (video_info["width"], video_info["height"])
-                except VideoValidationError as exc:
-                    logger.warning(f"无法获取视频分辨率，按识别分辨率直接映射: {exc}")
+                # 视频原生分辨率（识别坐标 -> 视频坐标等比映射所需），
+                # 共享输入加载处已探测；缺失时按识别分辨率直接映射
+                video_native_size = native_size
 
                 map_font_path = resolve_font_path(
                     text_config.get("font", "SOURCEHANSANSCN-HEAVY.OTF"),

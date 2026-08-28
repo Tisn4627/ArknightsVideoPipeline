@@ -284,8 +284,10 @@ def page_actions_lines(
         filled_times.append(t)
         prev = t
 
-    # 整表未截断时保持单页静态显示（与旧行为一致）
-    _, _, dropped = fit_actions_lines(
+    # 整表未截断时保持单页静态显示（与旧行为一致）；
+    # 全表拟合结果同时缓存为分页首轮（cursor=0 对全表输入）的结果，
+    # 避免对同一输入重复执行整表拟合与逐行测量
+    first_fitted, first_groups, dropped = fit_actions_lines(
         lines, font_path, text_cfg,
         max_text_right, max_text_bottom, text_x, text_y, padding,
     )
@@ -295,6 +297,8 @@ def page_actions_lines(
     def _page_lines(
         start: int, end: int,
     ) -> tuple[list[str], list[tuple[int, int]]]:
+        if start == 0 and end == len(lines):
+            return first_fitted, first_groups
         return fit_actions_lines(
             lines[start:end], font_path, text_cfg,
             max_text_right, max_text_bottom, text_x, text_y, padding,

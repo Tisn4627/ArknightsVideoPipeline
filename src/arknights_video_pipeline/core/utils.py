@@ -55,11 +55,16 @@ def set_ffmpeg_config(custom_enabled: bool, custom_path: str) -> None:
     （含 ffmpeg.exe/ffprobe.exe）加入 PATH 最前面；False 时使用系统 PATH。
     设置后重置 _FFMPEG_PATH_APPLIED 标志，使下次 ensure_ffmpeg_in_path()
     重新应用新配置。
+
+    写侧与读侧（ensure_ffmpeg_in_path）共用 _FFMPEG_PATH_LOCK：
+    三个全局变量的赋值非原子，无锁时并发 worker 可能读到
+    "enabled=新值 + path=旧值" 的中间组合。
     """
     global _FFMPEG_CUSTOM_ENABLED, _FFMPEG_CUSTOM_PATH, _FFMPEG_PATH_APPLIED
-    _FFMPEG_CUSTOM_ENABLED = bool(custom_enabled)
-    _FFMPEG_CUSTOM_PATH = custom_path or ""
-    _FFMPEG_PATH_APPLIED = False
+    with _FFMPEG_PATH_LOCK:
+        _FFMPEG_CUSTOM_ENABLED = bool(custom_enabled)
+        _FFMPEG_CUSTOM_PATH = custom_path or ""
+        _FFMPEG_PATH_APPLIED = False
 
 
 def _get_effective_ffmpeg_dir() -> str | None:
@@ -72,7 +77,7 @@ def _get_effective_ffmpeg_dir() -> str | None:
         path = _FFMPEG_CUSTOM_PATH
         if not os.path.isabs(path):
             path = os.path.join(PROJECT_ROOT, path)
-        return os.path.normpath(path) if path else None
+        return os.path.normpath(path)
     return None
 
 
@@ -116,12 +121,12 @@ def ensure_ffmpeg_in_path() -> None:
         # 先展开；注册表条目追加在现有 PATH 之后，避免反超用户预期的
         # ffmpeg 版本
         os.environ["PATH"] = (
-            machine_path + ";"
-            + winreg.ExpandEnvironmentStrings(sys_path) + ";"
+            machine_path + os.pathsep
+            + winreg.ExpandEnvironmentStrings(sys_path) + os.pathsep
             + winreg.ExpandEnvironmentStrings(user_path)
         )
     except Exception as exc:
-        logging.getLogger(__name__).debug(f"从注册表重建 PATH 失败: {exc}")
+        logger.debug(f"从注册表重建 PATH 失败: {exc}")
 
 
 # ── 项目根目录 ────────────────────────────────────────────
@@ -364,12 +369,11 @@ def validate_video_file(video_path: str, timeout: int = 60) -> dict[str, Any]:
         raise VideoValidationError(f"视频文件不存在: {video_path}")
 
     try:
-        if os.path.getsize(video_path) == 0:
-            raise VideoValidationError(f"视频文件为空: {video_path}")
-    except VideoValidationError:
-        raise
+        file_size = os.path.getsize(video_path)
     except OSError as exc:
         raise VideoValidationError(f"无法访问视频文件: {video_path}") from exc
+    if file_size == 0:
+        raise VideoValidationError(f"视频文件为空: {video_path}")
 
     probe = _run_ffprobe(video_path, timeout=timeout)
     vs = _extract_video_stream(probe, video_path)
@@ -384,7 +388,7 @@ def validate_video_file(video_path: str, timeout: int = 60) -> dict[str, Any]:
         "height": height,
         "duration": duration,
         "file_path": video_path,
-        "file_size": os.path.getsize(video_path),
+        "file_size": file_size,
     }
 
 
@@ -666,7 +670,9 @@ def get_switch_time(track_result_path: str) -> float:
     # battlestart 模式：进入战斗时间即切换时间
     if result.get("track_mode") == "battlestart":
         battle_time = result.get("battle_start_time")
-        if battle_time is not None and battle_time > 0:
+        # 与下方 disappear_time 分支一致使用 isinstance 防御，
+        # 手改 JSON 为字符串时不会抛 TypeError
+        if isinstance(battle_time, (int, float)) and battle_time > 0:
             return float(battle_time)
         logger.warning("未检测到进入战斗，编队文本将显示3秒")
         return 3.0

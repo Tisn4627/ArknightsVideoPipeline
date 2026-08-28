@@ -12,6 +12,9 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
+# 空槽检测二值图的膨胀结构核尺寸（3x3 矩形核）
+_MORPH_KERNEL_SIZE = (3, 3)
+
 
 @dataclass
 class RegionOcrResult:
@@ -127,7 +130,7 @@ class RegionOCRer:
         _, binary = cv2.threshold(
             gray, self._bin_threshold, 255, cv2.THRESH_BINARY
         )
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, _MORPH_KERNEL_SIZE)
         binary = cv2.dilate(binary, kernel, iterations=self._bin_expansion)
 
         if binary.size == 0:

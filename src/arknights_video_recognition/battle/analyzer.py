@@ -22,7 +22,9 @@
 """
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import List, Optional, Sequence, Tuple
@@ -35,6 +37,9 @@ from arknights_video_recognition.ocr.engine import OcrEngine
 from arknights_video_recognition.tile import get_all_tile_positions
 
 logger = logging.getLogger(__name__)
+
+# 战场干员检测的最大采样帧数（对齐 Maa OperDetSamplingCount=20）
+_OPER_DET_SAMPLING_COUNT = 20
 
 # 自动召唤干员白名单：这些干员在部署/开技能时会自动在可部署格上部署召唤物，
 # 召唤物不占部署栏槽位（出现与撤退均不改变部署栏），只增加场上新生格子。
@@ -93,7 +98,8 @@ class BattleAnalyzer:
     Parameters
     ----------
     ocr_engine:
-        已构造的 :class:`OcrEngine`，为 ``None`` 时新建默认引擎。
+        已弃用：仅为兼容既有调用方保留，构造时不再使用（原 ``self.ocr``
+        死属性已删除）。
     """
 
     _DEFAULT_SKILL_RECT_MOVE = [-28, -140, 64, 64]
@@ -103,14 +109,8 @@ class BattleAnalyzer:
     _MAX_TILE_FALLBACK_DIST_SQ = 80 * 80
 
     def __init__(self, ocr_engine: Optional[OcrEngine] = None):
-        if ocr_engine is not None:
-            self.ocr = ocr_engine
-        else:
-            try:
-                self.ocr = OcrEngine()
-            except Exception:
-                self.ocr = None
-
+        # 兼容说明：ocr_engine 参数保留以兼容既有调用方，但已不使用——
+        # 原 self.ocr 属性从未被读取（死属性），已整体删除
         try:
             tasks = load_roi()
             skill_task = tasks.get("BattleSkillReady", {})
@@ -125,7 +125,9 @@ class BattleAnalyzer:
             self._det_box_move = list(
                 det_box_task.get("rectMove") or self._DEFAULT_DET_BOX_MOVE
             )
-        except Exception:
+        except Exception as exc:
+            # roi.json 缺失/损坏时回退内置默认值，保证分析器仍可工作
+            logger.warning("读取 roi.json 的 rectMove 失败，使用内置默认值: %s", exc)
             self._skill_rect_move = list(self._DEFAULT_SKILL_RECT_MOVE)
             self._dir_rect_move = list(self._DEFAULT_DIR_RECT_MOVE)
             self._det_box_move = list(self._DEFAULT_DET_BOX_MOVE)
@@ -139,7 +141,8 @@ class BattleAnalyzer:
         self.deployment_analyzer = None
         # 编队干员（由 infer_action_conditions 注入）
         self._formation_opers: list = []
-        # 干员部署时间戳（由 _process_changes 的 Deploy 分支记录），用于技能检测过滤
+        # 干员部署时间戳（由 _process_changes 的 Deploy 分支记录），
+        # 仅记录部署时间戳（诊断用途），当前无读取方
         self._deploy_times: dict[str, float] = {}
 
     # --- ROI 裁剪 ----------------------------------------------------------
@@ -153,8 +156,6 @@ class BattleAnalyzer:
           数字与标点后缀（如 Lancet-2 的 -2）不计入长度
         - 纯数字、纯标点、空串均被拒绝
         """
-        import re
-
         if not name:
             return False
         s = name.strip()
@@ -176,7 +177,6 @@ class BattleAnalyzer:
         if not raw_name:
             return None
         from arknights_video_recognition.formation.analyzer import load_alias_index
-        import difflib
 
         aliases, mapping = load_alias_index()
         if raw_name in mapping:
@@ -383,7 +383,8 @@ class BattleAnalyzer:
 
         try:
             positions = get_all_tile_positions(level, screen_size)
-        except Exception:
+        except Exception as exc:
+            logger.warning("get_all_tile_positions 失败，使用最近邻回退: %s", exc)
             positions = self._fallback_positions(level, screen_size)
 
         # 阶段 1：在 battle_start_frame 上做编队↔部署栏匹配，填充 all_avatars
@@ -524,6 +525,9 @@ class BattleAnalyzer:
         if not slots:
             return
 
+        # 跨类私有访问说明：DeploymentAnalyzer 的 _char_roles/_match_thr 为其
+        # 私有属性，因跨模块无公开访问器且包结构限制（不宜反向暴露接口），
+        # 这里以 getattr 防御式读取；若 DeploymentAnalyzer 结构变更需同步此处
         char_roles = getattr(deployment_analyzer, "_char_roles", {}) or {}
         match_thr = float(getattr(deployment_analyzer, "_match_thr", 0.6))
 
@@ -839,9 +843,8 @@ class BattleAnalyzer:
                 start_frame = int(round(start * fps))
                 end_frame = int(round(end * fps))
                 frame_count = end_frame - start_frame
-                OperDetSamplingCount = 20
-                if frame_count > OperDetSamplingCount + 1:
-                    skip_count = frame_count // (OperDetSamplingCount + 1) - 1
+                if frame_count > _OPER_DET_SAMPLING_COUNT + 1:
+                    skip_count = frame_count // (_OPER_DET_SAMPLING_COUNT + 1) - 1
                 else:
                     skip_count = 0
                 det_begin = start_frame + skip_count
@@ -931,13 +934,19 @@ class BattleAnalyzer:
         if pre_valid is not None and newcomers and classifier is not None:
             for tile in newcomers:
                 dir_sampling[tile] = np.zeros(4, dtype=np.float32)
+            # tile→屏幕坐标仅依赖 tile/level，与帧无关：在帧循环外预取一次，
+            # 避免每帧重复调用 tile_to_screen_pos
+            newcomer_positions = {
+                tile: tile_to_screen_pos(
+                    tile, level, screen_size, positions=positions
+                )
+                for tile in newcomers
+            }
             for frame in frames:
                 if frame is None or frame.size == 0:
                     continue
                 for tile in newcomers:
-                    tile_pos = tile_to_screen_pos(
-                        tile, level, screen_size, positions=positions
-                    )
+                    tile_pos = newcomer_positions[tile]
                     if tile_pos is None:
                         continue
                     dir_patch = self._crop_rect_move(
@@ -1145,7 +1154,7 @@ class BattleAnalyzer:
                 # 对齐 Maa 行 736-737：insert_or_assign(name, loc) + (loc, name)
                 self.operator_locations[name] = loc
                 self.location_operators[loc] = name
-                # 记录部署时间，用于技能检测的时间窗口过滤
+                # 仅记录部署时间戳（诊断用途），当前无读取方
                 if clip_ts is not None:
                     self._deploy_times[name] = clip_ts
         elif retreat_branch:
@@ -1169,8 +1178,8 @@ class BattleAnalyzer:
                 ))
                 # 对齐 Maa 行 758-759：erase(pre_loc) + erase(name)
                 self.location_operators.pop(loc, None)
-                if name:
-                    self.operator_locations.pop(name, None)
+                # name 经上方 `if not name: continue` 保证非空，无需再判
+                self.operator_locations.pop(name, None)
         # else: Unknown 分支（对齐 Maa 行 762-771）：只 warn 不生成 action
 
         return actions

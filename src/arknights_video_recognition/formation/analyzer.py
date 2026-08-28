@@ -35,6 +35,10 @@ from arknights_video_recognition.ocr.engine import OcrEngine
 # 结构: (别名列表, {别名: 标准中文名})
 _alias_index: Optional[tuple[list[str], dict[str, str]]] = None
 
+# 编队识别提前停止的连续无新增帧数阈值（超过该值即停，行为保持 >5 不变；
+# 与 settings.START_BUTTON_STABLE_FRAMES 的"开始按钮稳定帧数"语义无关）
+_NO_CHANGE_STOP_FRAMES = 5
+
 
 def load_alias_index() -> tuple[list[str], dict[str, str]]:
     """加载 battle_data.json，构建 (别名列表, 别名->标准名 映射)。
@@ -157,7 +161,6 @@ class FormationAnalyzer:
             # 3) 用名字框的 rect 裁剪头像
             # 对齐 Maa BattleFormationOperAvatarMove = [-120, -250, 150, 165]
             # rect 是 [x, y, w, h] 在原图坐标系
-            name_x0 = r.rect[0]
             name_y0 = r.rect[1]
             # 用名字框右上角作为基点（Maa 原版使用名字框右上角）
             name_right = r.rect[0] + r.rect[2]
@@ -218,7 +221,8 @@ class FormationAnalyzer:
                     no_changes_count += 1
                 else:
                     no_changes_count = 0
-            if no_changes_count > 5:
+            # 连续无新增超过阈值即停（保持原 >5 行为不变，第 6 帧停）
+            if no_changes_count > _NO_CHANGE_STOP_FRAMES:
                 break
 
         opers = list(accumulated.values())

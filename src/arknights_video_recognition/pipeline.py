@@ -76,7 +76,7 @@ _PLACEHOLDER_OPER_NAMES = frozenset({
 
 
 def _is_location_buildable(
-    level: Optional[Dict[str, Any]],
+    level: Optional[dict[str, Any]],
     location: Optional[Sequence[float]],
 ) -> bool:
     """校验动作落点是否位于可部署格（``buildableType != 0``）。
@@ -167,7 +167,7 @@ class VideoRecognitionPipeline:
     def __init__(
         self,
         ocr_source: str = DEFAULT_OCR_SOURCE,
-        resolution: Tuple[int, int] = DEFAULT_RESOLUTION,
+        resolution: tuple[int, int] = DEFAULT_RESOLUTION,
     ):
         # 先校验资源齐全，缺失直接抛 ResourceMissingError
         check_resource()
@@ -327,7 +327,7 @@ class VideoRecognitionPipeline:
 
     def _scan_formation_frames(
         self, video_frames: VideoFrames
-    ) -> List[Tuple[float, Any]]:
+    ) -> list[tuple[float, Any]]:
         """动态扫描编队页，返回最后一段开始按钮窗口内的帧列表。
 
         流程：
@@ -354,10 +354,8 @@ class VideoRecognitionPipeline:
                 cached_frames.append((ts, frame))
                 continue
             has_btn = self._support_recognizer.detect_start_button(frame)
-            is_battle = False
-            if self.operator_detector is not None:
-                dets = self.operator_detector.detect(frame)
-                is_battle = len(dets) > 0
+            dets = self.operator_detector.detect(frame)
+            is_battle = len(dets) > 0
             flags.append((ts, has_btn, is_battle))
             cached_frames.append((ts, frame))
             # 检测到战斗画面立即停止
@@ -392,7 +390,7 @@ class VideoRecognitionPipeline:
 
     def _scan_post_formation_frames(
         self, video_frames: VideoFrames, formation_end_ts: float
-    ) -> List[Tuple[float, Any]]:
+    ) -> list[tuple[float, Any]]:
         """扫描编队页结束后的帧（战斗加载屏），用于关卡名 OCR。
 
         对齐 Maa C++ ``analyze_stage``：从 ``m_formation_end_frame`` 之后
@@ -416,7 +414,7 @@ class VideoRecognitionPipeline:
 
         start_ts = formation_end_ts + self._SCAN_INTERVAL
         end_ts = min(formation_end_ts + self._SCAN_MAX_SEC, duration)
-        frames: List[Tuple[float, Any]] = []
+        frames: list[tuple[float, Any]] = []
 
         # 顺序采样，避免逐帧 seek
         for ts, frame in video_frames.sample_range(start_ts, end_ts, self._SCAN_INTERVAL):
@@ -425,16 +423,15 @@ class VideoRecognitionPipeline:
             if frame.mean() < self._BLACK_FRAME_MEAN:
                 continue
             frames.append((ts, frame))
-            if self.operator_detector is not None:
-                dets = self.operator_detector.detect(frame)
-                if len(dets) > 0:
-                    break
+            # 检测到场上干员（战斗场景）即停止扫描
+            if len(self.operator_detector.detect(frame)) > 0:
+                break
 
         return frames
 
     def _recognize_formation(
-        self, opening: List[Tuple[float, Any]]
-    ) -> List[FormationOper]:
+        self, opening: list[tuple[float, Any]]
+    ) -> list[FormationOper]:
         """识别编队（含助战干员）。
 
         使用 analyze_with_support 以支持助战槽识别（对齐 Maa 但扩展了助战）。
@@ -499,9 +496,9 @@ class VideoRecognitionPipeline:
 
     def _convert_actions(
         self,
-        battle_actions: List[BattleAction],
-        level: Optional[Dict[str, Any]] = None,
-    ) -> List[CopilotAction]:
+        battle_actions: list[BattleAction],
+        level: Optional[dict[str, Any]] = None,
+    ) -> list[CopilotAction]:
         """把 battle/analyzer 的轻量 Action 列表转成 copilot.Action。
 
         关键转换点：
@@ -557,7 +554,7 @@ class VideoRecognitionPipeline:
                 continue
 
             # ba.location 已是 [col, row]（对齐 Maa [loc.x, loc.y]），直接透传
-            location: Optional[List[int]] = None
+            location: Optional[list[int]] = None
             if ba.location is not None and len(ba.location) >= 2:
                 location = [int(ba.location[0]), int(ba.location[1])]
 

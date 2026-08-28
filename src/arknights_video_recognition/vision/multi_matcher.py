@@ -11,6 +11,9 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
+# NMS 去重默认 IoU 阈值：重叠超过该值的匹配视为同一目标
+_DEFAULT_NMS_IOU = 0.3
+
 
 @dataclass
 class MatchResult:
@@ -82,7 +85,7 @@ class MultiMatcher:
         return inter / union
 
     def _nms(
-        self, candidates: List[MatchResult], iou_threshold: float = 0.3
+        self, candidates: List[MatchResult], iou_threshold: float = _DEFAULT_NMS_IOU
     ) -> List[MatchResult]:
         """对候选匹配做 NMS 去重。
 
@@ -165,6 +168,6 @@ class MultiMatcher:
             candidates.append(MatchResult(rect=rect, score=float(score_map[py, px])))
 
         # NMS 去重后按 score 降序返回
-        kept = self._nms(candidates, iou_threshold=0.3)
+        kept = self._nms(candidates, iou_threshold=_DEFAULT_NMS_IOU)
         kept.sort(key=lambda r: r.score, reverse=True)
         return kept

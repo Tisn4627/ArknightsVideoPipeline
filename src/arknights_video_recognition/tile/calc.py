@@ -274,7 +274,17 @@ def get_all_tile_positions(
 
     外层长度为 ``height``，内层长度为 ``width``，
     ``result[row][col]`` 对应 ``tiles[row][col]`` 的屏幕坐标。
+
+    Raises
+    ------
+    ValueError
+        关卡数据缺少 ``height``/``width`` 字段时抛出（带明确信息，
+        避免 KeyError 难以定位）。
     """
+    if "height" not in level or "width" not in level:
+        raise ValueError(
+            f"关卡数据缺少 height/width 字段: {level.get('code', level.get('stageId', '<unknown>'))}"
+        )
     height = level["height"]
     width = level["width"]
     calc = _make_calc(level, screen_size)

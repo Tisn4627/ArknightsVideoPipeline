@@ -532,6 +532,12 @@ def build_panel_highlight_clips(
     text_y = float(text_config.get("text_y", 240))
 
     clips: list[TextClip] = []
+    # 等距回退定位所需的基准字形顶（正常路径 line_tops 有效时不使用），
+    # 提到循环外只测量一次；无 groups 时 lines 为空则跳过
+    single_top_0 = (
+        _measure_single_line_glyph_top(lines[0], measure_canvas)
+        if lines and line_tops is None else 0.0
+    )
     for i, (group_start, group_end) in enumerate(line_groups):
         start = starts[i]
         end = ends[i]
@@ -547,7 +553,6 @@ def build_panel_highlight_clips(
         # line_tops[0] 为基准定位会整行错位（残影）。按
         # "块内行顶 - 单行字形顶"（回退时以等距行盒顶近似）定位，
         # 使高亮字形与主文本字形严格重合。
-        single_top_0 = _measure_single_line_glyph_top(lines[0], measure_canvas)
         for line_idx in range(group_start, min(group_end, len(lines))):
             single_top = _measure_single_line_glyph_top(lines[line_idx], measure_canvas)
             if line_tops is not None:

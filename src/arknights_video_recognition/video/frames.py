@@ -74,9 +74,11 @@ class VideoFrames:
     ) -> None:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            # Windows 非 ASCII 路径兜底：取 8.3 短路径重试一次
+            # Windows 非 ASCII 路径兜底：取 8.3 短路径重试一次；
+            # 重建实例前先释放旧 cap，避免资源泄漏
             short = _get_short_path(video_path)
             if short and short != video_path:
+                cap.release()
                 cap = cv2.VideoCapture(short)
         if not cap.isOpened():
             raise ValueError(f"无法打开视频文件: {video_path}")
@@ -185,6 +187,7 @@ class VideoFrames:
             ok, frame = self._cap.read()
             if not ok or frame is None:
                 break
+            self._cur_pos = idx + 1  # 与 sample()/get_frame_at 一致地维护读取位置
             yield idx, self._postprocess(frame)
             idx += 1
 
@@ -289,7 +292,7 @@ class VideoFrames:
     def get_frame_at(self, timestamp_sec: float) -> Optional[np.ndarray]:
         """取指定时间点（秒）的帧，已 resize 到目标分辨率。
 
-        超出视频范围或读取失败时返回 ``None``。
+        负时间、目标帧索引超出 ``[0, total)`` 范围或读取失败时返回 ``None``。
 
         优化：带帧缓存 + 顺序读取。当目标帧在当前 capture 位置之前或
         距离较远时才 seek；否则顺序 read 跳帧到达目标，避免压缩视频
@@ -305,8 +308,9 @@ class VideoFrames:
         else:
             frame_idx = int(round(timestamp_sec * self._fps))
             total = self._source_frame_count
+            # 超界（超出 [0, total)）直接返回 None，符合 docstring 语义
             if total > 0 and frame_idx >= total:
-                frame_idx = total - 1
+                return None
 
         # 缓存命中（LRU：命中后移到最新端）
         cached = self._frame_cache.pop(frame_idx, None)

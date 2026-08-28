@@ -4,7 +4,7 @@
 - PIPELINE_DEFAULTS 包含新配置键
 - set_ffmpeg_config / _get_effective_ffmpeg_dir 路径解析逻辑
 - ensure_ffmpeg_in_path 的 PATH 前置、幂等性、配置变更后重新应用
-- ConfigProxy getter/setter 与 build_overrides
+- ConfigProxy getter/setter 与 FFmpeg 配置同步
 - SettingsPage FFmpeg 卡片的平台可见性（Windows 显示 / 非 Windows 隐藏）
 - SettingsPage 信号发射
 - 配置持久化（save/load 往返）
@@ -176,14 +176,13 @@ class TestConfigProxy:
         assert proxy.ffmpeg_custom_enabled() is True
         assert proxy.ffmpeg_path() == "resource/ffmpeg/bin"
 
-    def test_build_overrides_includes_ffmpeg(self, qapp, tmp_path) -> None:
+    def test_ffmpeg_config_values_persisted_to_pipeline(self, qapp, tmp_path) -> None:
+        """set_ffmpeg_* 写入 pipeline 字典，save_all 后可从磁盘读回"""
         proxy = ConfigProxy(project_dir=str(tmp_path))
         proxy.set_ffmpeg_custom_enabled(True)
         proxy.set_ffmpeg_path("/custom/ffmpeg/bin")
-        overrides = proxy.build_overrides()
-        assert "ffmpeg_custom_enabled" in overrides
-        assert "ffmpeg_path" in overrides
-        assert overrides["ffmpeg_custom_enabled"] is True
+        assert proxy.get("ffmpeg_custom_enabled") is True
+        assert proxy.get("ffmpeg_path") == "/custom/ffmpeg/bin"
 
     def test_set_ffmpeg_custom_syncs_utils(self, qapp, tmp_path) -> None:
         """ConfigProxy setter 同步到 utils 模块全局"""

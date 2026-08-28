@@ -127,6 +127,13 @@ class MaterialCard(CardFrame):
     def add_layout(self, layout) -> None:
         self._layout.addLayout(layout)
 
+    def set_content_alignment(self, alignment: Qt.AlignmentFlag) -> None:
+        """设置卡片内容布局的对齐方式（转发给内部布局）
+
+        供外部替代对私有 ``_layout`` 的直接访问。
+        """
+        self._layout.setAlignment(alignment)
+
     def set_title(self, title: str) -> None:
         if self._title_label is None:
             self._title_label = QLabel(title)

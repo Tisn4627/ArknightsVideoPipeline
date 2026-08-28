@@ -16,8 +16,8 @@ from typing import Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from arknights_video_pipeline.core.config import ConfigManager
-from arknights_video_pipeline.core.utils import PROJECT_ROOT
+from arknights_video_pipeline.core.config import PIPELINE_DEFAULTS, ConfigManager
+from arknights_video_pipeline.core.utils import PROJECT_ROOT, set_ffmpeg_config
 
 
 class ConfigProxy(QObject):
@@ -51,7 +51,6 @@ class ConfigProxy(QObject):
         self._config_mgr.pipeline.pop("video_paths", None)
         self._config_mgr.pipeline.pop("video_path", None)
         # 同步 FFmpeg 路径配置到 utils 模块全局（GUI 启动时）
-        from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(
             bool(self._config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
             self._config_mgr.pipeline.get("ffmpeg_path", ""),
@@ -93,7 +92,6 @@ class ConfigProxy(QObject):
         self._config_mgr.pipeline.pop("video_path", None)
         # 重新同步 FFmpeg 配置到 utils 模块全局（重置/重新加载后，
         # 实际生效值必须与磁盘一致，否则 UI 显示与运行时行为脱节）
-        from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(
             bool(self._config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
             self._config_mgr.pipeline.get("ffmpeg_path", ""),
@@ -138,12 +136,20 @@ class ConfigProxy(QObject):
                 value: Any) -> None:
         """设置子配置字段值，支持点号分隔的嵌套路径
 
-        中间层字典不存在时自动创建。设置后发射 ``sub_config_changed`` 信号。
+        中间层字典不存在时自动创建；中间节点存在但不是对象（dict）时
+        抛出 ``ValueError``，避免静默覆盖结构化数据。设置后发射
+        ``sub_config_changed`` 信号。
         """
         data = self._sub_configs.setdefault(config_name, {})
         parts = field_path.split(".")
         for part in parts[:-1]:
-            data = data.setdefault(part, {})
+            node = data.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(
+                    f"配置路径 {field_path} 的中间节点 {part!r} 不是对象，"
+                    f"无法写入（当前类型: {type(node).__name__}）"
+                )
+            data = node
         data[parts[-1]] = value
         self.sub_config_changed.emit(config_name, field_path, value)
 
@@ -250,9 +256,13 @@ class ConfigProxy(QObject):
 
     def copilot_timeout(self) -> int:
         try:
-            return int(self.get("copilot_timeout_seconds", 2400))
+            # 默认值与 core/config.py PIPELINE_DEFAULTS 统一
+            return int(self.get(
+                "copilot_timeout_seconds",
+                PIPELINE_DEFAULTS["copilot_timeout_seconds"],
+            ))
         except (TypeError, ValueError):
-            return 2400
+            return PIPELINE_DEFAULTS["copilot_timeout_seconds"]
 
     def set_copilot_timeout(self, seconds: int) -> None:
         self.set("copilot_timeout_seconds", int(seconds))
@@ -352,7 +362,6 @@ class ConfigProxy(QObject):
     def set_ffmpeg_custom_enabled(self, enabled: bool) -> None:
         self.set("ffmpeg_custom_enabled", bool(enabled))
         # 同步到 utils 模块全局，使下次 ensure_ffmpeg_in_path() 生效
-        from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(bool(enabled), self.get("ffmpeg_path", ""))
 
     def ffmpeg_path(self) -> str:
@@ -363,7 +372,6 @@ class ConfigProxy(QObject):
         # 同步到 utils 模块全局。注意：这是进程级共享状态，批量运行
         # 期间修改会让在途 worker 在下一次子进程解析时读到新值，产生
         # "半旧半新"批次——GUI 侧应在批次运行中禁用这两项设置
-        from arknights_video_pipeline.core.utils import set_ffmpeg_config
         set_ffmpeg_config(self.get("ffmpeg_custom_enabled", False), path or "")
 
     # ── 日志配置 ────────────────────────────────────────
@@ -376,9 +384,10 @@ class ConfigProxy(QObject):
 
     def log_max_bytes(self) -> int:
         try:
-            return int(self.get("log_max_bytes", 10 * 1024 * 1024))
+            # 默认值与 core/config.py PIPELINE_DEFAULTS 统一
+            return int(self.get("log_max_bytes", PIPELINE_DEFAULTS["log_max_bytes"]))
         except (TypeError, ValueError):
-            return 10 * 1024 * 1024
+            return PIPELINE_DEFAULTS["log_max_bytes"]
 
     def set_log_max_bytes(self, n: int) -> None:
         self.set("log_max_bytes", int(n))
@@ -416,19 +425,6 @@ class ConfigProxy(QObject):
         self.reload_sub_config("track")
 
     # ── 构建运行参数 ──────────────────────────────────────
-
-    def build_overrides(self) -> dict[str, Any]:
-        """构建用于合并到 ConfigManager 的 CLI/GUI 覆盖项"""
-        overrides: dict[str, Any] = {}
-        for key in ["maa_path", "output_dir", "log_level", "log_to_file",
-                    "log_max_bytes", "log_backup_count",
-                    "formation", "actions", "track",
-                    "video_compose_style", "video_compose_config",
-                    "ffmpeg_custom_enabled", "ffmpeg_path"]:
-            value = self.get(key)
-            if value is not None:
-                overrides[key] = value
-        return overrides
 
     def build_worker_config(self) -> ConfigManager:
         """为单个 worker 线程构建独立的 ConfigManager 快照

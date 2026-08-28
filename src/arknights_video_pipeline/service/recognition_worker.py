@@ -18,21 +18,18 @@ service.recognition_worker - Recognition 独立识别后台工作线程
 from __future__ import annotations
 
 import logging
-import threading
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from arknights_video_pipeline.core.config import ConfigManager
-from arknights_video_pipeline.core.logger import setup_logger
 from arknights_video_pipeline.core.pipeline import Pipeline
-from arknights_video_pipeline.core.step_defs import STEPS_BY_KEY
-from arknights_video_pipeline.service.pipeline_worker import QtLogHandler
+from arknights_video_pipeline.service.pipeline_worker import _PipelineWorkerBase
 
 # Recognition 模式固定跳过的步骤：仅保留 copilot（步骤1）
 _RECOGNIZE_SKIP_STEPS: set[str] = {"formation", "actions", "track", "compose"}
 
 
-class RecognitionWorker(QThread):
+class RecognitionWorker(_PipelineWorkerBase):
     """Recognition 独立识别工作线程
 
     Signals:
@@ -46,11 +43,9 @@ class RecognitionWorker(QThread):
             - cancelled: 是否被用户取消
     """
 
-    step_started = pyqtSignal(str, str)
-    step_finished = pyqtSignal(str, bool, float, list)
-    progress_updated = pyqtSignal(int, str)
-    log_emitted = pyqtSignal(str, str)
     recognition_finished = pyqtSignal(bool, str, bool)
+
+    _error_label = "识别异常"
 
     def __init__(
         self,
@@ -58,71 +53,42 @@ class RecognitionWorker(QThread):
         config_manager: ConfigManager,
         parent: QObject | None = None,
     ) -> None:
-        super().__init__(parent)
-        self._video_path = video_path
-        self._config_manager = config_manager
-        self._cancel_event = threading.Event()
-        self._log_handler: QtLogHandler | None = None
+        super().__init__(video_path, config_manager, parent=parent)
+        self._json_path = ""
 
     def cancel(self) -> None:
-        """请求取消：在当前步骤边界退出（与 PipelineWorker 一致）"""
+        """请求取消：在当前步骤边界退出
+
+        与 PipelineWorker 的区别：此处额外发射一条提示日志。识别工具
+        每次仅运行单个 worker，不存在 PipelineService 并发模式下多个
+        worker 各刷一条相同日志的刷屏问题，保留提示便于用户确认取消
+        已被接受。
+        """
         self._cancel_event.set()
         self.log_emitted.emit("INFO", "用户请求取消，将在当前步骤结束后停止")
 
-    def run(self) -> None:
-        json_path = ""
-        success = False
-        pipeline: Pipeline | None = None
-        logger: logging.Logger | None = None
+    def _log_run_start(self) -> None:
+        self.log_emitted.emit("INFO", "开始视频识别...")
 
-        try:
-            # 安装日志桥接（thread_ident 必须在 worker 线程内获取）
-            worker_thread_ident = threading.get_ident()
-            logger = setup_logger("pipeline")
-            self._log_handler = QtLogHandler(self.log_emitted, worker_thread_ident)
-            self._log_handler.setFormatter(logging.Formatter("%(message)s"))
-            logger.addHandler(self._log_handler)
+    def _build_pipeline(self, logger: logging.Logger) -> Pipeline:
+        return Pipeline(
+            video_path=self._video_path,
+            config_mgr=self._config_manager,
+            logger=logger,
+            background_image_path=None,  # 识别模式无需背景板图片
+            skip_steps=_RECOGNIZE_SKIP_STEPS,
+            copilot_json_path=None,  # 识别模式是产出 JSON，不接受输入
+            on_step_start=self._on_step_start,
+            on_step_finish=self._on_step_finish,
+            is_cancelled=lambda: self._cancel_event.is_set(),
+        )
 
-            pipeline = Pipeline(
-                video_path=self._video_path,
-                config_mgr=self._config_manager,
-                logger=logger,
-                background_image_path=None,  # 识别模式无需背景板图片
-                skip_steps=_RECOGNIZE_SKIP_STEPS,
-                copilot_json_path=None,  # 识别模式是产出 JSON，不接受输入
-                on_step_start=self._on_step_start,
-                on_step_finish=self._on_step_finish,
-                is_cancelled=lambda: self._cancel_event.is_set(),
-            )
+    def _collect_result(self, pipeline: Pipeline, logger: logging.Logger,
+                        success: bool) -> None:
+        if success and pipeline.copilot_json_path:
+            self._json_path = pipeline.copilot_json_path
 
-            self.log_emitted.emit("INFO", "开始视频识别...")
-            success = pipeline.run()
-            if success and pipeline.copilot_json_path:
-                json_path = pipeline.copilot_json_path
-        except Exception as exc:
-            if logger is not None:
-                logger.error(f"识别异常: {exc}")
-            success = False
-        finally:
-            if logger is not None and self._log_handler is not None:
-                logger.removeHandler(self._log_handler)
-                self._log_handler = None
-            # 确保完成信号一定发射，避免 UI 卡在"运行中"状态
-            self.recognition_finished.emit(
-                success, json_path, self._cancel_event.is_set()
-            )
-
-    # ── Pipeline 回调实现 ──────────────────────────────────
-
-    def _on_step_start(self, step_key: str, step_desc: str) -> None:
-        """步骤开始回调：发射 step_started 与 progress_updated 信号"""
-        step = STEPS_BY_KEY.get(step_key)
-        percent = step.percent if step else 0
-        self.step_started.emit(step_key, step_desc)
-        self.progress_updated.emit(percent, f"正在执行：{step_desc}")
-
-    def _on_step_finish(
-        self, step_key: str, success: bool, elapsed: float, warnings: list[str]
-    ) -> None:
-        """步骤结束回调：发射 step_finished 信号"""
-        self.step_finished.emit(step_key, success, elapsed, warnings)
+    def _emit_finished(self, success: bool) -> None:
+        self.recognition_finished.emit(
+            success, self._json_path, self._cancel_event.is_set()
+        )

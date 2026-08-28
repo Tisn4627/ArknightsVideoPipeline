@@ -10,8 +10,8 @@ gui.main_window - 主窗口
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QEvent
-from PyQt6.QtGui import QShowEvent
+from PyQt6.QtCore import Qt, QEvent, QObject
+from PyQt6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QScrollArea, QComboBox,
@@ -50,7 +50,10 @@ class MainWindow(QMainWindow):
         # GUI 偏好独立管理（config/gui.json），与 pipeline 配置完全解耦
         self._gui_config = GuiConfig(parent=self)
         self._is_dark = self._gui_config.is_dark_theme()
-        self._current_page = 0  # 0=Home, 1=Settings, 2=Info, 3=Tools
+        # 待后台校验完成后启动的批次输入（_on_run 暂存，
+        # _on_validation_finished 消费）
+        self._pending_run_paths: list[str] = []
+        self._pending_run_json_paths: list[str | None] = []
         # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
         self._titlebar_applied = False
 
@@ -283,6 +286,13 @@ class MainWindow(QMainWindow):
         per_col = max_cb_w + spacing
         cols = max(1, min(len(checkboxes), available_width // per_col))
 
+        # 列数未变化时跳过重排：resize 期间本方法被高频调用
+        # （resizeEvent 与视口 eventFilter 双路径），全量 remove/add
+        # 仅在列数真正变化时才有意义
+        if cols == getattr(self, "_last_skip_cols", None):
+            return
+        self._last_skip_cols = cols
+
         # 先清空再按新列数重排
         for i in reversed(range(grid.count())):
             item = grid.itemAt(i)
@@ -290,7 +300,6 @@ class MainWindow(QMainWindow):
                 grid.removeWidget(item.widget())
         for i, cb in enumerate(checkboxes):
             grid.addWidget(cb, i // cols, i % cols)
-        self._last_skip_cols = cols
 
     def _config_card_content_width(self) -> int:
         """计算当前布局下 Input configuration 卡片的内容可用宽度
@@ -431,16 +440,6 @@ class MainWindow(QMainWindow):
         card.add_widget(self._batch_list)
         return card
 
-    @staticmethod
-    def _labeled_row(label: str, widget: QWidget) -> QHBoxLayout:
-        layout = QHBoxLayout()
-        layout.setSpacing(12)
-        lbl = QLabelEx(label)
-        lbl.setFixedWidth(72)
-        layout.addWidget(lbl)
-        layout.addWidget(widget, 1)
-        return layout
-
     # ── 信号连接 ──────────────────────────────────────────
 
     def _connect_signals(self) -> None:
@@ -503,13 +502,18 @@ class MainWindow(QMainWindow):
         self._service.overall_progress.connect(self._progress_card.set_progress)
         self._service.log_emitted.connect(self._log_viewer.append)
         self._service.batch_finished.connect(self._on_batch_finished)
+        # 后台输入校验结果（validate_batch_async 完成后回主线程）
+        self._service.validation_finished.connect(self._on_validation_finished)
 
     # ── 配置加载与同步 ────────────────────────────────────
 
-    def _load_config_to_ui(self) -> None:
-        self._config.load()
-        # 加载期间阻塞 MainWindow 自有控件信号，避免 setChecked/setText
-        # 触发回写配置。SettingsPage 的控件由其公开方法内部自行阻塞信号。
+    def _sync_home_widgets(self) -> None:
+        """从配置回填主页共享控件（背景图/风格/Skip 复选框）
+
+        加载期间阻塞 MainWindow 自有控件信号，避免 setChecked/setText
+        触发回写配置；同时阻塞批量列表信号避免 add_paths 回写。
+        视频列表不持久化：不在此处恢复。
+        """
         controls = [
             self._bg_selector,
             self._style_combo,
@@ -517,7 +521,6 @@ class MainWindow(QMainWindow):
         controls.extend(cb for cb in self._skip_checkboxes.values())
         for ctrl in controls:
             ctrl.blockSignals(True)
-        # 阻塞批量列表信号，避免 add_paths 回写配置
         self._batch_list.blockSignals(True)
         try:
             self._bg_selector.set_path(self._config.background_image())
@@ -531,24 +534,28 @@ class MainWindow(QMainWindow):
             skip_steps = self._config.skip_steps()
             for key, cb in self._skip_checkboxes.items():
                 cb.setChecked(key in skip_steps)
-
-            # 视频列表不持久化：每次启动为空，不从此处恢复
         finally:
             for ctrl in controls:
                 ctrl.blockSignals(False)
             self._batch_list.blockSignals(False)
-        # SettingsPage 控件通过公开方法设置（内部阻塞信号避免回写）
+
+    def _sync_settings_page_fields(self) -> None:
+        """从配置回填 SettingsPage 的 pipeline 相关字段行
+
+        SettingsPage 控件通过公开方法设置（内部阻塞信号避免回写）。
+        首次加载与配置重置后的刷新共用，避免两份 set_* 清单漂移。
+        """
         sp = self._settings_page
         sp.set_maa_path(self._config.maa_path())
         sp.set_output_dir(self._config.output_dir())
         sp.set_log_level(self._config.log_level())
-        # 性能配置：从 pipeline.json 恢复多线程开关与最大并发数
+        # 性能配置：多线程开关与最大并发数
         sp.set_multithreading(self._config.multithreading())
         sp.set_max_concurrent(self._config.max_concurrent())
-        # FFmpeg 路径配置：从 pipeline.json 恢复自定义开关与路径
+        # FFmpeg 路径配置
         sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
         sp.set_ffmpeg_path(self._config.ffmpeg_path())
-        # 新增 pipeline.json 字段：日志/统一超时重试/子配置路径
+        # 日志 / 统一超时重试 / 子配置路径
         sp.set_log_to_file(self._config.log_to_file())
         sp.set_log_max_bytes(self._config.log_max_bytes())
         sp.set_log_backup_count(self._config.log_backup_count())
@@ -564,8 +571,13 @@ class MainWindow(QMainWindow):
         sp.set_stage_override(self._config.stage_override())
         sp.set_with_video_time(self._config.with_video_time())
         sp.set_resource_dir(self._config.recognition_resource_dir())
+
+    def _load_config_to_ui(self) -> None:
+        self._config.load()
+        self._sync_home_widgets()
+        self._sync_settings_page_fields()
         # 子配置字段（track/formation/actions/video_compose style1+style2）
-        sp.load_sub_config_values(self._config)
+        self._settings_page.load_sub_config_values(self._config)
 
     def _on_style_changed(self, style: str) -> None:
         self._config.set_style(style)
@@ -603,60 +615,12 @@ class MainWindow(QMainWindow):
 
         # 2. 刷新 pipeline 相关共享控件（设置页 + 主页）
         if "pipeline" in generated:
-            controls = [
-                self._bg_selector,
-                self._style_combo,
-            ]
-            controls.extend(cb for cb in self._skip_checkboxes.values())
-            for ctrl in controls:
-                ctrl.blockSignals(True)
-            # 阻塞批量列表信号，避免 set 时回写配置
-            self._batch_list.blockSignals(True)
-            try:
-                style = self._config.style()
-                index = self._style_combo.findText(style)
-                if index >= 0:
-                    self._style_combo.setCurrentIndex(index)
-                self._on_style_changed(style)
-
-                # 主页控件同步刷新：背景图 / Skip 复选框（视频列表不持久化，保持会话状态）
-                self._bg_selector.set_path(self._config.background_image())
-                skip_steps = self._config.skip_steps()
-                for key, cb in self._skip_checkboxes.items():
-                    cb.setChecked(key in skip_steps)
-            finally:
-                for ctrl in controls:
-                    ctrl.blockSignals(False)
-                self._batch_list.blockSignals(False)
+            # 主页控件同步刷新：背景图 / Skip 复选框（视频列表不持久化，保持会话状态）
+            self._sync_home_widgets()
+            self._sync_settings_page_fields()
 
             if not self._service.is_running():
                 self._run_btn.setEnabled(bool(self._config.video_paths()))
-
-            sp.set_maa_path(self._config.maa_path())
-            sp.set_output_dir(self._config.output_dir())
-            sp.set_log_level(self._config.log_level())
-            # 性能配置同步刷新（重置后恢复默认值 multithreading=false, max_concurrent=1）
-            sp.set_multithreading(self._config.multithreading())
-            sp.set_max_concurrent(self._config.max_concurrent())
-            # FFmpeg 路径配置同步刷新
-            sp.set_ffmpeg_custom(self._config.ffmpeg_custom_enabled())
-            sp.set_ffmpeg_path(self._config.ffmpeg_path())
-            # 新增 pipeline.json 字段同步刷新
-            sp.set_log_to_file(self._config.log_to_file())
-            sp.set_log_max_bytes(self._config.log_max_bytes())
-            sp.set_log_backup_count(self._config.log_backup_count())
-            sp.set_formation_path(self._config.formation_path())
-            sp.set_actions_path(self._config.actions_path())
-            sp.set_track_path(self._config.track_path())
-            # Pipeline 配置同步刷新（Copilot 后端 + recognition 识别参数）
-            sp.set_copilot_backend(self._config.copilot_backend())
-            sp.set_copilot_timeout(self._config.copilot_timeout())
-            sp.set_copilot_max_retries(self._config.copilot_max_retries())
-            sp.set_ocr_source(self._config.ocr_source())
-            sp.set_resolution(self._config.resolution())
-            sp.set_stage_override(self._config.stage_override())
-            sp.set_with_video_time(self._config.with_video_time())
-            sp.set_resource_dir(self._config.recognition_resource_dir())
 
         # 3. 刷新子配置字段行（任何子配置或 pipeline 被重置都需要刷新）
         sub_keys = {"formation", "actions", "track", "compose", "compose_style2"}
@@ -688,7 +652,6 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, index: int) -> None:
         # 0=Home, 1=Settings, 2=Tools, 3=Info（完整页面，与主页/设置页同级）
-        self._current_page = index
         if index == 0:
             self._stack.setCurrentWidget(self._home_scroll)
         elif index == 1:
@@ -751,9 +714,29 @@ class MainWindow(QMainWindow):
         # 与视频列表平行对齐的自定义作业 JSON 路径（None=未绑定，仍执行识别）
         json_paths = self._batch_list.json_paths()
 
+        # 输入校验在后台线程执行：validate_video_file 内部为同步 ffprobe
+        # 子进程调用（单文件超时上限 60 秒），在主线程串行校验大量文件
+        # 会长时间冻结 UI；结果经 validation_finished 信号回主线程
+        if not self._service.validate_batch_async(paths, json_paths):
+            return
+        # 校验期间暂禁运行按钮，防止重复发起（失败/成功后统一恢复）
+        self._run_btn.setEnabled(False)
+        self._pending_run_paths = paths
+        self._pending_run_json_paths = json_paths
+
+    def _on_validation_finished(self, errors: list) -> None:
+        """后台输入校验完成后继续/中止启动流程"""
+        paths = self._pending_run_paths
+        json_paths = self._pending_run_json_paths
+        self._pending_run_paths = []
+        self._pending_run_json_paths = []
+        if not paths:
+            self._run_btn.setEnabled(bool(self._batch_list.video_paths()))
+            return
+
         try:
-            errors = self._service.validate_batch(paths, json_paths)
             if errors:
+                self._run_btn.setEnabled(True)
                 self._show_warning(
                     tr("msg.validation_failed_title"), "\n".join(errors)
                 )
@@ -769,7 +752,8 @@ class MainWindow(QMainWindow):
             self._progress_card.reset()
             self._log_viewer.clear_logs()
             self._set_running_ui(True)
-            if not self._service.run_pipeline(paths, json_paths):
+            # 调用方刚完成校验，validate=False 避免同一批次 ffprobe 重复探测
+            if not self._service.run_pipeline(paths, json_paths, validate=False):
                 self._set_running_ui(False)
         except Exception as exc:
             # 兜底：任何异常都不应让 UI 卡在"运行中"状态
@@ -884,7 +868,7 @@ class MainWindow(QMainWindow):
             self._titlebar_applied = True
             apply_titlebar_theme(self, self._is_dark)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         width = self.width()
         # 响应式：窄屏折叠导航栏
@@ -926,7 +910,7 @@ class MainWindow(QMainWindow):
             if vw > 0 and self._tools_page.maximumWidth() != vw:
                 self._tools_page.setMaximumWidth(vw)
 
-    def eventFilter(self, obj, event) -> bool:
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         # 监听 home/settings 滚动视口的尺寸变化（窗口尺寸变化时触发），
         # 同步更新对应页面的最大宽度，确保响应式断点正确切换。
         if event.type() == QEvent.Type.Resize:
@@ -965,14 +949,22 @@ class MainWindow(QMainWindow):
                     self._tools_page.setMaximumWidth(vw)
         return super().eventFilter(obj, event)
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
+        # 关闭工具对话框：其 closeEvent 会触发视图的 request_shutdown
+        # （取消 + 限时等待 + terminate 兜底），确保工具内后台 worker
+        # 先于控件树析构退出，避免 "QThread destroyed while running"。
+        # 仅在确定退出时执行（用户取消退出时不应误关工具窗口）
+        def _shutdown_tool_dialogs() -> None:
+            self._tools_page.shutdown_dialogs()
+
         if self._service.is_running():
             confirmed = self._show_confirm(
                 tr("msg.confirm_exit_title"),
                 tr("msg.confirm_exit_text"),
-                confirm_text=tr("msg.confirm_exit_confirm"),
+                confirm_text=tr("msg.confirm_exit_confirm")
             )
             if confirmed:
+                _shutdown_tool_dialogs()
                 self._service.cancel_pipeline()
                 # 等待 worker 线程退出，避免 QThread 被销毁时仍在运行
                 self._service.wait_for_shutdown(timeout_ms=5000)
@@ -986,18 +978,13 @@ class MainWindow(QMainWindow):
             else:
                 event.ignore()
         else:
+            _shutdown_tool_dialogs()
             self._gui_config.save()
             self._config.save_all()
             event.accept()
 
     # ── Material 消息对话框快捷方法 ─────────────────────
     # 取代 QMessageBox，避免 OK / Yes / No 按钮被默认 QSS 裁切/遮挡
-    def _show_info(self, title: str, text: str) -> None:
-        from arknights_video_pipeline.gui.components.message_dialog import InfoDialog
-        dlg = InfoDialog(title, text, colors=self._settings_page.colors, parent=self)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        dlg.exec()
-
     def _show_warning(self, title: str, text: str) -> None:
         from arknights_video_pipeline.gui.components.message_dialog import WarningDialog
         dlg = WarningDialog(title, text, colors=self._settings_page.colors, parent=self)

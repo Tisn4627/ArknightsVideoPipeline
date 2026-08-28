@@ -251,7 +251,10 @@ def create_subtitle_clip(text, start, duration, text_config, project_root, outpu
     clip_width = rendered.width
     clip_height = rendered.height
     x_pos = max(0, (output_width - clip_width) // 2)
-    clip.set_position((x_pos, output_height - bottom_margin - clip_height))
+    # y 坐标与 x 同样做越界钳制：字幕渲染高度超出画面时防止
+    # 顶部坐标为负被完全裁出画面
+    y_pos = max(0, output_height - bottom_margin - clip_height)
+    clip.set_position((x_pos, y_pos))
 
     # 淡入淡出效果
     if fade_duration > 0:

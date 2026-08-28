@@ -661,10 +661,13 @@ def build_nullable_int_row(
             else:
                 on_changed(None)
 
-    switch.toggled.connect(lambda checked: (
-        spin.setEnabled(checked),
-        _emit(),
-    ))
+    def _on_switch_toggled(checked: bool) -> None:
+        # 开关切换：同步可用性并发射变更（原先以 lambda 返回元组的
+        # 副作用写法执行两条语句，改为正常闭包以便阅读与调试）
+        spin.setEnabled(checked)
+        _emit()
+
+    switch.toggled.connect(_on_switch_toggled)
     spin.valueChanged.connect(_emit)
 
     def set_value(val: Any, block_signal: bool = True) -> None:

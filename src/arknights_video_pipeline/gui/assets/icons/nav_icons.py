@@ -46,20 +46,24 @@ _ICON_FILES: dict[str, str] = {
 }
 
 
-@functools.lru_cache(maxsize=32)
-def _load_source(name: str) -> QImage | None:
-    """加载原始 ARGB32 资源（带透明通道的黑色形状）。支持 SVG 和 PNG 格式。"""
+@functools.lru_cache(maxsize=64)
+def _load_source(name: str, size: int = 24) -> QImage | None:
+    """加载原始 ARGB32 资源（带透明通道的黑色形状）。支持 SVG 和 PNG 格式。
+
+    ``size`` 仅对 SVG 生效：为矢量栅格化的目标边长（像素），缓存按
+    (name, size) 区分，使不同请求尺寸都能获得矢量级清晰度。
+    """
     rel = _ICON_FILES.get(name)
     if rel is None:
         return None
     path = _ICON_ROOT / rel
     if not path.is_file():
         return None
-    
+
     # 处理 SVG 文件
     if path.suffix.lower() == '.svg':
-        return _load_svg_source(path)
-    
+        return _load_svg_source(path, size)
+
     # 处理 PNG 文件
     img = QImage(str(path))
     if img.isNull():
@@ -67,10 +71,12 @@ def _load_source(name: str) -> QImage | None:
     return img.convertToFormat(QImage.Format.Format_ARGB32)
 
 
-def _load_svg_source(path: Path) -> QImage | None:
+def _load_svg_source(path: Path, size: int = 24) -> QImage | None:
     """从 SVG 文件加载图标源图像。
-    
+
     使用 QtSvg 渲染 SVG 为 QImage，确保矢量图形正确缩放。
+    ``size`` 为栅格化目标边长：按不小于请求尺寸渲染，避免先渲染成
+    固定 24px 再放大导致的模糊。
     """
     try:
         from PyQt6.QtSvg import QSvgRenderer
@@ -78,16 +84,16 @@ def _load_svg_source(path: Path) -> QImage | None:
         renderer = QSvgRenderer(str(path))
         if not renderer.isValid():
             return None
-        
-        # 创建固定尺寸的 QImage 用于着色处理
-        image = QImage(24, 24, QImage.Format.Format_ARGB32)
+
+        # 创建指定尺寸的 QImage 用于着色处理
+        image = QImage(size, size, QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
-        
+
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         renderer.render(painter)
         painter.end()
-        
+
         return image
     except ImportError:
         # 如果 QtSvg 不可用，回退到 PNG 加载
@@ -97,11 +103,17 @@ def _load_svg_source(path: Path) -> QImage | None:
 def make_icon_pixmap(name: str, color: QColor | str, size_px: int = 24) -> QPixmap | None:
     """按给定颜色与像素尺寸生成 QPixmap。
 
-    实现思路：以源 PNG 的 alpha 通道作为形状蒙版，
+    实现思路：以源图的 alpha 通道作为形状蒙版，
     使用 QPainter.CompositionMode.SourceIn 将整个形状
     替换为给定颜色，再缩放到目标尺寸。
+
+    SVG 矢量源按 ``max(24, size_px * 2)`` 栅格化（取二者较大值）：
+    24px 请求按 48px 渲染（与主流 HiDPI @2x 最佳实践一致），
+    大于 24px 的请求按 2 倍尺寸渲染后再平滑缩放到目标尺寸，
+    从而获得矢量级清晰度。
     """
-    src = _load_source(name)
+    raster_size = max(24, size_px * 2) if size_px else 24
+    src = _load_source(name, raster_size)
     if src is None:
         return None
     out = src.copy()  # ARGB32
@@ -127,20 +139,3 @@ def has_icon(name: str) -> bool:
     if rel is None:
         return False
     return (_ICON_ROOT / rel).is_file()
-
-def icon_url(name: str) -> str | None:
-    """返回 QSS `image: url(...)` 用的资源 URL（带 file:/// 前缀）。
-
-    用于 QCheckBox::indicator 等支持 QSS image 属性的子控件，
-    复选框选中/未选中/禁用三态可以直接引用不同图标。
-    """
-    rel = _ICON_FILES.get(name)
-    if rel is None:
-        return None
-    path = _ICON_ROOT / rel
-    if not path.is_file():
-        return None
-    # QUrl.fromLocalFile 处理 Windows 路径（含盘符与反斜杠），
-    # 输出 file:///C:/.../xxx.png，可被 Qt QSS 正确解析。
-    from PyQt6.QtCore import QUrl
-    return QUrl.fromLocalFile(str(path)).toString()

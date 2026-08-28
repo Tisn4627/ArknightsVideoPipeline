@@ -124,8 +124,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         traceback.print_exc()
         sys.exit(1)
 
-    # 成功：打印输出文件路径
-    out = getattr(pipeline, "last_output_path", None)
+    # 成功：打印输出文件路径（last_output_path 在 __init__ 中无条件初始化）
+    out = pipeline.last_output_path
     if out is not None:
         print(str(out))
     return 0

@@ -80,7 +80,13 @@ class LogViewer(QPlainTextEdit):
 
     通过 :meth:`set_colors` 接收当前主题色板，并按当前主题使用对应的
     日志级别配色；不调用则按浅色主题默认值渲染（向后兼容）。
+
+    内容上限：通过 ``setMaximumBlockCount(2000)`` 限制最多保留 2000 行，
+    超出后自动丢弃最旧的日志，防止长时间批量运行时内存无限增长。
     """
+
+    # 日志最大保留行数（QTextBlock 数），防止无限增长
+    MAX_BLOCKS = 2000
 
     def __init__(self, parent: QWidget | None = None,
                  colors: MaterialColors | None = None) -> None:
@@ -89,7 +95,8 @@ class LogViewer(QPlainTextEdit):
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-        self._auto_scroll = True
+        # 限制日志最大行数（超出自动丢弃最旧内容）
+        self.setMaximumBlockCount(self.MAX_BLOCKS)
         self._level_colors: dict[str, str] = (
             _colors_for(colors) if colors is not None
             else dict(_LIGHT_LEVEL_COLORS)
@@ -156,7 +163,7 @@ class LogViewer(QPlainTextEdit):
         # 先记录追加前滚动条是否位于底部，再追加文本；追加后仅当原本
         # 处于底部时才自动滚动，避免打断用户向上翻阅历史日志。
         sb = self.verticalScrollBar()
-        was_at_bottom = sb.value() >= sb.maximum() - 4 if self._auto_scroll else False
+        was_at_bottom = sb.value() >= sb.maximum() - 4
 
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
@@ -165,14 +172,11 @@ class LogViewer(QPlainTextEdit):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text, fmt)
 
-        if self._auto_scroll and was_at_bottom:
+        if was_at_bottom:
             sb.setValue(sb.maximum())
 
     def clear_logs(self) -> None:
         self.clear()
-
-    def set_auto_scroll(self, enabled: bool) -> None:
-        self._auto_scroll = enabled
 
     def _show_context_menu(self, pos) -> None:
         menu = QMenu(self)

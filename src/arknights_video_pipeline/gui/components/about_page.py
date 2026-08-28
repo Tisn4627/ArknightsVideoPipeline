@@ -8,6 +8,8 @@ gui.components.about_page - About 完整页面
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import (
     QVBoxLayout, QLabel, QWidget,
@@ -29,7 +31,8 @@ class AboutPage(QWidget):
         super().__init__(parent)
         self._colors = colors or MaterialColors.light()
         self._typo = MaterialTypography()
-        self._tr_labels: list[tuple] = []
+        # 重翻译注册表：(文本 setter, 翻译 key)，语言切换时调用 setter(tr(key))
+        self._tr_labels: list[tuple[Callable[[str], None], str]] = []
 
         self.setObjectName("aboutPage")
         # 页面背景跟随全局 QSS；此处仅置透明避免覆盖 app 级背景

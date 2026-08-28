@@ -18,6 +18,7 @@ from arknights_video_pipeline.core.battlestart import (
     BATTLE_START_DEFAULTS,
     TRACK_MODE_BATTLESTART,
     TRACK_MODE_STARTBUTTON,
+    iter_sampled_frames,
     scan_battle_start,
 )
 from arknights_video_pipeline.core.utils import (
@@ -272,6 +273,10 @@ def downscale_video(video_path, target_height=720):
 
     cmd = [
         "ffmpeg", "-y",
+        # 全局选项须位于输出文件之前，置于其后会被当作
+        # trailing options 忽略导致日志级别抑制失效
+        "-loglevel", "error",
+        "-hide_banner",
         "-i", video_path,
         "-vf", f"scale={target_w}:{target_height}",
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
@@ -279,8 +284,6 @@ def downscale_video(video_path, target_height=720):
         "-movflags", "+faststart",
         "-pix_fmt", "yuv420p",
         tmp_path,
-        "-loglevel", "error",
-        "-hide_banner"
     ]
 
     try:
@@ -313,21 +316,13 @@ def downscale_video(video_path, target_height=720):
 def track_element(config):
     """主跟踪函数（优化版）"""
     video_path = config.get("video_source", "test.mp4")
-    resource_dir = config.get("resource_dir", "resource/StartButton")
-    detection_fps = config.get("detection_fps", 2)
-    detection_time_limit = config.get("detection_time_limit", 30)
-    min_consecutive = config.get("min_consecutive_frames", 2)
-    use_grayscale = config.get("use_grayscale", True)
-    use_roi = config.get("use_roi", True)
+    # 其余配置项（detection_fps/resource_dir 等）由 _track_element_inner 解析
     auto_downscale = config.get("auto_downscale", True)
     downscale_target = config.get("downscale_target_height", 720)
-    debug_mode = config.get("debug_mode", True)
 
     # 将相对路径解析为基于项目根目录的绝对路径
     if not os.path.isabs(video_path):
         video_path = os.path.join(PROJECT_ROOT, video_path)
-    if not os.path.isabs(resource_dir):
-        resource_dir = os.path.join(PROJECT_ROOT, resource_dir)
 
     # 自动降分辨率
     downscaled_path = video_path
@@ -367,6 +362,145 @@ def _battle_start_config(config):
     bs_cfg = dict(BATTLE_START_DEFAULTS)
     bs_cfg.update(config.get("battle_start") or {})
     return bs_cfg
+
+
+def _prepare_detection_window(
+    bs_cfg, track_mode, detection_time_limit,
+    duration, total_frames, fps, detection_fps,
+):
+    """计算检测时间窗口与采样间隔
+
+    返回 (effective_time_limit, detection_end_frame, sample_interval)；
+    检测帧率配置非法时记录错误并返回 None。
+    """
+    # ── 检测时间限制 ──────────────────────────────────────
+    # 边界条件：视频时长不足限制时间时，自动调整为检测完整视频
+    # battlestart 模式使用 battle_start.time_limit，startbutton 模式使用 detection_time_limit
+    time_limit = (
+        bs_cfg["time_limit"] if track_mode == TRACK_MODE_BATTLESTART
+        else detection_time_limit
+    )
+    if time_limit is not None and time_limit > 0:
+        effective_time_limit = min(time_limit, duration)
+        detection_end_frame = int(effective_time_limit * fps)
+        if time_limit > duration:
+            logger.info(
+                f"检测时间限制: {time_limit}s > 视频时长{duration:.2f}s，"
+                f"自动调整为检测完整视频"
+            )
+        else:
+            logger.info(
+                f"检测时间限制: 仅检测前{effective_time_limit:.0f}s "
+                f"(第0~{detection_end_frame}帧)"
+            )
+    else:
+        effective_time_limit = None
+        detection_end_frame = total_frames
+        logger.info("检测时间限制: 未设置，检测完整视频")
+
+    # 验证检测帧率
+    try:
+        validate_detection_fps(detection_fps, fps)
+    except ValueError as e:
+        logger.error(f"配置错误: {e}")
+        return None
+
+    # 根据检测帧率计算采样间隔
+    sample_interval = max(1, round(fps / detection_fps))
+    actual_detection_fps = fps / sample_interval
+    logger.info(
+        f"检测帧率: {detection_fps}fps "
+        f"(采样间隔: 每{sample_interval}帧, 实际约{actual_detection_fps:.2f}fps)"
+    )
+    return effective_time_limit, detection_end_frame, sample_interval
+
+
+def _prepare_templates(config, resource_dir, use_grayscale,
+                       was_downscaled, video_scale_ratio, frame_w, frame_h):
+    """加载模板资源并预计算缩放缓存
+
+    返回 (templates, scaled_cache, executor)；无模板时返回 (None, None, None)。
+    executor 为多模板并行匹配共用的线程池（模板数 >2 时创建，否则 None）。
+    """
+    logger.info(f"\n加载模板资源: {resource_dir}")
+    templates = load_templates(resource_dir, use_grayscale)
+    if not templates:
+        logger.error("未找到任何模板图片")
+        return None, None, None
+    logger.info(f"共加载 {len(templates)} 个模板\n")
+
+    # 调整缩放范围：视频降分辨率后，模板需要额外缩小
+    base_scale_range = config.get("scale_range", [0.5, 1.5])
+    if was_downscaled:
+        adjusted_low = base_scale_range[0] * video_scale_ratio
+        adjusted_high = base_scale_range[1] * video_scale_ratio
+        effective_scale_range = [adjusted_low, adjusted_high]
+        logger.info(f"缩放范围调整: {base_scale_range} -> {effective_scale_range} (因视频降分辨率)")
+    else:
+        effective_scale_range = base_scale_range
+    scale_steps = config.get("scale_steps", 9)
+
+    # 预计算缩放模板
+    logger.info("预计算缩放模板...")
+    scaled_cache = precompute_scaled_templates(
+        templates, effective_scale_range, scale_steps, (frame_w, frame_h)
+    )
+    total_scaled = sum(len(v) for v in scaled_cache.values())
+    logger.info(f"预计算完成: {total_scaled} 个缩放模板")
+    for tname, tlist in scaled_cache.items():
+        if tlist:
+            scales = [f"{s:.3f}" for s, _ in tlist]
+            logger.info(f"  {tname}: 缩放因子 {', '.join(scales)}")
+    logger.info("")
+
+    # 多模板并行匹配时创建一次线程池，检测循环内复用（仅在模板数 >2 时创建）
+    executor = None
+    if len(templates) > 2:
+        executor = ThreadPoolExecutor(max_workers=config.get("max_workers", 4))
+    return templates, scaled_cache, executor
+
+
+def _build_startbutton_result(
+    config, track_mode, first_appear_time, disappear_time, max_confidence,
+    global_best_confidence, global_best_frame, global_best_template,
+    match_count, duration, effective_time_limit,
+    was_downscaled, video_scale_ratio, elapsed_total, avg_speed, debug_mode,
+):
+    """组装 startbutton 模式的识别结果字典（输出诊断总结日志）"""
+    # 诊断总结
+    if debug_mode:
+        logger.info("\n[诊断总结]")
+        logger.info(
+            f"  全局最佳置信度: {global_best_confidence:.4f} "
+            f"(出现在第{global_best_frame}帧, 模板:{global_best_template})"
+        )
+        logger.info(f"  匹配阈值: {config.get('match_threshold', DEFAULT_CONFIG['match_threshold'])}")
+        if global_best_confidence > 0 and global_best_confidence < config.get("match_threshold", DEFAULT_CONFIG["match_threshold"]):
+            gap = config.get("match_threshold", DEFAULT_CONFIG["match_threshold"]) - global_best_confidence
+            logger.info(f"  最佳置信度距阈值仅差 {gap:.4f}，可尝试降低阈值至 {global_best_confidence:.2f}")
+
+    return {
+        "track_mode": track_mode,
+        # battle_start 相关字段（startbutton 模式下恒为未检测）
+        "battle_start_time": None,
+        "battle_start_frame": 0,
+        "battle_start_max_ratio": 0.0,
+        "battle_start_detected": False,
+        "first_appear_time": round(first_appear_time, 2) if first_appear_time is not None else None,
+        "disappear_time": round(disappear_time, 2) if disappear_time is not None else None,
+        "duration_visible": round(disappear_time - first_appear_time, 2) if first_appear_time is not None and disappear_time is not None else None,
+        "max_confidence": round(max_confidence, 4),
+        "global_best_confidence": round(global_best_confidence, 4),
+        "global_best_frame": global_best_frame,
+        "match_count": match_count,
+        "video_duration": round(duration, 2),
+        "detection_time_limit": effective_time_limit,
+        "was_detected": first_appear_time is not None,
+        "was_downscaled": was_downscaled,
+        "scale_ratio": round(video_scale_ratio, 4),
+        "processing_time": round(elapsed_total, 2),
+        "avg_speed_fps": round(avg_speed, 2),
+    }
 
 
 def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio, was_downscaled):
@@ -415,45 +549,13 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
         else:
             logger.info("")
 
-        # ── 检测时间限制 ──────────────────────────────────────
-        # 边界条件：视频时长不足限制时间时，自动调整为检测完整视频
-        # battlestart 模式使用 battle_start.time_limit，startbutton 模式使用 detection_time_limit
-        time_limit = (
-            bs_cfg["time_limit"] if track_mode == TRACK_MODE_BATTLESTART
-            else detection_time_limit
+        prepared = _prepare_detection_window(
+            bs_cfg, track_mode, detection_time_limit,
+            duration, total_frames, fps, detection_fps,
         )
-        if time_limit is not None and time_limit > 0:
-            effective_time_limit = min(time_limit, duration)
-            detection_end_frame = int(effective_time_limit * fps)
-            if time_limit > duration:
-                logger.info(
-                    f"检测时间限制: {time_limit}s > 视频时长{duration:.2f}s，"
-                    f"自动调整为检测完整视频"
-                )
-            else:
-                logger.info(
-                    f"检测时间限制: 仅检测前{effective_time_limit:.0f}s "
-                    f"(第0~{detection_end_frame}帧)"
-                )
-        else:
-            effective_time_limit = None
-            detection_end_frame = total_frames
-            logger.info("检测时间限制: 未设置，检测完整视频")
-
-        # 验证检测帧率
-        try:
-            validate_detection_fps(detection_fps, fps)
-        except ValueError as e:
-            logger.error(f"配置错误: {e}")
+        if prepared is None:
             return None
-
-        # 根据检测帧率计算采样间隔
-        sample_interval = max(1, round(fps / detection_fps))
-        actual_detection_fps = fps / sample_interval
-        logger.info(
-            f"检测帧率: {detection_fps}fps "
-            f"(采样间隔: 每{sample_interval}帧, 实际约{actual_detection_fps:.2f}fps)"
-        )
+        effective_time_limit, detection_end_frame, sample_interval = prepared
 
         # ── 战斗开始检测模式（battlestart）：无需模板资源 ──
         if track_mode == TRACK_MODE_BATTLESTART:
@@ -466,47 +568,18 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
 
         # ── 开始按钮识别模式（startbutton）：加载模板资源 ──
         logger.info(f"识别模式: {track_mode} (开始按钮识别)")
-        logger.info(f"\n加载模板资源: {resource_dir}")
-        templates = load_templates(resource_dir, use_grayscale)
-        if not templates:
-            logger.error("未找到任何模板图片")
-            return None
-        logger.info(f"共加载 {len(templates)} 个模板\n")
-
-        # 调整缩放范围：视频降分辨率后，模板需要额外缩小
-        base_scale_range = config.get("scale_range", [0.5, 1.5])
-        if was_downscaled:
-            adjusted_low = base_scale_range[0] * video_scale_ratio
-            adjusted_high = base_scale_range[1] * video_scale_ratio
-            effective_scale_range = [adjusted_low, adjusted_high]
-            logger.info(f"缩放范围调整: {base_scale_range} -> {effective_scale_range} (因视频降分辨率)")
-        else:
-            effective_scale_range = base_scale_range
-        scale_steps = config.get("scale_steps", 9)
-
-        # 预计算缩放模板
-        logger.info("预计算缩放模板...")
-        scaled_cache = precompute_scaled_templates(
-            templates, effective_scale_range, scale_steps, (frame_w, frame_h)
+        templates, scaled_cache, executor = _prepare_templates(
+            config, resource_dir, use_grayscale,
+            was_downscaled, video_scale_ratio, frame_w, frame_h,
         )
-        total_scaled = sum(len(v) for v in scaled_cache.values())
-        logger.info(f"预计算完成: {total_scaled} 个缩放模板")
-        for tname, tlist in scaled_cache.items():
-            if tlist:
-                scales = [f"{s:.3f}" for s, _ in tlist]
-                logger.info(f"  {tname}: 缩放因子 {', '.join(scales)}")
-        logger.info("")
-
-        # 多模板并行匹配时创建一次线程池，检测循环内复用（仅在模板数 >2 时创建）
-        if len(templates) > 2:
-            executor = ThreadPoolExecutor(max_workers=config.get("max_workers", 4))
+        if templates is None:
+            return None
 
         # 计算需要处理的帧数（仅在检测时间范围内）
         processed_frames = len(range(0, detection_end_frame, sample_interval))
 
         # 跟踪状态
         first_appear_time = None
-        last_seen_time = None
         disappear_time = None
         is_visible = False
         consecutive_visible = 0
@@ -525,7 +598,6 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
         global_best_template = ""
         diagnostic_interval = max(1, int(fps))
 
-        frame_idx = 0
         processed_idx = 0
         start_time = time.time()
 
@@ -536,21 +608,11 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         ) if tqdm is not None else None
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # 超出检测时间范围，停止检测
-            if frame_idx >= detection_end_frame:
-                break
-
-            current_time = frame_idx / fps
-
-            if frame_idx % sample_interval != 0:
-                frame_idx += 1
-                continue
-
+        # 与 battlestart 模式共用的采样帧迭代器：grab 跳过非采样帧，
+        # 避免约 93% 帧的完整解码
+        for frame_idx, current_time, frame in iter_sampled_frames(
+            cap, sample_interval, detection_end_frame, fps
+        ):
             # 灰度化：仅在 use_grayscale=True 时转换，否则保留原帧（含彩色）
             # 以匹配 use_grayscale=False 时的彩色模板通道数
             if use_grayscale and frame.ndim == 3:
@@ -597,7 +659,6 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                 if not is_visible and consecutive_visible >= min_consecutive:
                     is_visible = True
                     first_appear_time = current_time - (min_consecutive - 1) * sample_interval / fps
-                    last_seen_time = current_time
                     msg = (
                         f"[{current_time:.2f}s] 检测到目标出现! "
                         f"模板:{match['template']} 置信度:{match['confidence']:.4f}"
@@ -606,9 +667,6 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                         pbar.write(msg)
                     else:
                         logger.info(msg)
-
-                if is_visible:
-                    last_seen_time = current_time
             else:
                 consecutive_invisible += 1
                 consecutive_visible = 0
@@ -651,7 +709,6 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
                     f"{speed:.1f}帧/s 已用时{elapsed:.1f}s"
                 )
 
-            frame_idx += 1
             processed_idx += 1
 
         if is_visible:
@@ -661,42 +718,13 @@ def _track_element_inner(config, video_path, downscaled_path, video_scale_ratio,
         elapsed_total = time.time() - start_time
         avg_speed = processed_frames / elapsed_total if elapsed_total > 0 else 0
 
-        # 诊断总结
-        if debug_mode:
-            logger.info("\n[诊断总结]")
-            logger.info(
-                f"  全局最佳置信度: {global_best_confidence:.4f} "
-                f"(出现在第{global_best_frame}帧, 模板:{global_best_template})"
-            )
-            logger.info(f"  匹配阈值: {config.get('match_threshold', DEFAULT_CONFIG['match_threshold'])}")
-            if global_best_confidence > 0 and global_best_confidence < config.get("match_threshold", DEFAULT_CONFIG["match_threshold"]):
-                gap = config.get("match_threshold", DEFAULT_CONFIG["match_threshold"]) - global_best_confidence
-                logger.info(f"  最佳置信度距阈值仅差 {gap:.4f}，可尝试降低阈值至 {global_best_confidence:.2f}")
-
-        result = {
-            "track_mode": track_mode,
-            # battle_start 相关字段（startbutton 模式下恒为未检测）
-            "battle_start_time": None,
-            "battle_start_frame": 0,
-            "battle_start_max_ratio": 0.0,
-            "battle_start_detected": False,
-            "first_appear_time": round(first_appear_time, 2) if first_appear_time is not None else None,
-            "disappear_time": round(disappear_time, 2) if disappear_time is not None else None,
-            "duration_visible": round(disappear_time - first_appear_time, 2) if first_appear_time is not None and disappear_time is not None else None,
-            "max_confidence": round(max_confidence, 4),
-            "global_best_confidence": round(global_best_confidence, 4),
-            "global_best_frame": global_best_frame,
-            "match_count": match_count,
-            "video_duration": round(duration, 2),
-            "detection_time_limit": effective_time_limit,
-            "was_detected": first_appear_time is not None,
-            "was_downscaled": was_downscaled,
-            "scale_ratio": round(video_scale_ratio, 4),
-            "processing_time": round(elapsed_total, 2),
-            "avg_speed_fps": round(avg_speed, 2)
-        }
-
-        return result
+        return _build_startbutton_result(
+            config, track_mode, first_appear_time, disappear_time,
+            max_confidence, global_best_confidence, global_best_frame,
+            global_best_template, match_count, duration, effective_time_limit,
+            was_downscaled, video_scale_ratio, elapsed_total, avg_speed,
+            debug_mode,
+        )
     finally:
         # 确保 tqdm 进度条与 VideoCapture 在异常路径下也被释放
         if pbar is not None:

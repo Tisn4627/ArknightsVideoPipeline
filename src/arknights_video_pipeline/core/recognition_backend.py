@@ -19,11 +19,14 @@ import threading
 from pathlib import Path
 
 from arknights_video_pipeline.core.exceptions import CopilotBackendError
+# 项目根统一定义在 utils（pyproject.toml 向上查找 + 固定层级回退），
+# 避免两套项目根推导并存漂移
+from arknights_video_pipeline.core.utils import PROJECT_ROOT as _PROJECT_ROOT_STR
 
 # === 关键：在 import arknights_video_recognition 之前设置资源目录 ===
 # 识别资源（avatar/config/data/ocr/onnx/template/tile）并入父项目顶层 resource/。
 # 此处仅设置默认值；配置层的 resource_dir 覆盖在 recognize() 内、首次导入前应用。
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_PROJECT_ROOT = Path(_PROJECT_ROOT_STR)
 _DEFAULT_RESOURCE_DIR = _PROJECT_ROOT / "resource"
 _SRC_DIR = _PROJECT_ROOT / "src"
 
@@ -85,6 +88,22 @@ def _normalize_copilot(job: dict) -> dict:
     return job
 
 
+class _WorkerState:
+    """单次识别任务的结果槽（闭包持有，避免跨任务共享可变状态）
+
+    旧实现把结果写入 backend 实例属性：同一实例在视频 A 超时后改调
+    视频 B 时，新任务与仍在运行的旧任务线程会并发写同一结果槽，
+    旧视频结果可能覆盖新视频结果。改为每次启动识别时创建独立的
+    state 对象并由闭包捕获，线程只写自己的 state，天然隔离。
+    """
+
+    __slots__ = ("job", "error")
+
+    def __init__(self) -> None:
+        self.job: dict = {}
+        self.error: BaseException | None = None
+
+
 class RecognitionBackend:
     """视频转 copilot JSON 的 Recognition 后端。"""
 
@@ -96,8 +115,7 @@ class RecognitionBackend:
         # backend 实例在流水线重试循环外仅创建一次，实例状态可跨重试保留。
         self._worker: threading.Thread | None = None
         self._worker_video: str | None = None
-        self._worker_job: dict = {}
-        self._worker_error: BaseException | None = None
+        self._worker_state: _WorkerState | None = None
 
     def recognize(
         self,
@@ -138,6 +156,7 @@ class RecognitionBackend:
 
         if resumable_worker:
             worker = self._worker
+            state = self._worker_state
             worker.join(timeout)
             if worker.is_alive():
                 raise TimeoutError(
@@ -156,13 +175,13 @@ class RecognitionBackend:
             # 而非等识别跑完再事后判定（旧实现会白等约 20 分钟再丢弃慢而
             # 成功的结果，并触发无意义重试）。超时后线程仍在后台继续跑完，
             # 其产物（cache/MaaAI_*.json）可通过 --copilot-json 复用。
-            self._worker_job = {}
-            self._worker_error = None
+            state = _WorkerState()
             self._worker_video = video_path
+            self._worker_state = state
 
             def _run() -> None:
                 try:
-                    self._worker_job = pipe.run(
+                    state.job = pipe.run(
                         video_path=video_path,
                         stage_override=stage_override,
                         output_path=None,  # 由本适配层统一控制输出路径
@@ -170,7 +189,7 @@ class RecognitionBackend:
                     )
                 # 线程内异常全部捕获后重抛：超时/重试语义由外层流水线处理
                 except Exception as exc:  # noqa: BLE001 - 线程异常传播必须全量捕获
-                    self._worker_error = exc
+                    state.error = exc
 
             worker = threading.Thread(
                 target=_run,
@@ -188,10 +207,11 @@ class RecognitionBackend:
                 )
 
         # 线程已结束：取出结果并清理，防止下一次调用误入"续等"分支
-        job_dict = self._worker_job
-        error = self._worker_error
+        job_dict = state.job
+        error = state.error
         self._worker = None
         self._worker_video = None
+        self._worker_state = None
 
         if error is not None:
             if isinstance(error, StageNotRecognizedError):

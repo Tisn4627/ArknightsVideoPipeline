@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
@@ -31,6 +32,20 @@ from arknights_video_recognition.config.settings import (
     DEPLOYMENT_MATCH_THRESHOLD,
     DEPLOYMENT_NAME_MATCH_THRESHOLD,
 )
+
+logger = logging.getLogger(__name__)
+
+# 黑帧判定阈值：整帧均值低于该值视为黑帧/转场，跳过检测
+_BLACK_FRAME_MEAN = 10
+
+
+def _is_amiya_warrior_exception(name: str, role_hint: str) -> bool:
+    """阿米娅特例：阿米娅可同时为 Caster 与 Warrior，role 过滤时额外放行。
+
+    Maa ``BattleData.get_role`` 对阿米娅有同类特判，role_hint 为 Warrior
+    时不因 char_roles 中登记的 Caster 而误过滤。
+    """
+    return name == "阿米娅" and role_hint == "Warrior"
 
 
 class DeploymentAnalyzer:
@@ -79,7 +94,8 @@ class DeploymentAnalyzer:
                 self._char_roles = json.loads(
                     CHAR_ROLE_TABLE_PATH.read_text(encoding="utf-8")
                 )
-        except Exception:
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            logger.warning("读取 char_roles.json 失败，降级为不过滤: %s", exc)
             self._char_roles = {}
         # 加载 battle_data.json → name→rarity（对齐 Maa BattleData.get_rarity）
         # 用于 match_with_formation 的尺度范围：rarity==1（小车）用 1.00-1.99，
@@ -186,7 +202,7 @@ class DeploymentAnalyzer:
         """
         if frame is None or frame.size == 0:
             return []
-        if frame.mean() < 10:
+        if frame.mean() < _BLACK_FRAME_MEAN:
             return []
 
         rx, ry, rw, rh = self._flag_roi
@@ -238,7 +254,7 @@ class DeploymentAnalyzer:
         """
         if frame is None or frame.size == 0:
             return []
-        if frame.mean() < 10:
+        if frame.mean() < _BLACK_FRAME_MEAN:
             return []
 
         kept = self.detect_flags(frame)
@@ -332,7 +348,7 @@ class DeploymentAnalyzer:
                 fo_role = self._char_roles.get(fo.name)
                 if fo_role is not None and fo_role != role_hint:
                     # 阿米娅特例：额外允许 Warrior
-                    if not (fo.name == "阿米娅" and role_hint == "Warrior"):
+                    if not _is_amiya_warrior_exception(fo.name, role_hint):
                         continue
 
             # 对齐 Maa：scale_ends = get_rarity(name)==1 ? 200 : 125
@@ -409,7 +425,7 @@ class DeploymentAnalyzer:
             if role_hint is not None and role_hint != "Unknown":
                 tpl_role = self._char_roles.get(name)
                 if tpl_role is not None and tpl_role != role_hint:
-                    if not (name == "阿米娅" and role_hint == "Warrior"):
+                    if not _is_amiya_warrior_exception(name, role_hint):
                         continue
             tpl_bgr = tpl
             if tpl_bgr.shape != a_bgr.shape:

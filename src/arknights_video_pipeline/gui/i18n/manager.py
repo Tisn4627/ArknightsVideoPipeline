@@ -121,6 +121,11 @@ class I18n(QObject):
             return False
         self._language = lang
         self._translations = data
+        # 仅当本实例是全局单例时记录语言码，供单例重建时恢复当前语言
+        # （见 i18n()；测试中的独立实例不应污染模块级状态）
+        if self is _instance:
+            global _current_language
+            _current_language = lang
         self.language_changed.emit()
         return True
 
@@ -150,7 +155,11 @@ class I18n(QObject):
 
     def reload(self) -> None:
         """从磁盘重新加载默认语言与当前语言，并发出 ``language_changed`` 信号"""
-        self._fallback = self._load_file(self.DEFAULT_LANGUAGE)
+        # 与 load_language 相同的守卫：加载失败（空字典）时保留旧 _fallback，
+        # 避免磁盘文件暂时不可读时把回退翻译清空
+        fallback = self._load_file(self.DEFAULT_LANGUAGE)
+        if fallback:
+            self._fallback = fallback
         self.load_language(self._language)
         self.language_changed.emit()
 
@@ -158,6 +167,11 @@ class I18n(QObject):
 # ── 单例 ────────────────────────────────────────────────
 
 _instance: I18n | None = None
+# 最近一次生效的语言码：单例因底层 C++ 对象被销毁而重建时用于恢复当前
+# 语言，避免界面语言意外回落到默认 zh-CN。仅由全局单例自身维护
+# （init_i18n / I18n.set_language 中 ``self is _instance`` 时更新），
+# 测试中创建的独立 I18n 实例不会污染该值。
+_current_language: str | None = None
 
 
 def init_i18n(locales_dir: str | None = None, language: str | None = None,
@@ -166,8 +180,9 @@ def init_i18n(locales_dir: str | None = None, language: str | None = None,
 
     应在 ``MainWindow`` 构建 widget 之前调用，使 widget 可连接 ``language_changed``。
     """
-    global _instance
+    global _instance, _current_language
     _instance = I18n(locales_dir=locales_dir, language=language, parent=parent)
+    _current_language = _instance.language()
     return _instance
 
 
@@ -176,6 +191,9 @@ def i18n() -> I18n:
     global _instance
     if _instance is None or sip.isdeleted(_instance):
         _instance = I18n()
+        # 重建单例后恢复最近一次生效的语言，避免回落到默认 zh-CN
+        if _current_language is not None:
+            _instance.set_language(_current_language)
     return _instance
 
 

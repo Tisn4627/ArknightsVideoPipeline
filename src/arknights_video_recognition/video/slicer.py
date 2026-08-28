@@ -181,9 +181,12 @@ class VideoSlicer:
                 prev_ts = ts
                 continue
 
-            # 对齐 Maa: 跳过战斗开始前的帧（编队页、加载屏）
+            # 对齐 Maa: 跳过战斗开始前的帧（编队页、加载屏）。
+            # 当帧即触发 battle_started 时，has_pause 结果在下方
+            # oper_is_clicked 判定中复用，避免同一帧重复调用按钮检测
+            pause = self.buttons.has_pause(frame)
             if not battle_started:
-                if self.buttons.has_pause(frame):
+                if pause:
                     battle_started = True
                     self.battle_start_time = ts
                 else:
@@ -203,7 +206,6 @@ class VideoSlicer:
             # 关键：技能释放时玩家点开干员面板，speed 会短暂消失（0.5-1s），
             # 必须用此逻辑才能正确在此处切片，否则 clip 过长导致方向分类采样
             # 到远离部署时刻的帧，方向识别错误。
-            pause = self.buttons.has_pause(frame)
             speed = self.buttons.has_speed(frame)
             oper_is_clicked = (not speed) or (not pause)
             # 对齐 Maa: cur_opers.size() != m_clips.back().deployment.size()。
@@ -221,7 +223,7 @@ class VideoSlicer:
                 #           if (pre_clip.ends_oper_name.empty())
                 #               pre_clip.ends_oper_name = analyze_detail_page_oper_name(frame);
                 # 即：对最后一个 clip 持续重试 OCR ends_oper_name（详情页加载需几帧）
-                # 节流：RapidOCR ~1s/次，限制每秒最多重试一次（Maa PaddleOCR 快可逐帧）
+                # 节流：同一 clip 的 ends_oper_name OCR 重试间隔为 0.2 秒
                 if (clips and oper_is_clicked and not clips[-1].ends_oper_name
                         and (self._last_ocr_ts is None
                              or ts - self._last_ocr_ts >= self._ocr_retry_min_interval)):
@@ -261,7 +263,14 @@ class VideoSlicer:
 
         # 关闭最后一个片段
         if in_segment and cur_clip is not None:
-            cur_clip.end_time = self.video_frames.duration_sec
+            # duration_sec 在 fps/帧数元数据异常时返回 0，end_time 会 <= start_time
+            # 导致片段被 _postprocess 静默丢弃；回退为 start_time + 一个采样间隔
+            # （最小片段时长），保证末尾片段不被误删
+            end = self.video_frames.duration_sec
+            cur_clip.end_time = (
+                end if end > cur_clip.start_time
+                else cur_clip.start_time + self.sample_interval
+            )
             clips.append(cur_clip)
 
         return self._postprocess(clips)

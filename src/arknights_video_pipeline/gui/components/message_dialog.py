@@ -103,15 +103,26 @@ class _BaseMessageDialog(QDialog):
         card_layout.addLayout(self._button_row)
 
         outer.addWidget(card)
-        # 先建按钮，再刷样式，最后适配尺寸
-        self._build_buttons()
-        self._apply_colors()
-        self.adjustSize()
+        # 按钮构建/样式刷新/尺寸适配统一延迟到 _finalize()：子类（如
+        # ConfirmDialog）需在 super().__init__() 之后先初始化按钮文案
+        # 属性，再显式调用 _finalize()，避免基类构造期间读取未定义属性
 
     # ── 子类钩子 ─────────────────────────────────────────
     def _build_buttons(self) -> None:
         """子类重写：在 self._button_row 中放置按钮。"""
         raise NotImplementedError
+
+    def _finalize(self) -> None:
+        """构建按钮 → 刷新样式 → 适配尺寸（子类构造完成后显式调用）
+
+        基类构造不再直接调用 ``_build_buttons``：ConfirmDialog 等子类
+        需要先设置按钮文案属性（``_confirm_text`` / ``_cancel_text``），
+        再统一走此入口，保证按钮文案行为不变。
+        """
+        # 先建按钮，再刷样式，最后适配尺寸
+        self._build_buttons()
+        self._apply_colors()
+        self.adjustSize()
 
     # ── 主题同步 ─────────────────────────────────────────
     def _icon_qss(self) -> str:
@@ -185,6 +196,7 @@ class InfoDialog(_BaseMessageDialog):
             icon_text="i", icon_role="secondary",
             colors=colors, parent=parent,
         )
+        self._finalize()
 
     def _build_buttons(self) -> None:
         ok_btn = MaterialButton(tr("dialog.ok"))
@@ -211,6 +223,7 @@ class WarningDialog(_BaseMessageDialog):
             icon_text="!", icon_role="error",
             colors=colors, parent=parent,
         )
+        self._finalize()
 
     def _build_buttons(self) -> None:
         ok_btn = MaterialButton(tr("dialog.ok"))
@@ -242,13 +255,17 @@ class ConfirmDialog(_BaseMessageDialog):
                  cancel_text: str | None = None,
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
-        self._confirm_text = confirm_text or tr("dialog.confirm")
-        self._cancel_text = cancel_text or tr("dialog.cancel")
         super().__init__(
             title=title, text=text,
             icon_text="?", icon_role="secondary",
             colors=colors, parent=parent,
         )
+        # super().__init__() 完成后再初始化按钮文案属性（原实现先于
+        # 基类构造赋值，依赖 PyQt 未初始化实例可赋属性的行为，顺序不安全），
+        # 随后统一走 _finalize() 构建按钮，按钮文案行为不变
+        self._confirm_text = confirm_text or tr("dialog.confirm")
+        self._cancel_text = cancel_text or tr("dialog.cancel")
+        self._finalize()
 
     def _build_buttons(self) -> None:
         cancel_btn = MaterialButton(self._cancel_text, variant=MaterialButton.VARIANT_OUTLINED)

@@ -9,7 +9,6 @@ gui.components.batch_video_list - 批量视频文件列表组件
 from __future__ import annotations
 
 import os
-from typing import List
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QIcon, QPixmap
@@ -309,7 +308,7 @@ class BatchVideoList(QWidget):
                  show_json_button: bool = True) -> None:
         super().__init__(parent)
         self._colors = colors
-        self._rows: List[BatchVideoRow] = []
+        self._rows: list[BatchVideoRow] = []
         self._editable = True
         self._show_json_button = show_json_button
 
@@ -387,6 +386,9 @@ class BatchVideoList(QWidget):
 
     def add_paths(self, paths: list[str]) -> None:
         added = False
+        # 方法开头一次性构建已有路径集合并随添加同步维护，
+        # 避免循环内反复调用 video_paths() 造成的 O(n²) 重复扫描
+        existing = set(self.video_paths())
         for p in paths:
             p = p.strip() if isinstance(p, str) else p
             if not p:
@@ -394,8 +396,9 @@ class BatchVideoList(QWidget):
             ext = os.path.splitext(p)[1].lower()
             if ext not in SUPPORTED_VIDEO_EXTENSIONS:
                 continue
-            if p in self.video_paths():
+            if p in existing:
                 continue  # 去重
+            existing.add(p)
             row = BatchVideoRow(p, self._colors)
             row.set_editable(self._editable)
             if not self._show_json_button:

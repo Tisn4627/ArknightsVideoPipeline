@@ -7,7 +7,8 @@ gui.theme.gui_config - GUI 独立配置管理
 设计原则：
 - 与 ``ConfigManager`` / ``ConfigProxy`` 无任何依赖关系
 - 配置持久化独立写盘，不受 ``save_pipeline_config`` 影响
-- 通过信号 ``theme_changed`` 通知 UI 层，无需轮询
+- 变更即时持久化（``_trigger_save``）；UI 层刷新由调用方驱动，
+  不再提供变更信号（历史信号无任何连接方，已移除）
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import logging
 import os
 from typing import Any
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject
 
 from arknights_video_pipeline.core.utils import PROJECT_ROOT
 
@@ -38,18 +39,13 @@ _GUI_DEFAULTS: dict[str, Any] = {
 class GuiConfig(QObject):
     """GUI 独立配置管理器
 
-    管理 ``config/gui.json`` 的加载、读写与变更通知。
+    管理 ``config/gui.json`` 的加载、读写与持久化。
     实例化时自动加载磁盘配置，写入可调用 ``save()`` 持久化。
 
-    Signals:
-        theme_changed(theme: str): 主题变更信号（"light" 或 "dark"）
-        language_changed(language: str): 语言变更信号（"zh-CN" 或 "en-US"）
-        config_changed(): 通用配置变更信号（set() 写入非受保护键时发出）
+    说明：历史版本曾提供 ``theme_changed`` / ``language_changed`` /
+    ``config_changed`` 信号，全仓库无任何连接方，已移除；UI 层刷新
+    由调用方（MainWindow）自行驱动。
     """
-
-    theme_changed = pyqtSignal(str)
-    language_changed = pyqtSignal(str)
-    config_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -95,8 +91,8 @@ class GuiConfig(QObject):
     def reload(self) -> None:
         """从磁盘重新加载配置（配置重置后同步内存状态）
 
-        不发射 ``theme_changed`` / ``config_changed`` 信号；
-        调用方需自行检查 ``theme()`` / ``is_advanced_expanded()`` 并刷新 UI。
+        仅同步内存数据，不做任何通知；调用方需自行检查
+        ``theme()`` / ``is_advanced_expanded()`` / ``language()`` 并刷新 UI。
         """
         self._load()
 
@@ -112,7 +108,7 @@ class GuiConfig(QObject):
         return t if t in ("light", "dark") else "light"
 
     def set_theme(self, theme: str) -> None:
-        """设置主题并发出 ``theme_changed`` 信号
+        """设置主题并持久化（与 ``set_language`` 行为一致）
 
         Args:
             theme: ``"light"`` 或 ``"dark"``
@@ -124,7 +120,7 @@ class GuiConfig(QObject):
             raise ValueError(f"非法的主题名称: {theme!r}，仅允许 'light' 或 'dark'")
         if self._data.get("theme") != theme:
             self._data["theme"] = theme
-            self.theme_changed.emit(theme)
+            self._trigger_save()
 
     def is_dark_theme(self) -> bool:
         """便捷方法：当前主题是否为深色"""
@@ -141,7 +137,7 @@ class GuiConfig(QObject):
         return lang if lang in _SUPPORTED_LANGUAGES else _DEFAULT_LANGUAGE
 
     def set_language(self, language: str) -> None:
-        """设置语言并持久化、发出 ``language_changed`` 信号
+        """设置语言并持久化
 
         Args:
             language: ``"zh-CN"`` 或 ``"en-US"``
@@ -154,7 +150,6 @@ class GuiConfig(QObject):
         if self._data.get("language") != language:
             self._data["language"] = language
             self._trigger_save()
-            self.language_changed.emit(language)
 
     # ── 高级分区折叠状态 ─────────────────────────────────
 
@@ -166,7 +161,6 @@ class GuiConfig(QObject):
         """设置高级分区展开/收起状态并持久化"""
         self._data["advanced_expanded"] = bool(expanded)
         self._trigger_save()
-        self.config_changed.emit()
 
     # ── 通用访问（供后续扩展用，如窗口位置）───────────────
 
@@ -180,4 +174,3 @@ class GuiConfig(QObject):
             raise ValueError("使用 set_language() 设置语言")
         self._data[key] = value
         self._trigger_save()
-        self.config_changed.emit()

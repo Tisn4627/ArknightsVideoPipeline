@@ -57,7 +57,25 @@ from arknights_video_pipeline.gui.theme import MaterialColors
 # 与 video_compose.create_text_clip / map_overlay._PANEL_PADDING 一致的主文本内边距
 _PANEL_PADDING = 10
 
-# 参数行定义：(子配置字段路径, 构建函数, 标签 key)
+# 参数行默认值（field_path → 默认值）：
+# - 行构建（_build_field_row）时作为控件初始值（缺失字段的回退为 0）；
+# - 从配置回读（_load_values_from_config）时作为配置缺失时的兜底
+_FIELD_DEFAULTS: dict[str, float] = {
+    "text_overlay.font_size": 25,
+    "text_overlay.font_scale": 1.0,
+    "text_overlay.text_x": 50,
+    "text_overlay.text_y": 240,
+    "text_overlay.max_text_right": 272,
+    "text_overlay.max_text_bottom": 865,
+    "video_x": 272,
+    "video_y": 47,
+    "video_scale": 0.85,
+    "output_width": 1920,
+    "output_height": 1080,
+}
+
+# 参数行定义：(子配置字段路径, 标签 i18n key) 二元组——构建函数由
+# _build_field_row 按 field_path 分派，不在此表中
 _FIELD_SPECS: list[tuple[str, str]] = [
     ("text_overlay.font_size", "tools.style1_text_range.font_size"),
     ("text_overlay.font_scale", "tools.style1_text_range.font_scale"),
@@ -354,7 +372,6 @@ class Style1TextRangeTool(ToolView):
         super().__init__(config_proxy, colors, parent)
         c = self._colors
         self._tr_labels: list[tuple] = []
-        self._tr_setters: list[tuple] = []
         self._rows: dict[str, FieldRow] = {}
         self._bg_cache: tuple | None = None  # (path, out_w, out_h, pixmap)
         # 输入防抖定时器：连续键入只合并为最后一次渲染（pictex 全量
@@ -489,20 +506,7 @@ class Style1TextRangeTool(ToolView):
 
     def _build_field_row(self, field_path: str, label_key: str,
                          c: MaterialColors) -> FieldRow:
-        defaults = {
-            "text_overlay.font_size": 25,
-            "text_overlay.font_scale": 1.0,
-            "text_overlay.text_x": 50,
-            "text_overlay.text_y": 240,
-            "text_overlay.max_text_right": 272,
-            "text_overlay.max_text_bottom": 865,
-            "video_x": 272,
-            "video_y": 47,
-            "video_scale": 0.85,
-            "output_width": 1920,
-            "output_height": 1080,
-        }
-        default = defaults.get(field_path, 0)
+        default = _FIELD_DEFAULTS.get(field_path, 0)
         if field_path == "video_scale":
             return build_float_row(
                 tr(label_key), default=default, minimum=0.1, maximum=2.0,
@@ -599,19 +603,8 @@ class Style1TextRangeTool(ToolView):
     def _load_values_from_config(self) -> None:
         """从 style1.json（内存态）读取全部参数行"""
         for field_path in self._rows:
-            default = {
-                "text_overlay.font_size": 25,
-                "text_overlay.font_scale": 1.0,
-                "text_overlay.text_x": 50,
-                "text_overlay.text_y": 240,
-                "text_overlay.max_text_right": 272,
-                "text_overlay.max_text_bottom": 865,
-                "video_x": 272,
-                "video_y": 47,
-                "video_scale": 0.85,
-                "output_width": 1920,
-                "output_height": 1080,
-            }.get(field_path)
+            # 配置缺失时回退到模块级默认值表
+            default = _FIELD_DEFAULTS.get(field_path)
             value = self._get_style1(field_path, default)
             # 配置值原样回显（None=不限 对应可空行的开关关闭态；
             # 非可空行内部容错为默认值），编辑不写盘，仅点击"应用"时保存
@@ -694,15 +687,16 @@ class Style1TextRangeTool(ToolView):
     ) -> tuple[QImage | None, QRectF | None, list[QRectF] | None]:
         """渲染文本块（按用户输入逐行），返回 (文本位图, 边界框, 逐行矩形)"""
         self._last_error = None
-        self._last_empty = False
         self._last_fit = None
         raw = self._json_editor.toPlainText()
         if not raw.strip():
             # 未输入任何内容：预览保持空，不填充示例文本
+            # （与"输入全为空白行"共用 range_no_input 文案，见 _update_info）
             return None, None, None
         lines = [line.strip() for line in raw.splitlines() if line.strip()]
         if not lines:
-            self._last_empty = True
+            # 输入全是空白行：与完全未输入合并为同一提示（range_no_input），
+            # 原 range_empty 分支已删除——两者对用户含义一致，无需区分
             return None, None, None
 
         font_value = self._get_style1("text_overlay.font", "SOURCEHANSANSCN-HEAVY.OTF")
@@ -739,10 +733,13 @@ class Style1TextRangeTool(ToolView):
             lines, font_path, text_cfg, max_right, max_bottom,
             text_x, text_y, padding=_PANEL_PADDING,
         )
-        page_count = 0
+        # 拟合统计：自动换行新增行数 / 末尾截断行数。分页信息不存在——
+        # 文本输入无 video_time 分页能力，固定按第一页排版，故不记录
+        # page_count（range_paged 分支不可达已删除，i18n 键保留以防
+        # 其他语言文件或历史配置引用）
         self._last_fit = (
             max_right, max_bottom, dropped,
-            len(fitted_lines) - len(lines), page_count,
+            len(fitted_lines) - len(lines),
         )
         lines = fitted_lines
 
@@ -822,9 +819,9 @@ class Style1TextRangeTool(ToolView):
         c = self._colors
         if getattr(self, "_last_error", None):
             color, text = c.error, self._last_error
-        elif getattr(self, "_last_empty", False):
-            color, text = c.warning, tr("tools.style1_text_range.range_empty")
         elif text_rect is None or not line_rects:
+            # 未输入 / 输入全为空白（原 _last_empty 的 range_empty 分支
+            # 已删除：两种情形对用户含义一致，统一走 range_no_input）
             color, text = c.on_surface_variant, tr(
                 "tools.style1_text_range.range_no_input"
             )
@@ -866,17 +863,15 @@ class Style1TextRangeTool(ToolView):
             else:
                 parts.append(tr("tools.style1_text_range.range_ok"))
                 color = c.success
-            # 范围限定拟合统计（自动换行 / 末尾截断 / 分页切换 / 未启用）
-            max_right, max_bottom, dropped, wrapped_extra, page_count = getattr(
-                self, "_last_fit", (None, None, 0, 0, 0)
+            # 范围限定拟合统计（自动换行 / 末尾截断 / 未启用）。
+            # 分页提示（range_paged）不可达已删除：文本输入无 video_time
+            # 分页能力，固定按第一页排版（i18n 键保留以防引用）
+            max_right, max_bottom, dropped, wrapped_extra = getattr(
+                self, "_last_fit", (None, None, 0, 0)
             )
             if max_right is None and max_bottom is None:
                 parts.append(tr("tools.style1_text_range.range_unbounded"))
             else:
-                if page_count > 1:
-                    parts.append(tr(
-                        "tools.style1_text_range.range_paged", n=page_count
-                    ))
                 if wrapped_extra > 0:
                     parts.append(tr(
                         "tools.style1_text_range.range_wrapped", n=wrapped_extra

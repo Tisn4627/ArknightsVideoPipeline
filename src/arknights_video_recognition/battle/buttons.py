@@ -33,6 +33,16 @@ class BattleButtonDetector:
     所有 ROI/阈值常量取自 :mod:`settings`，对齐 Maa tasks.json。
     """
 
+    @staticmethod
+    def _threshold_count(
+        roi_gray: np.ndarray | None, value_thr: int, count_thr: int
+    ) -> bool:
+        """对已裁好的 ROI 灰度图二值化并统计亮像素是否超阈值。"""
+        if roi_gray is None:
+            return False
+        _, bin_img = cv2.threshold(roi_gray, value_thr, 255, cv2.THRESH_BINARY)
+        return cv2.countNonZero(bin_img) > count_thr
+
     def has_pause(self, frame: np.ndarray) -> bool:
         """暂停按钮是否存在（任务 BattleHasStarted）。
 
@@ -46,23 +56,19 @@ class BattleButtonDetector:
         bool
             ROI 内亮像素数 > 阈值时为 True（按钮存在）。
         """
-        roi_gray = self._roi_gray(frame, BATTLE_PAUSE_ROI)
-        if roi_gray is None:
-            return False
-        _, bin_img = cv2.threshold(
-            roi_gray, BATTLE_PAUSE_VALUE_THR, 255, cv2.THRESH_BINARY
+        return self._threshold_count(
+            self._roi_gray(frame, BATTLE_PAUSE_ROI),
+            BATTLE_PAUSE_VALUE_THR,
+            BATTLE_PAUSE_COUNT_THR,
         )
-        return cv2.countNonZero(bin_img) > BATTLE_PAUSE_COUNT_THR
 
     def has_speed(self, frame: np.ndarray) -> bool:
         """加速按钮是否存在（任务 BattleSpeedButton）。"""
-        roi_gray = self._roi_gray(frame, BATTLE_SPEED_ROI)
-        if roi_gray is None:
-            return False
-        _, bin_img = cv2.threshold(
-            roi_gray, BATTLE_SPEED_VALUE_THR, 255, cv2.THRESH_BINARY
+        return self._threshold_count(
+            self._roi_gray(frame, BATTLE_SPEED_ROI),
+            BATTLE_SPEED_VALUE_THR,
+            BATTLE_SPEED_COUNT_THR,
         )
-        return cv2.countNonZero(bin_img) > BATTLE_SPEED_COUNT_THR
 
     def is_detail_page_open(self, frame: np.ndarray) -> bool:
         """详情页是否打开（任意一个按钮消失）。
@@ -83,16 +89,20 @@ class BattleButtonDetector:
         """
         if frame is None or frame.size == 0:
             return False
-        has_speed = self.has_speed(frame)
-        has_pause = self.has_pause(frame)
-        if not (has_speed and has_pause):
+        # ROI 灰度只裁剪一次，按钮判定复用同一结果（避免重复 _roi_gray）
+        speed_roi = self._roi_gray(frame, BATTLE_SPEED_ROI)
+        pause_roi = self._roi_gray(frame, BATTLE_PAUSE_ROI)
+        if speed_roi is None or pause_roi is None:
             # 区分"按钮真的消失（详情页打开）"与"ROI 检测失败"：
             # _roi_gray 返回 None 时两个按钮都测不到，此时不能断言打开
-            speed_roi = self._roi_gray(frame, BATTLE_SPEED_ROI)
-            pause_roi = self._roi_gray(frame, BATTLE_PAUSE_ROI)
-            if speed_roi is None or pause_roi is None:
-                logger.warning("详情页按钮 ROI 越界或帧无效，按未打开处理")
-                return False
+            logger.warning("详情页按钮 ROI 越界或帧无效，按未打开处理")
+            return False
+        has_speed = self._threshold_count(
+            speed_roi, BATTLE_SPEED_VALUE_THR, BATTLE_SPEED_COUNT_THR
+        )
+        has_pause = self._threshold_count(
+            pause_roi, BATTLE_PAUSE_VALUE_THR, BATTLE_PAUSE_COUNT_THR
+        )
         return not has_speed or not has_pause
 
     @staticmethod

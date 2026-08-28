@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from enum import Enum
@@ -30,6 +31,8 @@ except ImportError:
     from rapidocr_onnxruntime.ch_ppocr_v3_rec.text_recognize import TextRecognizer
 
 from ..config.settings import DATA_DIR, DEFAULT_OCR_SOURCE, OCR_MAA_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class OcrSource(str, Enum):
@@ -212,9 +215,15 @@ class OcrEngine:
         """
         self._replace_map = list(replace_map)
         self._replace_full = bool(replace_full)
-        self._compiled_replace = [
-            (re.compile(p), r) for p, r in self._replace_map
-        ]
+        try:
+            self._compiled_replace = [
+                (re.compile(p), r) for p, r in self._replace_map
+            ]
+        except re.error as exc:
+            # 配置里偶有非法正则：对齐 stage/recognizer.py 的容错风格，
+            # 告警后回退为空替换列表（跳过全部替换），不让 OCR 崩溃
+            logger.warning("ocrReplace 正则编译失败，回退为空替换列表: %s", exc)
+            self._compiled_replace = []
 
     def _apply_equivalence(self, text: str) -> str:
         """按等价类规则对识别文本做替换。无规则时原样返回。"""

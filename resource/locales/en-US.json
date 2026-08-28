@@ -308,6 +308,8 @@
   "tools.recognition.log_success": "[{name}] Success: {path}",
   "tools.recognition.log_failed": "[{name}] Failed",
   "tools.recognition.log_cancelled": "Recognition cancelled by user",
+  "tools.recognition.completed": "Completed {success}/{total}",
+  "tools.recognition.invalid_params": "Invalid parameters, cannot start: {fields}",
 
   "dialog.ok": "OK",
   "dialog.confirm": "Confirm",

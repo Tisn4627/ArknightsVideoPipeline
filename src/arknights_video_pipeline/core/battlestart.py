@@ -51,6 +51,29 @@ DEFAULT_BRIGHTNESS_RATIO_THRESHOLD = 0.15
 DEFAULT_BRIGHTNESS_VALUE_THRESHOLD = 200
 
 
+def iter_sampled_frames(cap: Any, sample_interval: int, end_frame: int, fps: float):
+    """逐采样帧迭代视频（grab 跳过非采样帧，避免无效帧完整解码）
+
+    对 cv2.VideoCapture 逐帧 grab()（仅推进解码指针，不解码像素），
+    仅采样帧（frame_idx % sample_interval == 0）调用 retrieve() 取出
+    像素数据；到达 end_frame 或流结束时停止。产出
+    (frame_idx, current_time, frame) 三元组，frame_idx 从 0 起。
+
+    startbutton / battlestart 两种检测模式共用的读取骨架：
+    默认配置下采样间隔约 15 帧，grab 方案可省去约 93% 帧的完整解码。
+    """
+    frame_idx = 0
+    while frame_idx < end_frame:
+        if not cap.grab():
+            return
+        if frame_idx % sample_interval == 0:
+            ret, frame = cap.retrieve()
+            if not ret:
+                return
+            yield frame_idx, frame_idx / fps, frame
+        frame_idx += 1
+
+
 def _brightness_stats(frame_gray: np.ndarray, bs_cfg: dict[str, Any]) -> tuple[int, int, float]:
     """计算暂停按钮 ROI 亮像素统计，返回 (亮像素数, ROI 总像素数, 亮像素占比)"""
     value_threshold = int(bs_cfg.get(
@@ -111,7 +134,6 @@ def scan_battle_start(
     consecutive_hits = 0
     hit_count = 0
     max_ratio = 0.0
-    frame_idx = 0
     processed_idx = 0
     start_time = time.time()
 
@@ -126,18 +148,9 @@ def scan_battle_start(
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
     ) if tqdm is not None else None
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if frame_idx >= detection_end_frame:
-                break
-
-            current_time = frame_idx / fps
-            if frame_idx % sample_interval != 0:
-                frame_idx += 1
-                continue
-
+        for frame_idx, current_time, frame in iter_sampled_frames(
+            cap, sample_interval, detection_end_frame, fps
+        ):
             processed_idx += 1
             if frame.ndim == 3:
                 frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -193,8 +206,6 @@ def scan_battle_start(
                     f"  进度: {progress:.1f}% ({processed_idx}/{processed_frames}) "
                     f"{speed:.1f}帧/s 已用时{elapsed:.1f}s"
                 )
-
-            frame_idx += 1
     finally:
         if pbar is not None:
             pbar.close()

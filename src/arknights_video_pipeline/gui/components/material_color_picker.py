@@ -464,8 +464,11 @@ class ColorPickerDialog(QDialog):
         self._hue_bar.color_changed.connect(self._on_pickers_changed)
         self._hex_edit.textChanged.connect(self._on_hex_changed)
 
-        self._apply_colors()
+        # 先把合法的初始颜色同步到 HEX 输入框，再统一刷新样式：
+        # 若先 _apply_colors，此时 HEX 输入框还是空文本（非法），会被
+        # 误标为错误（红）边框，导致打开对话框即显示红框
         self._sync_controls(update_hex=True)
+        self._apply_colors()
         self.adjustSize()
 
     # ── 公开 API ─────────────────────────────────────────
@@ -491,6 +494,9 @@ class ColorPickerDialog(QDialog):
         if _COLOR_RE.match(text):
             self._color = QColor(text)
             self._sync_controls(update_hex=False)
+        else:
+            # 非法（含尚未输完）输入：立即标记错误边框，提供即时反馈
+            self._hex_edit.setStyleSheet(_hex_edit_qss(self._colors, error=True))
 
     def _apply_preset(self, hex_color: str) -> None:
         parsed = QColor(hex_color)
@@ -508,6 +514,10 @@ class ColorPickerDialog(QDialog):
             self._hex_edit.blockSignals(False)
         self._preview_lbl.setStyleSheet(_swatch_qss(
             self._color.name(), self._colors))
+        # HEX 输入框边框随校验状态刷新：合法→正常边框，非法→错误边框
+        # （程序化 setText 后 textChanged 不触发，需在此统一刷新）
+        valid = bool(_COLOR_RE.match(self._hex_edit.text()))
+        self._hex_edit.setStyleSheet(_hex_edit_qss(self._colors, error=not valid))
 
     # ── 主题同步 ─────────────────────────────────────────
 

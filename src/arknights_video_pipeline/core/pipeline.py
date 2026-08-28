@@ -30,7 +30,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
-from arknights_video_pipeline.core.config import ConfigManager
+from arknights_video_pipeline.core.config import PIPELINE_DEFAULTS, ConfigManager
 from arknights_video_pipeline.core.exceptions import (
     CopilotBackendError,
     ImageValidationError,
@@ -117,7 +117,12 @@ class Pipeline:
     让外部（如 PipelineWorker）感知步骤执行进度，避免 monkey-patch（修复 M17）。
     """
 
-    TOTAL_STEPS = 5
+    # 步骤总数从 STEPS 单一事实源推导，避免双份硬编码漂移
+    TOTAL_STEPS = len(STEPS)
+
+    # 显式跳过（--skip-step）在报告中使用的描述文案；
+    # run() 依据该文案区分"用户显式跳过"与"取消导致的跳过"
+    SKIPPED_DESCRIPTION = "已跳过"
 
     def __init__(
         self,
@@ -555,26 +560,22 @@ class Pipeline:
         result.mark_running()
         start = time.time()
 
-        # 根据风格名称动态导入对应的视频合成模块（在 try 之外验证，避免
-        # 主动抛出的 PipelineStepError 被下方 except 捕获后重新包装）
         style_name = self.config.get_video_compose_style()
-        module_name = self._STYLE_MODULES.get(style_name)
-        if module_name is None:
-            result.mark_failed(f"未知的视频合成风格: {style_name}")
-            result.elapsed = round(time.time() - start, 2)
-            self.report.steps.append(result)
-            raise PipelineStepError(
-                f"未知的视频合成风格: {style_name}，"
-                f"可用风格: {', '.join(self._STYLE_MODULES.keys())}",
-                step_name="video_compose", step_index=5,
-            )
 
         try:
             self.logger.info(f"视频合成风格: {style_name}")
 
+            # 未知风格在此抛 ValueError，由下方统一 except 包装为
+            # PipelineStepError 并完成收尾，避免手工复制 finally 逻辑
+            module_name = self._STYLE_MODULES.get(style_name)
+            if module_name is None:
+                raise ValueError(
+                    f"未知的视频合成风格: {style_name}，"
+                    f"可用风格: {', '.join(self._STYLE_MODULES.keys())}"
+                )
             style_module = importlib.import_module(module_name)
             compose_video = style_module.compose_video
-            COMPOSE_DEFAULT_CONFIG = style_module.DEFAULT_CONFIG
+            compose_defaults = style_module.DEFAULT_CONFIG
 
             compose_config_path = resolve_path(
                 self.config.project_dir,
@@ -583,7 +584,7 @@ class Pipeline:
                 ),
             )
             compose_config = load_config(
-                compose_config_path, COMPOSE_DEFAULT_CONFIG,
+                compose_config_path, compose_defaults,
                 deep_merge_keys=["text_overlay", "map_overlay"],
             )
             compose_config["video_source"] = self.video_path
@@ -636,15 +637,21 @@ class Pipeline:
 
             self.output_video_path = compose_video(compose_config)
 
-            # 验证输出视频完整性
-            if os.path.exists(self.output_video_path):
-                try:
-                    validate_output_video(self.output_video_path)
-                    self.logger.info("输出视频验证通过")
-                except VideoValidationError as exc:
-                    result.add_warning(f"输出视频验证异常: {exc}")
-            else:
-                result.add_warning("输出视频文件未找到，可能合成未成功")
+            # 验证输出视频完整性：文件缺失或校验失败均视为步骤失败，
+            # 不能仅记 warning 后仍标记成功（否则失败会被上报为成功）
+            if not os.path.exists(self.output_video_path):
+                raise PipelineStepError(
+                    "输出视频文件未找到，合成未成功",
+                    step_name="video_compose", step_index=5,
+                )
+            try:
+                validate_output_video(self.output_video_path)
+                self.logger.info("输出视频验证通过")
+            except VideoValidationError as exc:
+                raise PipelineStepError(
+                    f"输出视频验证失败: {exc}",
+                    step_name="video_compose", step_index=5, cause=exc,
+                ) from exc
 
             result.mark_success(output_files=[self.output_video_path])
             self.logger.info(f"输出视频: {self.output_video_path}")
@@ -686,7 +693,7 @@ class Pipeline:
             if step_key in self.skip_steps:
                 skipped = StepResult(
                     name=step_key,
-                    description="已跳过",
+                    description=self.SKIPPED_DESCRIPTION,
                     status=StepStatus.SKIPPED,
                 )
                 self.report.steps.append(skipped)
@@ -767,7 +774,8 @@ class Pipeline:
         self._generate_report(run_start_time)
         # 若有步骤被取消/跳过（非用户显式 --skip-step），视为非完全成功
         return not any(
-            s.status == StepStatus.SKIPPED and s.description != "已跳过"
+            s.status == StepStatus.SKIPPED
+            and s.description != self.SKIPPED_DESCRIPTION
             for s in self.report.steps
         )
 
@@ -1179,6 +1187,233 @@ def match_custom_copilot_jsons(
     return mapping, notes
 
 
+def _resolve_background_image(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    config_mgr: ConfigManager,
+) -> str | None:
+    """解析背景板图片路径（整批共享）
+
+    未指定 --style 时沿用配置中的 video_compose_style（CLI 参数优先于配置）。
+    style1（非 --recognize-only）必须提供背景板图片，否则退出报错。
+    """
+    style = args.style or config_mgr.get_video_compose_style()
+    background_image_path = None
+    if args.background_image:
+        background_image_path = args.background_image
+        if not os.path.isabs(background_image_path):
+            background_image_path = os.path.abspath(background_image_path)
+    elif style == "style1" and not args.recognize_only:
+        # --recognize-only 仅执行识别（步骤1），不涉及视频合成，
+        # 无需背景板图片；其余场景 style1 仍要求背景板图片
+        parser.error(
+            "style1 需要背景板图片，请使用 --background-image / -b 指定\n"
+            "若不需要背景板图片，可使用 --style style2 或 --recognize-only\n"
+            f"支持的图片格式: {', '.join(sorted(SUPPORTED_IMAGE_EXTENSIONS))}\n"
+            "用法: python main.py <video...> --background-image <image>"
+        )
+    return background_image_path
+
+
+def _collect_cli_overrides(
+    args: argparse.Namespace, config_mgr: ConfigManager
+) -> dict[str, Any]:
+    """将 CLI 参数转换为配置覆盖项（配置优先级：CLI > pipeline.json > 默认值）"""
+    cli_overrides: dict[str, Any] = {}
+    if args.maa_path:
+        cli_overrides["maa_path"] = args.maa_path
+    if args.backend:
+        cli_overrides["copilot_backend"] = args.backend
+    # Recognition 后端子配置覆盖（合并到已有 recognition 配置块）
+    if args.ocr or args.stage or args.resolution:
+        rec_cfg = dict(config_mgr.pipeline.get("recognition", {}) or {})
+        if args.ocr:
+            rec_cfg["ocr_source"] = args.ocr
+        if args.stage:
+            rec_cfg["stage_override"] = args.stage
+        if args.resolution:
+            rec_cfg["resolution"] = args.resolution
+        cli_overrides["recognition"] = rec_cfg
+    if args.output_dir:
+        cli_overrides["output_dir"] = args.output_dir
+    if args.log_level:
+        cli_overrides["log_level"] = args.log_level
+    if args.no_log_file:
+        cli_overrides["log_to_file"] = False
+    if args.style:
+        # 根据风格名称设置视频合成配置路径（仅在显式指定时覆盖用户配置）
+        style_name = args.style
+        cli_overrides["video_compose_style"] = style_name
+        cli_overrides["video_compose_config"] = (
+            f"config/video_compose/{style_name}.json"
+        )
+    return cli_overrides
+
+
+def _init_cli_logger(config_mgr: ConfigManager, videos: list[str]) -> logging.Logger:
+    """初始化 CLI 日志
+
+    单文件：日志写入该视频输出目录（保持向后兼容）；
+    多文件：日志写入基础输出目录，覆盖整批。
+    """
+    log_to_file = config_mgr.pipeline.get(
+        "log_to_file", PIPELINE_DEFAULTS["log_to_file"]
+    )
+    if len(videos) == 1:
+        log_video_name = os.path.splitext(os.path.basename(videos[0]))[0]
+        log_dir = config_mgr.get_output_dir(log_video_name) if log_to_file else None
+    else:
+        log_dir = config_mgr.get_output_dir() if log_to_file else None
+    return setup_logger(
+        "pipeline",
+        log_dir=log_dir,
+        log_level=config_mgr.get_log_level(),
+        log_to_file=log_to_file,
+        max_bytes=config_mgr.pipeline.get(
+            "log_max_bytes", PIPELINE_DEFAULTS["log_max_bytes"]
+        ),
+        backup_count=config_mgr.pipeline.get(
+            "log_backup_count", PIPELINE_DEFAULTS["log_backup_count"]
+        ),
+    )
+
+
+def _validate_background_image(logger: logging.Logger, path: str) -> None:
+    """验证背景板图片（整批共享，失败即退出）"""
+    try:
+        logger.info(f"验证背景板图片: {path}")
+        image_info = validate_image_file(path)
+        if image_info["width"] > 0:
+            logger.info(
+                f"背景板图片信息: {image_info['width']}x{image_info['height']}"
+            )
+        else:
+            logger.info("背景板图片验证通过（PIL不可用，跳过尺寸检测）")
+    except ImageValidationError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
+
+
+def _bind_custom_copilot_jsons(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    videos: list[str],
+    logger: logging.Logger,
+) -> dict[str, str]:
+    """校验 --copilot-json 并建立「视频 → 作业JSON」绑定
+
+    绑定后对应视频跳过步骤1识别。
+    """
+    if not args.copilot_json:
+        return {}
+    json_paths: list[str] = []
+    for jp in args.copilot_json:
+        if not os.path.isabs(jp):
+            jp = os.path.abspath(jp)
+        if os.path.splitext(jp)[1].lower() != ".json":
+            parser.error(f"作业JSON必须是 .json 文件: {jp}")
+        if not os.path.exists(jp):
+            parser.error(f"作业JSON文件不存在: {jp}")
+        json_paths.append(jp)
+    custom_json_map, json_notes = match_custom_copilot_jsons(videos, json_paths)
+    for note in json_notes:
+        logger.warning(note)
+    for video_path, jp in custom_json_map.items():
+        logger.info(
+            f"视频绑定自定义作业JSON: "
+            f"{os.path.basename(video_path)} -> {jp}"
+        )
+    return custom_json_map
+
+
+def _run_dry_run(
+    logger: logging.Logger,
+    config_mgr: ConfigManager,
+    videos: list[str],
+    background_image_path: str | None,
+    skip_steps: set[str],
+) -> None:
+    """Dry-run 模式：验证全部视频与配置后退出（不执行实际处理）"""
+    logger.info("Dry-run模式：开始验证全部输入")
+    logger.info(f"背景板图片: {background_image_path}")
+    logger.info(f"识别后端: {config_mgr.get_copilot_backend()}")
+    logger.info(f"MAA路径: {config_mgr.get_maa_path()}")
+    logger.info(f"跳过步骤: {sorted(skip_steps)}")
+    all_ok = True
+    for idx, video_path in enumerate(videos, start=1):
+        try:
+            logger.info(f"[{idx}/{len(videos)}] 验证视频文件: {video_path}")
+            video_info = validate_video_file(video_path)
+            logger.info(
+                f"  视频信息: {video_info['width']}x{video_info['height']}, "
+                f"时长{video_info['duration']:.2f}s"
+            )
+        except VideoValidationError as exc:
+            logger.error(f"  验证失败: {exc}")
+            all_ok = False
+    logger.info(
+        f"Dry-run完成：{'全部通过' if all_ok else '存在无效输入'}"
+    )
+    sys.exit(0 if all_ok else 1)
+
+
+def _run_batch(
+    logger: logging.Logger,
+    config_mgr: ConfigManager,
+    videos: list[str],
+    background_image_path: str | None,
+    skip_steps: set[str],
+    custom_json_map: dict[str, str],
+) -> None:
+    """批量执行流水线，单文件失败不中断整批，结束时按结果退出"""
+    total = len(videos)
+    success_count = 0
+    logger.info(f"开始批量处理：共 {total} 个文件")
+    for idx, video_path in enumerate(videos, start=1):
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"  批量处理 {idx}/{total}: {video_name}")
+        logger.info("=" * 60)
+
+        # 单文件验证失败 → 记录并继续下一个
+        try:
+            video_info = validate_video_file(video_path)
+            logger.info(
+                f"视频信息: {video_info['width']}x{video_info['height']}, "
+                f"时长{video_info['duration']:.2f}s"
+            )
+        except VideoValidationError as exc:
+            logger.error(f"视频验证失败，跳过该文件: {exc}")
+            continue
+        except Exception as exc:  # 防御：意外异常不应中断整批
+            logger.error(f"视频验证发生意外错误，跳过该文件: {exc}")
+            continue
+
+        try:
+            pipeline = Pipeline(
+                video_path=video_path,
+                config_mgr=config_mgr,
+                logger=logger,
+                background_image_path=background_image_path,
+                skip_steps=skip_steps,
+                copilot_json_path=custom_json_map.get(video_path),
+            )
+            if pipeline.run():
+                success_count += 1
+            else:
+                logger.error(f"文件处理失败: {video_path}")
+        except Exception as exc:
+            # 单文件异常不应中断整个队列
+            logger.error(f"文件处理异常，跳过该文件: {video_path} - {exc}")
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"  批量处理结束：成功 {success_count}/{total}")
+    logger.info("=" * 60)
+    sys.exit(0 if success_count == total else 1)
+
+
 def main() -> None:
     parser = build_argparser()
     args = parser.parse_args()
@@ -1215,119 +1450,24 @@ def main() -> None:
     for v in args.video:
         videos.append(v if os.path.isabs(v) else os.path.abspath(v))
 
-    # ── 加载配置 ──────────────────────────────────────────
+    # ── 加载配置并应用 CLI 覆盖 ───────────────────────────
     config_mgr.load_pipeline_config(args.config)
-
-    # ── 背景板图片路径（整批共享） ────────────────────────
-    # 未指定 --style 时沿用配置中的 video_compose_style（CLI 参数优先于配置）
-    style = args.style or config_mgr.get_video_compose_style()
-    background_image_path = None
-    if args.background_image:
-        background_image_path = args.background_image
-        if not os.path.isabs(background_image_path):
-            background_image_path = os.path.abspath(background_image_path)
-    elif style == "style1" and not args.recognize_only:
-        # --recognize-only 仅执行识别（步骤1），不涉及视频合成，
-        # 无需背景板图片；其余场景 style1 仍要求背景板图片
-        parser.error(
-            "style1 需要背景板图片，请使用 --background-image / -b 指定\n"
-            "若不需要背景板图片，可使用 --style style2 或 --recognize-only\n"
-            f"支持的图片格式: {', '.join(sorted(SUPPORTED_IMAGE_EXTENSIONS))}\n"
-            "用法: python main.py <video...> --background-image <image>"
-        )
-
-    cli_overrides: dict[str, Any] = {}
-    if args.maa_path:
-        cli_overrides["maa_path"] = args.maa_path
-    if args.backend:
-        cli_overrides["copilot_backend"] = args.backend
-    # Recognition 后端子配置覆盖（合并到已有 recognition 配置块）
-    if args.ocr or args.stage or args.resolution:
-        rec_cfg = dict(config_mgr.pipeline.get("recognition", {}) or {})
-        if args.ocr:
-            rec_cfg["ocr_source"] = args.ocr
-        if args.stage:
-            rec_cfg["stage_override"] = args.stage
-        if args.resolution:
-            rec_cfg["resolution"] = args.resolution
-        cli_overrides["recognition"] = rec_cfg
-    if args.output_dir:
-        cli_overrides["output_dir"] = args.output_dir
-    if args.log_level:
-        cli_overrides["log_level"] = args.log_level
-    if args.no_log_file:
-        cli_overrides["log_to_file"] = False
-    if args.style:
-        # 根据风格名称设置视频合成配置路径（仅在显式指定时覆盖用户配置）
-        style_name = args.style
-        cli_overrides["video_compose_style"] = style_name
-        cli_overrides["video_compose_config"] = (
-            f"config/video_compose/{style_name}.json"
-        )
-    config_mgr.merge_cli_overrides(cli_overrides)
+    background_image_path = _resolve_background_image(parser, args, config_mgr)
+    config_mgr.merge_cli_overrides(_collect_cli_overrides(args, config_mgr))
 
     # 同步 FFmpeg 路径配置到 utils 模块全局（CLI 路径，不经过 ConfigProxy）
     set_ffmpeg_config(
-        bool(config_mgr.pipeline.get("ffmpeg_custom_enabled", False)),
+        bool(config_mgr.pipeline.get(
+            "ffmpeg_custom_enabled", PIPELINE_DEFAULTS["ffmpeg_custom_enabled"]
+        )),
         config_mgr.pipeline.get("ffmpeg_path", ""),
     )
 
-    # ── 初始化日志 ────────────────────────────────────────
-    # 单文件：日志写入该视频输出目录（保持向后兼容）；
-    # 多文件：日志写入基础输出目录，覆盖整批。
-    log_to_file = config_mgr.pipeline.get("log_to_file", True)
-    if len(videos) == 1:
-        log_video_name = os.path.splitext(os.path.basename(videos[0]))[0]
-        log_dir = config_mgr.get_output_dir(log_video_name) if log_to_file else None
-    else:
-        log_dir = config_mgr.get_output_dir() if log_to_file else None
-    logger = setup_logger(
-        "pipeline",
-        log_dir=log_dir,
-        log_level=config_mgr.get_log_level(),
-        log_to_file=log_to_file,
-        max_bytes=config_mgr.pipeline.get("log_max_bytes", 10 * 1024 * 1024),
-        backup_count=config_mgr.pipeline.get("log_backup_count", 3),
-    )
-
-    # ── 验证背景板图片（整批共享，失败即退出） ────────────
+    # ── 初始化日志与输入校验 ──────────────────────────────
+    logger = _init_cli_logger(config_mgr, videos)
     if background_image_path:
-        try:
-            logger.info(f"验证背景板图片: {background_image_path}")
-            image_info = validate_image_file(background_image_path)
-            if image_info["width"] > 0:
-                logger.info(
-                    f"背景板图片信息: {image_info['width']}x{image_info['height']}"
-                )
-            else:
-                logger.info("背景板图片验证通过（PIL不可用，跳过尺寸检测）")
-        except ImageValidationError as exc:
-            logger.error(str(exc))
-            sys.exit(1)
-
-    # ── 自定义作业 JSON（CLI --copilot-json）──────────────
-    # 校验 JSON 文件并建立「视频 → 作业JSON」绑定，绑定后跳过步骤1识别。
-    custom_json_map: dict[str, str] = {}
-    if args.copilot_json:
-        json_paths: list[str] = []
-        for jp in args.copilot_json:
-            if not os.path.isabs(jp):
-                jp = os.path.abspath(jp)
-            if os.path.splitext(jp)[1].lower() != ".json":
-                parser.error(f"作业JSON必须是 .json 文件: {jp}")
-            if not os.path.exists(jp):
-                parser.error(f"作业JSON文件不存在: {jp}")
-            json_paths.append(jp)
-        custom_json_map, json_notes = match_custom_copilot_jsons(
-            videos, json_paths
-        )
-        for note in json_notes:
-            logger.warning(note)
-        for video_path, jp in custom_json_map.items():
-            logger.info(
-                f"视频绑定自定义作业JSON: "
-                f"{os.path.basename(video_path)} -> {jp}"
-            )
+        _validate_background_image(logger, background_image_path)
+    custom_json_map = _bind_custom_copilot_jsons(parser, args, videos, logger)
 
     # ── --recognize-only：自动跳过 formation/actions/track/compose ──
     # 仅执行步骤1（视频转 copilot JSON），输出单一 JSON 文件。
@@ -1340,74 +1480,13 @@ def main() -> None:
             "编队/操作/跟踪/合成步骤"
         )
 
-    # ── Dry-run 模式：验证全部视频后返回 ──────────────────
     if args.dry_run:
-        logger.info("Dry-run模式：开始验证全部输入")
-        logger.info(f"背景板图片: {background_image_path}")
-        logger.info(f"识别后端: {config_mgr.get_copilot_backend()}")
-        logger.info(f"MAA路径: {config_mgr.get_maa_path()}")
-        logger.info(f"跳过步骤: {sorted(effective_skip_steps)}")
-        all_ok = True
-        for idx, video_path in enumerate(videos, start=1):
-            try:
-                logger.info(f"[{idx}/{len(videos)}] 验证视频文件: {video_path}")
-                video_info = validate_video_file(video_path)
-                logger.info(
-                    f"  视频信息: {video_info['width']}x{video_info['height']}, "
-                    f"时长{video_info['duration']:.2f}s"
-                )
-            except VideoValidationError as exc:
-                logger.error(f"  验证失败: {exc}")
-                all_ok = False
-        logger.info(
-            f"Dry-run完成：{'全部通过' if all_ok else '存在无效输入'}"
+        _run_dry_run(
+            logger, config_mgr, videos, background_image_path,
+            effective_skip_steps,
         )
-        sys.exit(0 if all_ok else 1)
 
-    # ── 批量执行流水线 ────────────────────────────────────
-    total = len(videos)
-    success_count = 0
-    logger.info(f"开始批量处理：共 {total} 个文件")
-    for idx, video_path in enumerate(videos, start=1):
-        video_name = os.path.splitext(os.path.basename(video_path))[0]
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info(f"  批量处理 {idx}/{total}: {video_name}")
-        logger.info("=" * 60)
-
-        # 单文件验证失败 → 记录并继续下一个
-        try:
-            video_info = validate_video_file(video_path)
-            logger.info(
-                f"视频信息: {video_info['width']}x{video_info['height']}, "
-                f"时长{video_info['duration']:.2f}s"
-            )
-        except VideoValidationError as exc:
-            logger.error(f"视频验证失败，跳过该文件: {exc}")
-            continue
-        except Exception as exc:  # 防御：意外异常不应中断整批
-            logger.error(f"视频验证发生意外错误，跳过该文件: {exc}")
-            continue
-
-        try:
-            pipeline = Pipeline(
-                video_path=video_path,
-                config_mgr=config_mgr,
-                logger=logger,
-                background_image_path=background_image_path,
-                skip_steps=effective_skip_steps,
-                copilot_json_path=custom_json_map.get(video_path),
-            )
-            if pipeline.run():
-                success_count += 1
-            else:
-                logger.error(f"文件处理失败: {video_path}")
-        except Exception as exc:
-            # 单文件异常不应中断整个队列
-            logger.error(f"文件处理异常，跳过该文件: {video_path} - {exc}")
-
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info(f"  批量处理结束：成功 {success_count}/{total}")
-    logger.info("=" * 60)
-    sys.exit(0 if success_count == total else 1)
+    _run_batch(
+        logger, config_mgr, videos, background_image_path,
+        effective_skip_steps, custom_json_map,
+    )

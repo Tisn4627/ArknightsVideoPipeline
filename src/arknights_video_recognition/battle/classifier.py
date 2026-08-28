@@ -42,6 +42,8 @@ _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 # skill_ready 预处理：Maa 先 resize 到 72 再中心裁剪 64
 _SKILL_RESIZE = 72
+# 中心裁剪目标尺寸 = 模型固定输入 64x64（固定常量，不依赖运行时探测）
+_SKILL_CROP = 64
 
 
 class BattleClassifier:
@@ -87,10 +89,10 @@ class BattleClassifier:
     def _preprocess_skill(self, patch: np.ndarray) -> np.ndarray:
         """resize->72 INTER_CUBIC，中心裁剪 64，ImageNet 归一化，NCHW。"""
         resized = cv2.resize(patch, (_SKILL_RESIZE, _SKILL_RESIZE), interpolation=cv2.INTER_CUBIC)
-        crop = self.skill_h  # 与模型输入一致（64）
-        x = (resized.shape[1] - crop) // 2
-        y = (resized.shape[0] - crop) // 2
-        cropped = resized[y:y + crop, x:x + crop]
+        # 中心裁剪固定用 _SKILL_CROP（模型固定输入 64），不依赖探测到的 self.skill_h
+        x = (resized.shape[1] - _SKILL_CROP) // 2
+        y = (resized.shape[0] - _SKILL_CROP) // 2
+        cropped = resized[y:y + _SKILL_CROP, x:x + _SKILL_CROP]
         img = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         img = (img - _IMAGENET_MEAN) / _IMAGENET_STD
         img = img.transpose(2, 0, 1)  # HWC -> CHW

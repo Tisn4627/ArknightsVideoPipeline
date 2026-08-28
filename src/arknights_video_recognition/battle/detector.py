@@ -195,6 +195,9 @@ class OperatorDetector:
             y0 = max(0, int(round(by)))
             x1 = min(orig_w, int(round(bx + bw)))
             y1 = min(orig_h, int(round(by + bh)))
+            # 裁剪后宽高非正的非法框（如完全越界的检测）直接跳过
+            if x1 <= x0 or y1 <= y0:
+                continue
             results.append(
                 Detection(
                     box=[x0, y0, x1 - x0, y1 - y0],

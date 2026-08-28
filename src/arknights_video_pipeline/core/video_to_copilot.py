@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 
 from arknights_video_pipeline.core.utils import (
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = {}
 
 
-def validate_maa_path(maa_path):
+def validate_maa_path(maa_path: str) -> bool:
     """验证MAA项目路径有效性"""
     if not maa_path or not maa_path.strip():
         raise ValueError(
@@ -134,7 +135,7 @@ def _get_short_path_name(long_path: str) -> str:
     return short_path
 
 
-def _make_ascii_video_path(video_path: str):
+def _make_ascii_video_path(video_path: str) -> tuple[str, Callable[[], None]]:
     """为含非 ASCII 字符的视频路径创建纯 ASCII 临时路径（回退方案）。
 
     当 8.3 短路径不可用（卷上禁用了 8.3 短文件名生成）时，通过硬链接
@@ -179,7 +180,7 @@ def run_maa_recognition(maa_path, video_path, timeout=None):
 
     try:
         from asst.asst import Asst
-        from asst.utils import Message, InstanceOptionType
+        from asst.utils import Message
     except ImportError as e:
         raise ImportError(f"无法导入MAA Python接口: {e}\n请确认MAA目录下存在Python/asst模块")
 
@@ -221,6 +222,11 @@ def run_maa_recognition(maa_path, video_path, timeout=None):
             try:
                 m = Message(msg)
                 d = json.loads(details.decode("utf-8"))
+                # MAA 回调跨越 C 边界：JSON 顶层不保证是对象
+                # （损坏/格式变更时可能为数组或标量），需防御后取键
+                if not isinstance(d, dict):
+                    logger.warning(f"callback 消息顶层非对象，已忽略: {d!r}")
+                    return
 
                 what = d.get("what", "")
                 if m == Message.SubTaskExtraInfo and what == "Finished":
@@ -366,7 +372,9 @@ def build_copilot_json(combat_data):
     return result
 
 
-def video_to_copilot(video_path, config, timeout=None):
+def video_to_copilot(
+    video_path: str, config: dict, timeout: float | None = None
+) -> str:
     """主转换流程
 
     Args:
@@ -457,9 +465,9 @@ def video_to_copilot(video_path, config, timeout=None):
     return json_path
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="视频转MAA作业JSON工具")
-    parser.add_argument("video", nargs="?", default="test.mp4", help="视频文件路径 (默认: test.mp4)")
+    parser.add_argument("video", nargs="?", default=None, help="视频文件路径")
     parser.add_argument("--maa-path", default=None, help="MAA项目路径 (优先级高于配置文件)")
     parser.add_argument("--output-dir", default=None, help="输出目录 (优先级高于配置文件)")
     parser.add_argument("--config", default=None, help="配置文件路径 (可选，默认不使用配置文件)")
@@ -469,7 +477,7 @@ def main():
 
     config_path = args.config
     # --init-config 只依赖 --config 路径，必须先于"未指定 --config 则
-    # 落到 test.mp4 演示流程"处理，否则该开关会被静默忽略
+    # 落到演示流程"处理，否则该开关会被静默忽略
     if args.init_config and config_path:
         save_default_config(config_path, DEFAULT_CONFIG)
         return
@@ -489,6 +497,9 @@ def main():
     if args.output_dir:
         config["output_dir"] = args.output_dir
 
+    if not args.video:
+        parser.error("请提供视频文件路径")
+
     # 解析视频路径（基于项目根目录）
     video_path = args.video
     if not os.path.isabs(video_path):
@@ -497,13 +508,8 @@ def main():
     # 执行转换
     try:
         video_to_copilot(video_path, config)
-    except FileNotFoundError as e:
-        logger.error(str(e))
-        sys.exit(1)
-    except ValueError as e:
-        logger.error(str(e))
-        sys.exit(1)
-    except RuntimeError as e:
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
+        # 三类预期内错误的处理完全一致，合并为一个分支
         logger.error(str(e))
         sys.exit(1)
     except Exception as e:

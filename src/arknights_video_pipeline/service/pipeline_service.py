@@ -19,6 +19,8 @@ service.pipeline_service - 流水线应用服务（批量 + 可选并发）
 from __future__ import annotations
 
 import os
+import threading
+import time
 from typing import Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -49,6 +51,8 @@ class PipelineService(QObject):
     batch_finished = pyqtSignal(int, int, bool)               # success_count, total_count, cancelled
     log_emitted = pyqtSignal(str, str)
     validation_failed = pyqtSignal(list)
+    # 后台校验完成（errors 为空列表表示通过）
+    validation_finished = pyqtSignal(list)
 
     def __init__(self, config_proxy: ConfigProxy, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -70,6 +74,8 @@ class PipelineService(QObject):
         # 批次活跃标志：用于 _finish_batch 幂等保护，防止 worker.cancel()
         # 同步触发 finished 信号导致 _finish_batch 被重复调用
         self._batch_active: bool = False
+        # 后台校验进行中标志（防止重复发起校验）
+        self._validating: bool = False
 
     # ── 输入校验 ──────────────────────────────────────────
 
@@ -147,19 +153,52 @@ class PipelineService(QObject):
 
         return errors
 
+    def validate_batch_async(self, video_paths: list[str],
+                             json_paths: list[str | None] | None = None) -> bool:
+        """在后台线程执行 validate_batch，完成后发射 validation_finished
+
+        validate_video_file 内部为同步 ffprobe 子进程调用（单文件超时
+        上限 60 秒），在 GUI 主线程串行校验大量文件会长时间冻结界面，
+        故移至后台线程执行；结果经 Qt 排队信号投递回主线程接收方。
+
+        Returns:
+            True 表示已开始后台校验；False 表示正在校验或已有任务运行。
+        """
+        if self._validating or self.is_running():
+            return False
+        self._validating = True
+
+        def _run_validation() -> None:
+            try:
+                errors = self.validate_batch(video_paths, json_paths)
+            except Exception as exc:  # 兜底：异常不能吞掉导致 UI 永久等待
+                errors = [f"输入校验发生异常: {exc}"]
+            finally:
+                self._validating = False
+            # 跨线程 emit：Qt 自动以排队连接投递到主线程
+            self.validation_finished.emit(errors)
+
+        threading.Thread(
+            target=_run_validation, daemon=True, name="batch-validation"
+        ).start()
+        return True
+
     # ── 运行控制 ──────────────────────────────────────────
 
     def is_running(self) -> bool:
         return len(self._workers) > 0
 
     def run_pipeline(self, video_paths: list[str],
-                     json_paths: list[str | None] | None = None) -> bool:
+                     json_paths: list[str | None] | None = None,
+                     validate: bool = True) -> bool:
         """启动批量流水线。
 
         Args:
             video_paths: 按用户顺序排列的视频路径列表
             json_paths: 与 video_paths 平行对齐的自定义作业 JSON 路径列表
                 （None 表示该视频未绑定，仍执行视频识别）
+            validate: 是否执行输入校验。调用方刚通过 validate_batch_async
+                完成校验时传 False，避免同一批次 ffprobe 重复探测
 
         Returns:
             True 表示已成功启动；False 表示因校验失败或已有任务运行而未启动。
@@ -167,10 +206,11 @@ class PipelineService(QObject):
         if self.is_running():
             return False
 
-        errors = self.validate_batch(video_paths, json_paths)
-        if errors:
-            self.validation_failed.emit(errors)
-            return False
+        if validate:
+            errors = self.validate_batch(video_paths, json_paths)
+            if errors:
+                self.validation_failed.emit(errors)
+                return False
 
         # 读取并发配置：关闭或上限 <=1 时退化为完全串行（max_concurrent=1）
         if self._config.multithreading():
@@ -221,7 +261,6 @@ class PipelineService(QObject):
         使用统一 deadline 分摊等待预算：串行逐个 wait(timeout) 时最坏
         阻塞主线程 N×timeout；改为共享截止时间后总等待不超过 timeout_ms。
         """
-        import time
         deadline = time.monotonic() + timeout_ms / 1000.0
         for worker in list(self._workers.values()):
             remaining_ms = int((deadline - time.monotonic()) * 1000)
@@ -237,7 +276,11 @@ class PipelineService(QObject):
         检查 cancel_event，长步骤（MAA ~320s、track ~358s、compose ~360s）
         不会在短超时内响应。QThread.terminate() 立即终止线程，可能留下
         未释放的资源，但确保进程不会因非 daemon QThread 阻塞而无法退出。
+
+        与 wait_for_shutdown 一致使用统一 deadline 分摊等待预算，
+        N 个 worker 的总阻塞时间不超过 timeout_ms（而非 N×timeout_ms）。
         """
+        deadline = time.monotonic() + timeout_ms / 1000.0
         for idx, worker in list(self._workers.items()):
             if worker.isRunning():
                 self.log_emitted.emit(
@@ -245,8 +288,11 @@ class PipelineService(QObject):
                     f"工作线程 {idx} 在超时后仍未退出，强制终止",
                 )
                 worker.terminate()
-                worker.wait(timeout_ms)
+                remaining_ms = max(1, min(timeout_ms, round((deadline - time.monotonic()) * 1000)))
+                worker.wait(remaining_ms)
             self._workers.pop(idx, None)
+            # terminate 后线程已停止（或 wait 超时后即将被销毁），安全清理
+            worker.deleteLater()
 
     # ── 内部：worker 调度 ─────────────────────────────────
 
@@ -287,7 +333,20 @@ class PipelineService(QObject):
                 )
                 self.file_started.emit(idx, video_path)
                 self.file_progress.emit(idx, 0, "处理失败")
-                self.file_finished.emit(idx, False, {"error": str(exc)}, False)
+                # 与正常路径 report.to_dict() 的结构保持一致，
+                # 避免消费者需要处理两种互不兼容的 schema
+                failure_report = {
+                    "video_path": video_path,
+                    "video_name": os.path.basename(video_path),
+                    "output_dir": "",
+                    "pipeline_status": "failed",
+                    "total_elapsed": 0.0,
+                    "timestamp": "",
+                    "steps": [],
+                    "output_files": {},
+                    "warnings": [f"创建工作线程失败: {exc}"],
+                }
+                self.file_finished.emit(idx, False, failure_report, False)
                 self._contributions[idx] = 100
                 continue
 
@@ -343,7 +402,9 @@ class PipelineService(QObject):
         # 此时批次已结束或索引越界，直接忽略，避免 IndexError 与重复信号
         if not self._batch_active or idx >= len(self._queue):
             return
-        cancelled = cancelled or self._cancelled
+        # 注意：批次取消状态（self._cancelled）仅用于停止后续派发，
+        # 不覆盖该文件自身的失败语义——worker 已失败完成的文件仍按
+        # "处理失败"上报，避免丢失失败事实
         if success:
             self._success_count += 1
             self._file_percents[idx] = 100
@@ -362,10 +423,16 @@ class PipelineService(QObject):
             f"[{idx + 1}/{len(self._queue)}] {status_text}: {self._queue[idx]}",
         )
 
-        # 清理该 worker
+        # 清理该 worker：调度簿记立即移除；对象销毁以 QThread.finished
+        # 为锚点——pipeline_finished 在 run() 的 finally 中发射，排队
+        # 抵达主线程时线程可能尚未完成内部收尾，此时 deleteLater 会
+        # 销毁仍在运行的 QThread（Qt 文档警告可致崩溃）
         worker = self._workers.pop(idx, None)
         if worker is not None:
-            worker.deleteLater()
+            if worker.isFinished():
+                worker.deleteLater()
+            else:
+                worker.finished.connect(worker.deleteLater)
 
         # 取消请求：不再派发新任务，等待所有在途 worker 结束后收尾
         if cancelled or self._cancelled:

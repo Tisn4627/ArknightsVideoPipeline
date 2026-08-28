@@ -70,13 +70,6 @@ class ProgressCard(MaterialCard):
         self._progress.setValue(0)
         self._set_static_message("progress.reset_ready")
 
-    def set_finished(self, success: bool, message: str) -> None:
-        self._progress.setValue(100 if success else self._progress.value())
-        # message 由调用方构造，视为动态文本
-        self._message_key = None
-        self._message_kwargs = {}
-        self._message.setText(message)
-
     def set_batch_finished(self, success_count: int, total: int,
                            cancelled: bool) -> None:
         """批量处理结束态：进度填满，显示成功/总数（或取消）"""

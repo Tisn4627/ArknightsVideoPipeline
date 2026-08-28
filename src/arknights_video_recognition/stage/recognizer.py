@@ -108,7 +108,8 @@ class StageRecognizer:
     ) -> tuple[Optional[dict], list[str]]:
         """识别并返回 (命中关卡, 候选名列表)。
 
-        对齐 Maa：未命中时候选列表为空（不再用模糊匹配生成候选）。
+        注意：候选功能已停用（对齐 Maa 不做模糊匹配），恒返回空列表；
+        保留参数与返回结构以兼容既有调用方。
         """
         if frame is None:
             return None, []

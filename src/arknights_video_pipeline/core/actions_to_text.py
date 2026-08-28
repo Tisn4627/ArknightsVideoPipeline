@@ -118,7 +118,7 @@ def format_action(action, index, opers_map, config):
             parts.append(name)
 
     # 位置（默认值与 DEFAULT_CONFIG 中 show_location=False 保持一致）
-    if config.get("show_location", False) and location:
+    if config.get("show_location", False) and len(location) >= 2:
         parts.append(f"({location[0]},{location[1]})")
 
     # 方向（DEFAULT_CONFIG 中 show_direction=True）

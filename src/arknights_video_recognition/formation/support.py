@@ -23,6 +23,13 @@ from arknights_video_recognition.config.settings import (
 from arknights_video_recognition.formation.analyzer import FormationOper
 from arknights_video_recognition.formation.avatar_loader import load_resource_avatar
 
+# 槽位匹配分数低于该值视为非编队页面
+_NOT_FORMATION_PAGE_SCORE = 0.3
+# SIFT Lowe 比率测试阈值：best_dist < _LOWE_RATIO * second_dist 才算好匹配
+_LOWED_RATIO = 0.75
+# RANSAC 重投影误差阈值（像素）
+_RANSAC_REPROJ_THRESH = 5.0
+
 
 class SupportOperatorRecognizer:
     """助战干员识别器：定位助战槽、裁剪头像、匹配头像库。"""
@@ -36,6 +43,8 @@ class SupportOperatorRecognizer:
         if self.support_template is None:
             raise RuntimeError(f"读取助战空槽模板失败：{self.template_path}")
         self._slot_roi = list(SUPPORT_SLOT_ROI)  # [x, y, w, h]
+        # 空模板灰度只需转换一次：缓存为实例属性，_slot_match_score 直接复用
+        self._tpl_gray = cv2.cvtColor(self.support_template, cv2.COLOR_BGR2GRAY)
         # 预扫描头像库文件名（此处不读图像数据：图像在下方构建 SIFT
         # 描述子时以 BGRA 单次读入。旧实现先整库读 BGR 存一份、再整库
         # 重读 BGRA，数百 MB 级资源内存占用直接翻倍且 BGR 份无人消费）
@@ -117,14 +126,15 @@ class SupportOperatorRecognizer:
             return -1.0
         slot = frame[y0:y1, x0:x1]
         slot_gray = cv2.cvtColor(slot, cv2.COLOR_BGR2GRAY)
-        tpl_gray = cv2.cvtColor(self.support_template, cv2.COLOR_BGR2GRAY)
-        # 尺寸对齐（模板与裁剪区可能差几个像素）
+        # 尺寸对齐（模板与裁剪区可能差几个像素）；模板灰度已缓存，
+        # resize 产生新数组、不改动缓存
+        tpl_gray = self._tpl_gray
         if tpl_gray.shape != slot_gray.shape:
             tpl_gray = cv2.resize(tpl_gray, (slot_gray.shape[1], slot_gray.shape[0]), interpolation=cv2.INTER_AREA)
         res = cv2.matchTemplate(slot_gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
         return float(res.max()) if res.size else -1.0
 
-    def find_stable_window(self, frames_with_ts, fps=5) -> list:
+    def find_stable_window(self, frames_with_ts) -> list:
         """扫描帧序列，找最后一次连续≥5帧为编队页面的稳定窗。
 
         编队页面判定：开始按钮 OCR 检测到"开始"文字（对齐 Maa
@@ -166,12 +176,12 @@ class SupportOperatorRecognizer:
         """定位助战槽位并判断是否为空。
 
         使用固定 ROI（SUPPORT_SLOT_ROI），通过槽位与空模板的匹配分数判断：
-        - 分数 < 0.3：非编队页面，返回 (None, False)
+        - 分数 < _NOT_FORMATION_PAGE_SCORE (0.3)：非编队页面，返回 (None, False)
         - 分数 ≥ SUPPORT_EMPTY_THRESHOLD (0.8)：槽位为空，返回 (box, True)
         - 否则：槽位已填充，返回 (box, False)
         """
         score = self._slot_match_score(frame)
-        if score < 0.3:
+        if score < _NOT_FORMATION_PAGE_SCORE:
             return None, False
         box = list(self._slot_roi)
         is_empty = score >= SUPPORT_EMPTY_THRESHOLD
@@ -201,6 +211,9 @@ class SupportOperatorRecognizer:
                 alias = info.get(field)
                 if alias and alias not in self._alias_map:
                     self._alias_map[alias] = canonical
+        # 缓存 keys 列表：_resolve_name 的模糊匹配每次调用都需候选列表，
+        # 别名索引构建后不再变化，避免每次重建 list(keys)
+        self._alias_keys = list(self._alias_map.keys())
         return self._alias_map
 
     def _resolve_name(self, raw_name: str) -> Optional[str]:
@@ -211,7 +224,7 @@ class SupportOperatorRecognizer:
         if raw_name in alias_map:
             return alias_map[raw_name]
         matches = difflib.get_close_matches(
-            raw_name, list(alias_map.keys()), n=1, cutoff=0.6
+            raw_name, self._alias_keys, n=1, cutoff=0.6
         )
         if matches:
             return alias_map[matches[0]]
@@ -255,7 +268,7 @@ class SupportOperatorRecognizer:
                 if len(pair) < 2:
                     continue
                 a, b = pair
-                if a.distance < 0.75 * b.distance:
+                if a.distance < _LOWED_RATIO * b.distance:
                     good.append(a)
             if len(good) < 4:
                 continue
@@ -265,7 +278,7 @@ class SupportOperatorRecognizer:
             dst = np.float32(
                 [lib_kp[m.trainIdx].pt for m in good]
             ).reshape(-1, 1, 2)
-            _H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+            _H, mask = cv2.findHomography(src, dst, cv2.RANSAC, _RANSAC_REPROJ_THRESH)
             inliers = int(mask.sum()) if mask is not None else 0
             if inliers > best_inliers:
                 best_inliers = inliers
@@ -310,16 +323,21 @@ class SupportOperatorRecognizer:
         # 逐帧匹配助战头像，按 name 累计票数并记录最佳 inliers/头像/box/filename
         votes: dict[str, list] = {}
         # votes: name -> [票数, 最高inliers, avatar, box, filename]
+        # voted_frames：实际参与投票的帧数（槽位有效且成功裁剪出头像）。
+        # 匹配失败/空槽的帧计入分母但不投任何票，避免单帧噪声匹配
+        # 构成 1/1=100% 一致率直接通过（与"多帧稳定才产出"意图相悖）
+        voted_frames = 0
         for ts, frame in sampled:
             box, is_empty = self.locate_support_slot(frame)
             if box is None or is_empty:
                 continue
             avatar = self.crop_support_avatar(frame, box)
+            voted_frames += 1
             name, inliers, match_fn = self.match_avatar(avatar)
             if name is None:
                 continue
             if name not in votes:
-                votes[name] = [0, inliers, avatar, box, match_fn]
+                votes[name] = [1, inliers, avatar, box, match_fn]
             else:
                 votes[name][0] += 1
                 if inliers > votes[name][1]:
@@ -335,8 +353,7 @@ class SupportOperatorRecognizer:
         best_name = max(votes, key=lambda n: votes[n][0])
         cnt, _inliers, avatar, box, match_filename = votes[best_name]
         # 一致率 < 60% → 不稳定，不产出
-        matched_frames = sum(v[0] + 1 for v in votes.values())
-        if matched_frames == 0 or (cnt + 1) / matched_frames < 0.6:
+        if voted_frames == 0 or cnt / voted_frames < 0.6:
             return None
 
         # 保留帧裁剪半身像作为 avatar（与部署栏同源，匹配分数 0.6-0.9）；

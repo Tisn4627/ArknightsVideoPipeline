@@ -316,7 +316,9 @@ class TestForceTerminateWorkers:
         service.force_terminate_workers(timeout_ms=500)
 
         worker.terminate.assert_called_once()
-        worker.wait.assert_called_once_with(500)
+        # 统一 deadline 分摊：wait 预算不超过 timeout_ms 且为正
+        (wait_ms,), _ = worker.wait.call_args
+        assert 1 <= wait_ms <= 500
         assert 0 not in service._workers
 
     def test_force_terminate_non_running_worker_not_terminated(self, qapp) -> None:
@@ -333,7 +335,11 @@ class TestForceTerminateWorkers:
         assert 0 not in service._workers
 
     def test_force_terminate_multiple_workers(self, qapp) -> None:
-        """多个 worker 均被 terminate + wait 并清除"""
+        """多个 worker 均被 terminate + wait 并清除
+
+        统一 deadline 分摊等待预算：首个 worker 获得完整 timeout，
+        后续 worker 获得剩余预算（≤ timeout），总阻塞不超过 timeout。
+        """
         service = PipelineService(_make_config_proxy())
         w0 = mock.MagicMock()
         w0.isRunning.return_value = True
@@ -344,9 +350,12 @@ class TestForceTerminateWorkers:
         service.force_terminate_workers(timeout_ms=1000)
 
         w0.terminate.assert_called_once()
-        w0.wait.assert_called_once_with(1000)
         w1.terminate.assert_called_once()
-        w1.wait.assert_called_once_with(1000)
+        # 统一 deadline：deadline 计算与 wait 调用间存在时间流逝，
+        # 预算为 (1, timeout] 区间内的值，不做精确相等断言
+        for w in (w0, w1):
+            (wait_ms,), _ = w.wait.call_args
+            assert 1 <= wait_ms <= 1000
         assert len(service._workers) == 0
 
     def test_force_terminate_emits_warning_log(self, qapp) -> None:

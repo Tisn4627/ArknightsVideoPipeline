@@ -127,6 +127,8 @@ class ToolsPage(QWidget):
         self._config_proxy = config_proxy
         self._tr_labels: list[tuple] = []
         self._dialogs: list[ToolDialog] = []
+        # tool_id → 已打开的对话框（同一工具去重，重复打开时置前）
+        self._dialog_by_tool: dict[str, ToolDialog] = {}
 
         self.setObjectName("toolsPage")
         # 页面背景跟随全局 QSS；此处仅置透明避免覆盖 app 级背景
@@ -223,9 +225,22 @@ class ToolsPage(QWidget):
         if not (0 <= index < len(TOOL_REGISTRY)):
             return
         tool_id, title_key, view_cls = TOOL_REGISTRY[index]
+
+        # 去重：同一工具已打开时置前激活，而非新开窗口——多个同工具
+        # 对话框会并发运行各自 worker 并各自 save_all() 写同一份配置
+        existing = self._dialog_by_tool.get(tool_id)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        # parent 指向主窗口：无 parent 的 QDialog 是独立顶级窗口，
+        # QApplication 的 quitOnLastWindowClosed 语义下主窗关闭后
+        # 应用仍会驻留，直到该对话框被关闭
         dlg = ToolDialog(
             tool_id, title_key, view_cls,
             config_proxy=self._config_proxy, colors=self._colors,
+            parent=self.window(),
         )
         # 工具写盘信号统一转发给页面外部（MainWindow 同步设置页）
         if hasattr(dlg.view(), "config_applied"):
@@ -233,8 +248,24 @@ class ToolsPage(QWidget):
         dlg.finished.connect(
             lambda _r, d=dlg: self._dialogs.remove(d) if d in self._dialogs else None
         )
+        # 正常关闭（finished）与 WA_DeleteOnClose 析构两条路径都清理映射
+        dlg.destroyed.connect(
+            lambda _obj=None, tid=tool_id: self._dialog_by_tool.pop(tid, None)
+        )
         self._dialogs.append(dlg)
+        self._dialog_by_tool[tool_id] = dlg
         dlg.show()
+
+    def shutdown_dialogs(self) -> None:
+        """请求所有已打开的工具对话框关闭
+
+        MainWindow 关闭前调用：对话框的 closeEvent 会触发其视图的
+        request_shutdown（取消 + 限时等待 + terminate 兜底），确保工具
+        内的后台 worker（如 RecognitionWorker）先于控件树析构退出，
+        避免 "QThread destroyed while running" 直接 abort 进程。
+        """
+        for dlg in list(self._dialogs):
+            dlg.close()
 
     def eventFilter(self, obj, event) -> bool:
         # 点击卡片任意区域打开工具预览窗口（按钮自身处理点击，不会重复触发）

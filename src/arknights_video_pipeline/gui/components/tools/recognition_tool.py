@@ -19,8 +19,9 @@ gui.components.tools.recognition_tool - Recognition 独立识别工具
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -51,6 +52,9 @@ from arknights_video_pipeline.gui.theme import MaterialColors
 from arknights_video_pipeline.service.recognition_worker import RecognitionWorker
 
 
+logger = logging.getLogger(__name__)
+
+
 class RecognitionTool(ToolView):
     """Recognition 独立识别工具
 
@@ -72,6 +76,9 @@ class RecognitionTool(ToolView):
         self._rows: dict[str, FieldRow] = {}
         self._worker: RecognitionWorker | None = None
         self._cancelled: bool = False
+        # 参数非法值记录表：key → 异常信息。非法参数不再静默丢弃，
+        # _on_start 启动前据此拦截并给出行内提示（不弹窗）
+        self._param_errors: dict[str, str] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -226,10 +233,13 @@ class RecognitionTool(ToolView):
         self._log_card.add_widget(self._log_viewer)
         root.addWidget(self._log_card)
 
-    # ── 公开接口（供 ToolsPage 拖放回调） ────────────────
+    # ── 公开接口（供测试与批量导入使用） ──────────────────
 
     def add_video_paths(self, paths: list[str]) -> None:
-        """向视频列表追加路径（去重、扩展名过滤由 BatchVideoList 处理）"""
+        """向视频列表追加路径（去重、扩展名过滤由 BatchVideoList 处理）。
+
+        供测试与批量导入使用；ToolsPage 拖放回调同样经由本方法写入。
+        """
         self._video_list.add_paths(paths)
 
     # ── 视频列表操作 ──────────────────────────────────────
@@ -244,18 +254,44 @@ class RecognitionTool(ToolView):
 
         实际写盘在点击"开始识别"时由 _config.save_all() 完成，
         与 MainWindow._on_run 的行为一致。
+
+        非法参数值不再静默丢弃：逐项记录到 ``_param_errors`` 并输出
+        warning 日志（不弹窗），``_on_start`` 启动前据此拦截。
         """
+        self._param_errors.clear()
+        self._sync_param(
+            "backend",
+            lambda: self._config_proxy.set_copilot_backend(
+                self._backend_row.get_value()),
+        )
+        self._sync_param(
+            "ocr_source",
+            lambda: self._config_proxy.set_ocr_source(
+                self._ocr_row.get_value()),
+        )
+        self._sync_param(
+            "resolution",
+            lambda: self._config_proxy.set_resolution(
+                self._resolution_row.get_value()),
+        )
+        self._sync_param(
+            "stage_override",
+            lambda: self._config_proxy.set_stage_override(
+                self._stage_row.get_value()),
+        )
+        self._sync_param(
+            "with_video_time",
+            lambda: self._config_proxy.set_with_video_time(
+                bool(self._video_time_row.get_value())),
+        )
+
+    def _sync_param(self, key: str, apply: Callable[[], None]) -> None:
+        """同步单个参数；非法值记录到 ``_param_errors`` 并输出 warning"""
         try:
-            self._config_proxy.set_copilot_backend(self._backend_row.get_value())
-            self._config_proxy.set_ocr_source(self._ocr_row.get_value())
-            self._config_proxy.set_resolution(self._resolution_row.get_value())
-            self._config_proxy.set_stage_override(self._stage_row.get_value())
-            self._config_proxy.set_with_video_time(
-                bool(self._video_time_row.get_value())
-            )
-        except ValueError:
-            # 非法值（如分辨率格式错误）由启动校验捕获，此处静默
-            pass
+            apply()
+        except ValueError as exc:
+            self._param_errors[key] = str(exc)
+            logger.warning("识别参数 %s 非法: %s", key, exc)
 
     # ── 启动 / 取消 / 完成 ────────────────────────────────
 
@@ -283,6 +319,14 @@ class RecognitionTool(ToolView):
             self._config_proxy.set_output_dir(out_dir)
         # 同步全部参数到配置并落盘
         self._on_param_changed()
+        # 参数校验：存在非法参数时行内日志提示并中止（不弹窗）
+        if self._param_errors:
+            self._log_viewer.append(
+                "ERROR",
+                tr("tools.recognition.invalid_params",
+                   fields="、".join(self._param_errors)),
+            )
+            return
         try:
             self._config_proxy.save_all()
         except Exception as exc:
@@ -352,11 +396,13 @@ class RecognitionTool(ToolView):
         self._video_list.set_file_progress(self._current_index, percent, message)
 
     def _on_step_started(self, step_key: str, step_desc: str) -> None:
+        # 日志文本为面向开发者的运行记录，保持英文不翻译（非 UI 标签）
         self._log_viewer.append("INFO", f"[{step_key}] {step_desc}")
 
     def _on_step_finished(
         self, step_key: str, success: bool, elapsed: float, warnings: list[str]
     ) -> None:
+        # 日志文本（OK/FAIL 状态与耗时）为运行记录，保持英文不翻译
         status = "OK" if success else "FAIL"
         self._log_viewer.append(
             "INFO" if success else "ERROR",
@@ -408,7 +454,9 @@ class RecognitionTool(ToolView):
         """批次结束：更新 UI 与进度"""
         total = self._total_count
         success = self._success_count
-        self._progress_card.set_progress(100, f"Completed {success}/{total}")
+        self._progress_card.set_progress(
+            100, tr("tools.recognition.completed", success=success, total=total)
+        )
         self._set_running_ui(False)
 
         if success == total and not self._cancelled:

@@ -12,6 +12,27 @@ import sys
 from logging.handlers import RotatingFileHandler
 from typing import TextIO
 
+_FILE_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+
+
+def _create_file_handler(
+    log_dir: str, max_bytes: int, backup_count: int
+) -> RotatingFileHandler:
+    """创建写入 log_dir/pipeline.log 的轮转文件 handler（两分支共用）"""
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "pipeline.log")
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter(_FILE_LOG_FORMAT, datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    return file_handler
+
 
 def setup_logger(
     name: str = "pipeline",
@@ -62,22 +83,9 @@ def setup_logger(
             elif isinstance(handler, logging.StreamHandler):
                 handler.setLevel(log_level)
         if log_to_file and log_dir and not file_handler_ok:
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, "pipeline.log")
-            file_handler = RotatingFileHandler(
-                log_path,
-                maxBytes=max_bytes,
-                backupCount=backup_count,
-                encoding="utf-8",
+            logger.addHandler(
+                _create_file_handler(log_dir, max_bytes, backup_count)
             )
-            file_handler.setLevel(logging.DEBUG)
-            file_handler.setFormatter(
-                logging.Formatter(
-                    "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S",
-                )
-            )
-            logger.addHandler(file_handler)
         return logger
 
     # ── 控制台 handler ──────────────────────────────────
@@ -91,22 +99,7 @@ def setup_logger(
 
     # ── 文件 handler（带轮转） ──────────────────────────
     if log_to_file and log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "pipeline.log")
-        file_handler = RotatingFileHandler(
-            log_path,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        logger.addHandler(file_handler)
+        logger.addHandler(_create_file_handler(log_dir, max_bytes, backup_count))
 
     return logger
 

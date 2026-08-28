@@ -30,7 +30,8 @@ def _extract_char_id(filename: str) -> str:
         return stem
     if tokens[0] == "char" and len(tokens) >= 3:
         return "_".join(tokens[:3])
-    if tokens[0] == "sp" and tokens[1] == "char" and len(tokens) >= 4:
+    # 先检查长度再取下标，避免短文件名时 IndexError
+    if len(tokens) >= 4 and tokens[0] == "sp" and tokens[1] == "char":
         return "_".join(tokens[:4])
     return stem
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from arknights_video_pipeline.core.step_defs import STEPS_BY_METHOD
+from arknights_video_pipeline.core.step_defs import STEPS, StepDef
 from arknights_video_pipeline.core.types import PipelineReport, StepStatus
 from arknights_video_pipeline.core.utils import format_duration
 
@@ -19,6 +19,13 @@ _OUTPUT_LABEL_MAP: dict[str, str] = {
     "actions_text": "操作文本",
     "track_result": "跟踪结果",
     "output_video": "输出视频",
+}
+
+# 步骤定义查找表：报告中的 step.name 可能是方法名（如 step_video_to_copilot）
+# 也可能是 step key（如 copilot），两种形式都支持查找
+_STEP_LOOKUP: dict[str, StepDef] = {
+    **{s.method: s for s in STEPS},
+    **{s.key: s for s in STEPS},
 }
 
 
@@ -40,6 +47,7 @@ class ReportModel:
             StepStatus.FAILED: "失败",
             StepStatus.PENDING: "准备中",
             StepStatus.RUNNING: "运行中",
+            StepStatus.SKIPPED: "已跳过",
         }
         return status_map.get(self.report.pipeline_status, str(self.report.pipeline_status.value))
 
@@ -66,8 +74,9 @@ class ReportModel:
             return []
         result: list[dict[str, Any]] = []
         for step in self.report.steps:
-            # 从统一定义中查找标签，找不到则回退到 step.description
-            step_def = STEPS_BY_METHOD.get(step.name)
+            # 从统一定义中查找标签（方法名与 step key 均可命中），
+            # 找不到则回退到 step.description
+            step_def = _STEP_LOOKUP.get(step.name)
             label = step_def.label if step_def else step.description
             result.append({
                 "name": step.name,
