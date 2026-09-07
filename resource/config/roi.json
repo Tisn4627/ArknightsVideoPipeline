@@ -102,7 +102,7 @@
   "CharsNameOcrReplace": {
     "algorithm": "OcrDetect",
     "text": [],
-    "Doc": "该任务的 ocrReplace 被所有涉及干员名的识别任务复用，中文被拆成3字节处理，需要包括号",
+    "Doc": "该任务的 ocrReplace 被所有涉及干员名的识别任务复用",
     "fullMatch": true,
     "ocrReplace": [
       [
@@ -400,6 +400,10 @@
       [
         "^折娅$",
         "折桠"
+      ],
+      [
+        "埃[类奖]斯",
+        "埃癸斯"
       ]
     ]
   },
