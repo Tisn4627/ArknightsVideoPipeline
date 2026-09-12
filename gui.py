@@ -53,13 +53,15 @@ def main() -> int:
         return 1
 
     try:
-        # QApplication 实例由 Qt 单例（QApplication.instance()）持有，
-        # 无需本地引用保活
-        create_application(sys.argv)
+        # 必须用局部变量持有 QApplication 引用：PyQt6 中若无 Python 引用，
+        # create_application 返回后对象立即被析构，后续构造任何 QWidget
+        # 都会触发 "QWidget: Must construct a QApplication before a QWidget"
+        # 的 qFatal 直接 abort（进程退出码 0xC0000409）。
+        app = create_application(sys.argv)
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()
-        return QApplication.exec()
+        return app.exec()
     except ConfigError as exc:
         _show_startup_error("配置错误", f"配置文件加载失败: {exc}\n请检查 config/pipeline.json 是否正确。")
         return 2

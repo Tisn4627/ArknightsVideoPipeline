@@ -92,11 +92,12 @@ def main() -> int:
     from arknights_video_pipeline.service import ConfigProxy
 
     try:
-        create_application(sys.argv)
+        # 持有 QApplication 引用，避免其被 GC 析构后构造 QWidget 触发 qFatal
+        app = create_application(sys.argv)
         config_proxy = ConfigProxy()
         window = MainWindow(config_proxy)
         window.show()
-        exit_code = QApplication.exec()
+        exit_code = app.exec()
     except ConfigError as exc:
         sys.stderr.write(f"[配置错误] {exc}\n")
         exit_code = 2
