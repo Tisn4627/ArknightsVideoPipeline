@@ -11,7 +11,10 @@ gui.components.navigation_rail - Material Design 3 Navigation Rail
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import (
+    Qt, pyqtSignal, pyqtProperty, QPropertyAnimation, QEasingCurve, QRectF,
+)
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
 
 from arknights_video_pipeline.gui.assets.icons.nav_icons import (
@@ -21,10 +24,29 @@ from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 
 
+def _mix(c1: QColor, c2: QColor, t: float) -> QColor:
+    """在 c1(t=0) 与 c2(t=1) 之间做 RGB 线性插值"""
+    return QColor(
+        round(c1.red() + (c2.red() - c1.red()) * t),
+        round(c1.green() + (c2.green() - c1.green()) * t),
+        round(c1.blue() + (c2.blue() - c1.blue()) * t),
+    )
+
+
 class NavigationRailItem(QWidget):
-    """单个导航项"""
+    """单个导航项
+
+    选中底色采用 MD3 Navigation Rail 规范中的 **active indicator**（胶囊形
+    ``secondary_container``），并以自绘 + ``QPropertyAnimation`` 实现平滑淡入
+    淡出过渡：切换时旧项淡出、新项淡入，图标/文字颜色随之在
+    ``on_surface_variant`` 与 ``on_secondary_container`` 间插值。底色覆盖整个
+    可点击区域（item 自身尺寸即命中区域），圆角半径取高度一半形成胶囊。
+    """
 
     clicked = pyqtSignal()
+
+    # MD3 状态过渡时长（state layer 典型 100–200ms）
+    _ANIM_DURATION_MS = 180
 
     def __init__(self, icon: str, label: str, selected: bool = False,
                  colors: MaterialColors | None = None,
@@ -34,13 +56,26 @@ class NavigationRailItem(QWidget):
         self._icon_name = icon  # 资源名（home / settings / info）
         self._selected = selected
         self._compact = False
+        self._hovered = False
         self._colors = colors or MaterialColors.light()
+        # 选中指示器进度：0.0=未选中，1.0=选中；动画驱动该值实现平滑过渡
+        self._progress = 1.0 if selected else 0.0
+        # 前景色缓存：动画期间避免每帧重建图标 pixmap
+        self._foreground_hex: str | None = None
 
+        # 背景改由 paintEvent 自绘（active indicator 胶囊 + hover 状态层），
+        # 需要鼠标进入/离开事件驱动 hover 层
+        self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(56)
         # 固定宽度与 nav rail 内容宽度一致，确保图标准确居中
         # (88px rail - 12*2 边距 = 64px)
         self.setFixedWidth(64)
+
+        # 进度动画：目标为 pyqtProperty "progress"，淡入淡出共用同一实例
+        self._anim = QPropertyAnimation(self, b"progress", self)
+        self._anim.setDuration(self._ANIM_DURATION_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 8)
@@ -72,15 +107,35 @@ class NavigationRailItem(QWidget):
         )
         layout.addWidget(self._label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self._update_style()
+        self._update_foreground()
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
-        self._update_style()
+        self._update_foreground()
+        self.update()
 
-    def set_selected(self, selected: bool) -> None:
+    def set_selected(self, selected: bool, animate: bool = True) -> None:
+        """切换选中态
+
+        animate=True 时通过 QPropertyAnimation 平滑过渡（淡入/淡出）；
+        初始化等场景传 False 直接跳到目标状态，避免启动时闪烁。
+        """
         self._selected = selected
-        self._update_style()
+        target = 1.0 if selected else 0.0
+        if target == self._progress:
+            # 目标进度已达成（如初始未选中项被取消选中）：无需动画
+            self._anim.stop()
+            return
+        if not animate:
+            # 快速路径：初始化等场景直接落值，避免启动闪烁
+            self._anim.stop()
+            self._set_progress(target)
+        else:
+            # 从当前进度重新起步：连续快速点击时交叉过渡不跳变
+            self._anim.stop()
+            self._anim.setStartValue(self._progress)
+            self._anim.setEndValue(target)
+            self._anim.start()
 
     def set_compact(self, compact: bool) -> None:
         self._compact = compact
@@ -93,6 +148,8 @@ class NavigationRailItem(QWidget):
         else:
             self.setFixedHeight(56)
             self.setFixedWidth(64)
+        # 尺寸变化影响胶囊圆角半径，需重绘
+        self.update()
 
     def set_label(self, text: str) -> None:
         """更新导航项标签文本（语言切换时调用）"""
@@ -105,33 +162,85 @@ class NavigationRailItem(QWidget):
             self.clicked.emit()
         super().mousePressEvent(event)
 
-    def _update_style(self) -> None:
-        c = self._colors
-        if self._selected:
-            self.setStyleSheet(
-                f"NavigationRailItem {{ background-color: {c.primary_container}; "
-                f"border-radius: 28px; }}"
-            )
-            icon_color = c.on_primary_container
-            text_color = c.on_primary_container
-        else:
-            self.setStyleSheet(
-                f"NavigationRailItem {{ background-color: transparent; border-radius: 28px; }}"
-                f"NavigationRailItem:hover {{ background-color: {c.surface_variant}; }}"
-            )
-            icon_color = c.on_surface_variant
-            text_color = c.on_surface_variant
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
 
-        # 刷新 MD3 着色图标
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    # ── 选中指示器动画属性 ────────────────────────────────
+
+    def _get_progress(self) -> float:
+        return self._progress
+
+    def _set_progress(self, value: float) -> None:
+        if value == self._progress:
+            return
+        self._progress = value
+        self._update_foreground()
+        self.update()
+
+    progress = pyqtProperty(float, fget=_get_progress, fset=_set_progress)
+
+    def _update_foreground(self) -> None:
+        """按当前进度在 on_surface_variant 与 on_secondary_container
+        之间插值，刷新图标与文字颜色
+
+        动画期间本方法以 ~60fps 被驱动，而图标 pixmap 需要 SVG 栅格化 +
+        染色，开销较大；因此仅在插值结果（8bit 量化后）真正变化时才重建
+        pixmap 与样式表，背景胶囊的连续淡入淡出仍逐帧重绘。
+        """
+        c = self._colors
+        color = _mix(QColor(c.on_surface_variant),
+                     QColor(c.on_secondary_container),
+                     self._progress)
+        hex_color = color.name()
+        if hex_color == self._foreground_hex:
+            return
+        self._foreground_hex = hex_color
         if has_icon(self._icon_name):
-            pix = make_icon_pixmap(self._icon_name, icon_color, size_px=24)
+            pix = make_icon_pixmap(self._icon_name, hex_color, size_px=24)
             if pix is not None:
                 self._icon_label.setPixmap(pix)
-        # 文字样式
         self._label.setStyleSheet(
-            f"font-size: 12px; font-weight: 500; color: {text_color}; "
+            f"font-size: 12px; font-weight: 500; color: {hex_color}; "
             "border: none; background: transparent;"
         )
+
+    def paintEvent(self, event) -> None:
+        """自绘选中底色（MD3 active indicator 胶囊）与 hover 状态层
+
+        底色铺满整个可点击区域（item 自身 rect），圆角半径取高度一半
+        形成胶囊；选中淡入淡出由 progress 动画驱动 alpha 实现。
+        """
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = rect.height() / 2.0
+        c = self._colors
+
+        # hover 状态层：未选中时悬停显示 surface_variant，
+        # 随选中进度淡出，与 active indicator 交叉过渡
+        if self._hovered and self._progress < 1.0:
+            hover = QColor(c.surface_variant)
+            hover.setAlphaF(1.0 - self._progress)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(hover)
+            p.drawRoundedRect(rect, radius, radius)
+
+        # active indicator：secondary_container，alpha 随进度淡入
+        if self._progress > 0.0:
+            indicator = QColor(c.secondary_container)
+            indicator.setAlphaF(self._progress)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(indicator)
+            p.drawRoundedRect(rect, radius, radius)
+        p.end()
 
 
 class NavigationRail(QFrame):
@@ -176,7 +285,8 @@ class NavigationRail(QFrame):
 
         layout.addStretch()
 
-        self.set_selected(0)
+        # 初始选中直接落值，不播放淡入动画（避免启动闪烁）
+        self.set_selected(0, animate=False)
         # 语言切换时刷新所有 item 标签
         i18n().language_changed.connect(self._retranslate)
 
@@ -190,14 +300,15 @@ class NavigationRail(QFrame):
         for item in self._items:
             item.set_colors(colors)
 
-    def set_selected(self, index: int) -> None:
+    def set_selected(self, index: int, animate: bool = True) -> None:
         if index == self._current_index:
             # 同值早退：避免重复刷新样式并重复发射 selection_changed
             return
         if 0 <= index < len(self._items):
-            self._items[self._current_index].set_selected(False)
+            if self._current_index >= 0:
+                self._items[self._current_index].set_selected(False, animate)
             self._current_index = index
-            self._items[self._current_index].set_selected(True)
+            self._items[self._current_index].set_selected(True, animate)
             self.selection_changed.emit(index)
 
     def set_compact(self, compact: bool) -> None:
