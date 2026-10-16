@@ -45,10 +45,12 @@ jobs:
       AVR_RESOURCE_DIR: ${{ github.workspace }}/resource
     steps:
       - name: Checkout 本仓库
-        uses: actions/checkout@v4
+        # v5+ 使用 Node 24 运行时（v4 已随 Node 20 弃用告警）
+        uses: actions/checkout@v5
 
       - name: 安装 Python
-        uses: actions/setup-python@v5
+        # v6+ 使用 Node 24 运行时（v5 已随 Node 20 弃用告警）
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

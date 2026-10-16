@@ -14,8 +14,14 @@
   6. 干员头像 char_*/sp_char_* ArknightsResources/avatar -> resource/avatar/
   7. 助战空模板             --support-template(1080p)   -> resource/template/empty_support_operator.png
   8. CharsNameOcrReplace   Maa/resource/tasks/          -> resource/data/ocr_config.json
-     规则                   tasks.json                   (ocrReplace / replace_full)
+     规则                   tasks.json + hotfix/         (ocrReplace / replace_full)
      (ocrReplace / fullMatch)
+
+上游 Maa（dev-v2）把部分任务的数据体（ocrReplace / roi 等）拆到
+``resource/tasks/hotfix/*.json``，tasks.json 中只保留 ``baseTask`` 转发引用
+（如 ``"CharsNameOcrReplace": {"baseTask": "CharsNameOcrReplaceHotfix"}``）。
+本脚本读取时会自动把 hotfix 数据体内联回任务定义（见 :func:`_read_maa_tasks`），
+使 roi.json / ocr_config.json 的提取结果与拆分前保持一致。
 
 注意：resource/config/roi.json 是项目自有产物（从 tasks.json 提取的视频识别相关任务），
 本脚本的常规同步不会覆盖它。如需重新生成，请使用 --regen-roi 标志。
@@ -125,18 +131,75 @@ def _same_file(a: Path, b: Path) -> bool:
     return sa.st_size == sb.st_size and int(sa.st_mtime) == int(sb.st_mtime)
 
 
-def regen_roi(tasks_json_path, roi_json_path, dry_run):
-    """从 tasks.json 重新提取视频识别相关任务，写入 roi.json。"""
+def _load_hotfix_tasks(tasks_dir):
+    """加载 Maa ``tasks/hotfix/`` 下所有数据体定义。
+
+    上游把部分任务的数据体（如 ``CharsNameOcrReplaceHotfix``）拆到该目录，
+    每个 JSON 文件是「任务名 -> 定义」的映射。返回合并后的扁平映射；目录
+    缺失或文件损坏时返回已解析的部分（不抛异常）。
+    """
+    hotfix_dir = Path(tasks_dir) / "hotfix"
+    hotfix = {}
+    if not hotfix_dir.is_dir():
+        return hotfix
+    for path in sorted(hotfix_dir.glob("*.json")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            for name, task in data.items():
+                if isinstance(task, dict):
+                    hotfix[name] = task
+    return hotfix
+
+
+def _inline_hotfix_tasks(tasks, hotfix):
+    """把仅以 ``baseTask`` 转发到 hotfix 数据体的任务就地展开。
+
+    展开后任务自带完整字段（任务自身字段优先于数据体），并去掉已无意义的
+    ``baseTask`` 转发引用，形状与拆分前的 tasks.json 等价。
+    """
+    if not hotfix or not isinstance(tasks, dict):
+        return
+    for task in tasks.values():
+        if not isinstance(task, dict):
+            continue
+        body = hotfix.get(task.get("baseTask"))
+        if not isinstance(body, dict):
+            continue
+        merged = dict(body)
+        merged.update(task)  # 任务自身字段（如 Doc）覆盖数据体
+        merged.pop("baseTask", None)
+        task.clear()
+        task.update(merged)
+
+
+def _read_maa_tasks(tasks_json_path):
+    """读取 tasks.json 并把 ``tasks/hotfix/*.json`` 数据体内联到任务定义。
+
+    返回 ``(tasks, None)``；文件缺失或解析失败时返回 ``(None, 原因)``。
+    """
     tasks_json_path = Path(tasks_json_path)
-    roi_json_path = Path(roi_json_path)
     if not tasks_json_path.is_file():
-        print(f"✗ 无法重新生成 roi.json：未找到 {tasks_json_path}")
-        return False
+        return None, f"未找到 {tasks_json_path}"
     try:
         with open(tasks_json_path, encoding="utf-8") as f:
             tasks = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"✗ tasks.json 解析失败: {tasks_json_path}: {exc}")
+        return None, f"tasks.json 解析失败: {tasks_json_path}: {exc}"
+    _inline_hotfix_tasks(tasks, _load_hotfix_tasks(tasks_json_path.parent))
+    return tasks, None
+
+
+def regen_roi(tasks_json_path, roi_json_path, dry_run):
+    """从 tasks.json 重新提取视频识别相关任务，写入 roi.json。"""
+    tasks_json_path = Path(tasks_json_path)
+    roi_json_path = Path(roi_json_path)
+    tasks, err = _read_maa_tasks(tasks_json_path)
+    if tasks is None:
+        print(f"✗ 无法重新生成 roi.json：{err}")
         return False
     roi = {}
     missing = []
@@ -163,18 +226,17 @@ def sync_ocr_replace(tasks_json_path, ocr_config_path, dry_run):
     更新到 ocr_config.json 的 ocrReplace / replace_full 字段，保留其它字段
     （如 equivalence_classes）。
 
+    上游把 CharsNameOcrReplace 的数据体拆到 ``tasks/hotfix/*.json``，
+    tasks.json 中只留 baseTask 引用；``_read_maa_tasks`` 会自动内联，
+    因此这里读到的仍是完整的 ocrReplace / fullMatch。
+
     返回 True 表示已处理（含 dry-run），False 表示源缺失已跳过。
     """
     tasks_json_path = Path(tasks_json_path)
     ocr_config_path = Path(ocr_config_path)
-    if not tasks_json_path.is_file():
-        print(f"✗ 未找到 {tasks_json_path}，跳过 CharsNameOcrReplace 同步")
-        return False
-    try:
-        with open(tasks_json_path, encoding="utf-8") as f:
-            tasks = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"✗ tasks.json 解析失败: {tasks_json_path}: {exc}")
+    tasks, err = _read_maa_tasks(tasks_json_path)
+    if tasks is None:
+        print(f"✗ {err}，跳过 CharsNameOcrReplace 同步")
         return False
     task = tasks.get("CharsNameOcrReplace")
     if not task or "ocrReplace" not in task:
