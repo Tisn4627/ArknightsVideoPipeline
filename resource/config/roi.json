@@ -100,9 +100,9 @@
     ]
   },
   "CharsNameOcrReplace": {
+    "Doc": "该任务的 ocrReplace 被所有涉及干员名的识别任务复用；数据体在 tasks/hotfix/ocr_replace.json（CharsNameOcrReplaceHotfix），随资源更新分发",
     "algorithm": "OcrDetect",
     "text": [],
-    "Doc": "该任务的 ocrReplace 被所有涉及干员名的识别任务复用",
     "fullMatch": true,
     "ocrReplace": [
       [
@@ -473,6 +473,7 @@
     ]
   },
   "NumberOcrReplace": {
+    "Doc": "数字识别纠错，被所有涉及数字的识别任务复用；数据体在 tasks/hotfix/ocr_replace.json（NumberOcrReplaceHotfix），随资源更新分发",
     "algorithm": "OcrDetect",
     "isAscii": true,
     "text": [],
@@ -575,6 +576,7 @@
     ]
   },
   "BattleStageName": {
+    "Doc": "结算界面关卡名识别；ocrReplace 与 roi 数据体在 tasks/hotfix/ocr_replace.json（BattleStageNameHotfix），随资源更新分发",
     "algorithm": "OcrDetect",
     "text": [],
     "roi": [
