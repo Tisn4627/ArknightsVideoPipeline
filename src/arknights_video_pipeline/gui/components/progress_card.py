@@ -1,66 +1,112 @@
-"""
-gui.components.progress_card - 进度/结果卡片
+"""gui.components.progress_card - 进度/结果内容块
 
-显示总进度百分比与当前状态消息。
+显示状态消息 + MD3 线性进度 + 百分比文字（文字在条外）。
+
+结构说明：本组件**不是**卡片，而是"处理状态"卡片里的内容块——
+历史实现让 ``ProgressCard`` 继承 ``MaterialCard``，结果卡片里套卡片，
+出现"同色叠同色 + 双重圆角"的层级错误。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtWidgets import QLabel, QProgressBar, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from arknights_video_pipeline.gui.components.material_card import MaterialCard
+from arknights_video_pipeline.gui.components.material_progress import MaterialProgress
 from arknights_video_pipeline.gui.i18n import i18n, tr
+from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.spacing import Space
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
+from arknights_video_pipeline.gui.theme.typography import MaterialTypography
+
+__all__ = ["ProgressCard"]
 
 
-class ProgressCard(MaterialCard):
-    """进度卡片"""
+class ProgressCard(QWidget):
+    """进度内容块（消息 + 线性进度 + 百分比）"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(tr("progress.title"), parent)
-
-        # _message 可能显示静态可翻译文本（就绪/完成态）或 service 下发的
-        # 动态进度消息（不翻译）。用 _message_key 标记当前是否为静态文本：
-        # 非 None 时 _retranslate 可安全重译；为 None 时保留动态消息不动。
+    def __init__(self, parent: QWidget | None = None,
+                 colors: MaterialColors | None = None) -> None:
+        super().__init__(parent)
+        self._colors = colors or theme_controller().colors()
+        self._typography = MaterialTypography()
+        # _message_key 非 None 表示当前为静态可翻译文本（语言切换可重译）；
+        # 为 None 时是 service 下发的动态消息，语言切换不覆盖
         self._message_key: str | None = "progress.ready"
         self._message_kwargs: dict[str, Any] = {}
+
+        self.setStyleSheet("background: transparent; border: none;")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(Space.M)
+
         self._message = QLabel(tr("progress.ready"))
         self._message.setWordWrap(True)
-        self.add_widget(self._message)
+        self._message.setStyleSheet(
+            f"color: {self._colors.on_surface_variant};"
+            " background: transparent; border: none;"
+        )
+        root.addWidget(self._message)
 
-        self._progress = QProgressBar()
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        self._progress.setTextVisible(True)
-        self.add_widget(self._progress)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(Space.M)
+        self._progress = MaterialProgress(colors=self._colors)
+        row.addWidget(self._progress, 1)
+
+        self._percent_label = QLabel("0%")
+        self._percent_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._percent_label.setFont(self._typography.font("label_large"))
+        self._percent_label.setStyleSheet(
+            f"color: {self._colors.on_surface}; background: transparent; border: none;"
+        )
+        self._percent_label.setMinimumWidth(44)
+        row.addWidget(self._percent_label)
+        root.addLayout(row)
 
         i18n().language_changed.connect(self._retranslate)
+        theme_controller().theme_changed.connect(self.set_colors)
+
+    # ── 主题 ─────────────────────────────────────────────
+
+    def set_colors(self, colors: MaterialColors) -> None:
+        self._colors = colors
+        self._message.setStyleSheet(
+            f"color: {colors.on_surface_variant}; background: transparent; border: none;"
+        )
+        self._percent_label.setStyleSheet(
+            f"color: {colors.on_surface}; background: transparent; border: none;"
+        )
+        self._progress.set_colors(colors)
+
+    # ── 文本 ─────────────────────────────────────────────
 
     def _retranslate(self) -> None:
-        """语言切换时刷新卡片标题；若当前为静态消息则一并刷新"""
-        self.set_title(tr("progress.title"))
         if self._message_key is not None:
             self._message.setText(tr(self._message_key, **self._message_kwargs))
 
     def _set_static_message(self, key: str, **kwargs: Any) -> None:
-        """设置静态可翻译消息（语言切换时会自动重译）"""
+        """设置静态可翻译消息（语言切换时自动重译）"""
         self._message_key = key
         self._message_kwargs = kwargs
         self._message.setText(tr(key, **kwargs))
 
+    # ── 进度 ─────────────────────────────────────────────
+
     def set_progress(self, percent: int, message: str) -> None:
-        """更新进度条数值与状态文本
+        """更新进度与状态文本
 
         方法名刻意避免使用 ``update``：该名称会覆盖 ``QWidget.update()``
-        （无参重绘接口），导致 ``MaterialCard.set_surface_color`` 在
-        ProgressCard 实例上调用 ``self.update()`` 时被错误分发到本方法，
-        抛 ``TypeError``。所有调用方都应使用 ``set_progress``。
-
-        批量模式下由服务层 ``overall_progress`` 信号驱动，message 形如
-        "Processing X/N" 或 "Completed S/N"（动态、不翻译）。
+        （无参重绘接口），导致父类在刷新时被错误分发到本方法。
         """
-        self._progress.setValue(max(0, min(100, percent)))
+        value = max(0, min(100, percent))
+        self._progress.setValue(value)
+        self._percent_label.setText(f"{value}%")
         # service 下发的动态消息：标记为非静态，语言切换时不覆盖
         self._message_key = None
         self._message_kwargs = {}
@@ -68,12 +114,14 @@ class ProgressCard(MaterialCard):
 
     def reset(self) -> None:
         self._progress.setValue(0)
+        self._percent_label.setText("0%")
         self._set_static_message("progress.reset_ready")
 
     def set_batch_finished(self, success_count: int, total: int,
                            cancelled: bool) -> None:
         """批量处理结束态：进度填满，显示成功/总数（或取消）"""
         self._progress.setValue(100)
+        self._percent_label.setText("100%")
         if cancelled:
             self._set_static_message(
                 "progress.cancelled", success=success_count, total=total

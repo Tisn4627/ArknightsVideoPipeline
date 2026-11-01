@@ -87,7 +87,6 @@ class RecognitionTool(ToolView):
 
         # ── 视频选择卡片（与主页"视频文件"相同的批量列表样式） ──
         self._video_card = MaterialCard(tr("tools.recognition.video_input"))
-        self._video_card.set_surface_color(c.surface)
         v_layout = self._video_card.layout()
 
         # 识别工具自身生成 copilot JSON，无需每行的 JSON 绑定按钮
@@ -98,7 +97,6 @@ class RecognitionTool(ToolView):
 
         # ── 识别参数卡片 ──────────────────────────────────
         self._param_card = MaterialCard(tr("tools.recognition.params"))
-        self._param_card.set_surface_color(c.surface)
         p_layout = self._param_card.layout()
         p_layout.setSpacing(8)
 
@@ -172,7 +170,6 @@ class RecognitionTool(ToolView):
 
         # ── 输出目录卡片 ──────────────────────────────────
         self._output_card = MaterialCard(tr("tools.recognition.output_dir"))
-        self._output_card.set_surface_color(c.surface)
         o_layout = self._output_card.layout()
 
         self._output_selector = FileSelector(
@@ -220,14 +217,12 @@ class RecognitionTool(ToolView):
         op_row.addStretch()
         root.addLayout(op_row)
 
-        # ── 进度卡片 ──────────────────────────────────────
+        # ── 进度块（内容块，不再是卡片，避免卡片套卡片） ──
         self._progress_card = ProgressCard()
-        self._progress_card.set_surface_color(c.surface)
         root.addWidget(self._progress_card)
 
         # ── 日志卡片 ──────────────────────────────────────
         self._log_card = MaterialCard(tr("tools.recognition.logs"))
-        self._log_card.set_surface_color(c.surface)
         self._log_viewer = LogViewer(colors=c)
         self._log_viewer.setMinimumHeight(180)
         self._log_card.add_widget(self._log_viewer)
@@ -534,11 +529,7 @@ class RecognitionTool(ToolView):
     def set_colors(self, colors: MaterialColors) -> None:
         super().set_colors(colors)
         c = colors
-        self._video_card.set_surface_color(c.surface)
-        self._param_card.set_surface_color(c.surface)
-        self._output_card.set_surface_color(c.surface)
-        self._log_card.set_surface_color(c.surface)
-        self._progress_card.set_surface_color(c.surface)
+        # 卡片与输入控件都已订阅主题信号，这里只需刷新由本视图持有的行
         self._video_list.set_colors(c)
         self._output_selector.set_colors(c)
         self._log_viewer.set_colors(c)

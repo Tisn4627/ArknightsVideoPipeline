@@ -43,6 +43,11 @@ _ICON_FILES: dict[str, str] = {
     # 自定义作业 JSON 图标（Material Symbols Rounded @ 24dp）
     "note_add": "svg/note_add.svg",
     "description": "svg/description.svg",
+    # MD3 复合组件图标（FAB / 对话框 / 折叠 / 浏览）
+    "warning": "svg/warning.svg",
+    "add": "svg/add.svg",
+    "expand_more": "svg/expand_more.svg",
+    "folder_open": "svg/folder_open.svg",
 }
 
 

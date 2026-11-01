@@ -64,13 +64,14 @@ class TestToolRegistry:
     """验证 recognition 工具已注册到 TOOL_REGISTRY"""
 
     def test_recognition_in_registry(self) -> None:
-        ids = [t[0] for t in TOOL_REGISTRY]
+        ids = [spec.tool_id for spec in TOOL_REGISTRY]
         assert "recognition" in ids
 
     def test_recognition_entry_has_view_class(self) -> None:
-        for tool_id, _title_key, view_cls in TOOL_REGISTRY:
-            if tool_id == "recognition":
-                assert view_cls is RecognitionTool
+        for spec in TOOL_REGISTRY:
+            if spec.tool_id == "recognition":
+                # 视图类为延迟导入：load_view() 才真正 import 重资源模块
+                assert spec.load_view() is RecognitionTool
                 return
         pytest.fail("recognition 未在 TOOL_REGISTRY 中找到")
 

@@ -71,8 +71,12 @@ def _sample(qapp, rail: NavigationRail, item: NavigationRailItem,
     return img.pixelColor(pos.x(), pos.y())
 
 
-def _settle(qapp, *items: NavigationRailItem, timeout_ms: int = 2000) -> None:
-    """等待所有传入 item 的选中动画播放完毕"""
+def _settle(qapp, *items: NavigationRailItem, timeout_ms: int = 500) -> None:
+    """等待选中动画播放完毕
+
+    先按真实时钟轮询；若仍处于 Running（离屏环境下动画计时器可能不推进），
+    直接把动画推到结尾——否则用例结果会依赖机器时序与用例执行顺序。
+    """
     import time
 
     deadline = time.time() + timeout_ms / 1000.0
@@ -81,6 +85,9 @@ def _settle(qapp, *items: NavigationRailItem, timeout_ms: int = 2000) -> None:
         if all(i._anim.state().name != "Running" for i in items):
             break
         time.sleep(0.005)
+    for item in items:
+        if item._anim.state().name == "Running":
+            item._anim.setCurrentTime(item._anim.duration())
     qapp.processEvents()
 
 
@@ -88,41 +95,45 @@ def _settle(qapp, *items: NavigationRailItem, timeout_ms: int = 2000) -> None:
 
 
 class TestSelectedIndicatorColor:
+    """MD3 指示器是 56×32 的胶囊，只包住图标（不含下方标签）"""
+
+    _INDICATOR_MID_Y = 16  # 32dp 指示器的垂直中心
+
     def test_selected_item_paints_secondary_container_pill(self, qapp) -> None:
-        """选中项中心像素应为 secondary_container（MD3 active indicator）"""
+        """选中项指示器区域应为 secondary_container"""
         rail = _make_rail(qapp)
         item = rail._items[0]
         img = item.grab().toImage()
-        # 中心像素落在胶囊内（图标区域透明，露出底色）
-        center = img.pixelColor(img.width() // 2, img.height() - 6)
-        assert center.name().upper() == MaterialColors.light().secondary_container.upper()
+        # 采样点在图标左侧的指示器底色区（x=4 避开 24dp 图标）
+        px = img.pixelColor(4, self._INDICATOR_MID_Y)
+        assert px.name().upper() == MaterialColors.light().secondary_container.upper()
 
     def test_selected_indicator_is_not_primary_container(self, qapp) -> None:
         """回归：底色使用 secondary_container 而非旧实现的 primary_container"""
         rail = _make_rail(qapp)
         item = rail._items[0]
         img = item.grab().toImage()
-        center = img.pixelColor(img.width() // 2, img.height() - 6)
-        assert center.name().upper() != MaterialColors.light().primary_container.upper()
+        px = img.pixelColor(4, self._INDICATOR_MID_Y)
+        assert px.name().upper() != MaterialColors.light().primary_container.upper()
 
     def test_unselected_item_is_transparent(self, qapp) -> None:
-        """未选中项不绘制底色，露出 rail surface（#FFFBFE）"""
+        """未选中项不绘制底色，露出 rail surface"""
         rail = _make_rail(qapp)
         item = rail._items[1]
-        px = _sample(qapp, rail, item, 4, item.height() - 6)
+        px = _sample(qapp, rail, item, 4, self._INDICATOR_MID_Y)
         assert px.name().upper() == MaterialColors.light().surface.upper()
 
-    def test_pill_covers_full_clickable_area(self, qapp) -> None:
-        """胶囊应覆盖整个可点击区域宽度（左右边缘中点均为底色）"""
+    def test_indicator_covers_icon_area_only(self, qapp) -> None:
+        """指示器覆盖 56dp 宽度，但不延伸到标签区域（MD3 标准形态）"""
         rail = _make_rail(qapp)
         item = rail._items[0]
         img = item.grab().toImage()
-        mid_y = img.height() // 2
-        left = img.pixelColor(2, mid_y).name().upper()
-        right = img.pixelColor(img.width() - 3, mid_y).name().upper()
         expected = MaterialColors.light().secondary_container.upper()
-        assert left == expected
-        assert right == expected
+        assert img.pixelColor(2, self._INDICATOR_MID_Y).name().upper() == expected
+        assert img.pixelColor(img.width() - 3, self._INDICATOR_MID_Y).name().upper() == expected
+        # 标签区域（指示器下方）不应有胶囊底色
+        below = img.pixelColor(img.width() // 2, img.height() - 4)
+        assert below.name().upper() != expected
 
 
 # ── 平滑过渡动画 ────────────────────────────────────────────
@@ -185,8 +196,8 @@ class TestThemeSwitch:
         qapp.processEvents()
         item = rail._items[0]
         img = item.grab().toImage()
-        center = img.pixelColor(img.width() // 2, img.height() - 6)
-        assert center.name().upper() == MaterialColors.dark().secondary_container.upper()
+        px = img.pixelColor(4, TestSelectedIndicatorColor._INDICATOR_MID_Y)
+        assert px.name().upper() == MaterialColors.dark().secondary_container.upper()
 
     def test_set_colors_preserves_selection(self, qapp) -> None:
         """主题切换不改变当前选中项"""
@@ -201,18 +212,18 @@ class TestThemeSwitch:
 
 
 class TestCompactResponsive:
-    def test_compact_pill_covers_smaller_clickable_area(self, qapp) -> None:
-        """折叠为仅图标后，胶囊仍覆盖收缩后的整个可点击区域"""
+    def test_compact_item_is_icon_only(self, qapp) -> None:
+        """折叠为仅图标后，item 高度收敛为 32dp 指示器，宽度保持 56dp"""
         rail = _make_rail(qapp)
         rail.set_compact(True)
         qapp.processEvents()
         item = rail._items[0]
-        assert item.width() == 40
+        assert item.width() == 56
+        assert item.height() == 32
         img = item.grab().toImage()
-        mid_y = img.height() // 2
         expected = MaterialColors.light().secondary_container.upper()
-        assert img.pixelColor(2, mid_y).name().upper() == expected
-        assert img.pixelColor(img.width() - 3, mid_y).name().upper() == expected
+        assert img.pixelColor(2, 16).name().upper() == expected
+        assert img.pixelColor(img.width() - 3, 16).name().upper() == expected
 
     def test_compact_hides_labels(self, qapp) -> None:
         rail = _make_rail(qapp)
@@ -250,21 +261,32 @@ class TestInteractionAndEdges:
         assert rail._items[0]._progress == 1.0
 
     def test_hover_state_layer_when_unselected(self, qapp) -> None:
-        """未选中项悬停时绘制 surface_variant 状态层（覆盖原 hover 效果）"""
+        """未选中项悬停时绘制 8% on_surface 墨层（MD3 state layer）"""
+        from arknights_video_pipeline.gui.theme.state import StateLayer, blend
+
         rail = _make_rail(qapp)
         item = rail._items[1]
         assert item._progress == 0.0
-        item._hovered = True
+
+        item._set_hover(StateLayer.HOVER)
         item.update()
         qapp.processEvents()
-        # hover 层为 surface_variant，明显区别于未 hover 的 surface
-        hovered_px = _sample(qapp, rail, item, 2, item.height() // 2)
-        assert hovered_px.name().upper() == MaterialColors.light().surface_variant.upper()
-        # 离开后恢复透明
-        item._hovered = False
+        expected = blend(
+            MaterialColors.light().surface,
+            MaterialColors.light().on_surface,
+            StateLayer.HOVER,
+        )
+        hovered_px = _sample(qapp, rail, item, 2, 16)
+        # 绘制走 QColor alpha 混合、期望值走 blend()，两者舍入可能差 1
+        assert abs(hovered_px.red() - expected.red()) <= 2
+        assert abs(hovered_px.green() - expected.green()) <= 2
+        assert abs(hovered_px.blue() - expected.blue()) <= 2
+
+        # 离开后恢复透明（露出 rail surface）
+        item._set_hover(0.0)
         item.update()
         qapp.processEvents()
-        plain_px = _sample(qapp, rail, item, 2, item.height() // 2)
+        plain_px = _sample(qapp, rail, item, 2, 16)
         assert plain_px.name().upper() == MaterialColors.light().surface.upper()
 
     def test_click_only_left_button(self, qapp) -> None:

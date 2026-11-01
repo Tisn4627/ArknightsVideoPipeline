@@ -28,11 +28,10 @@ from PyQt6.QtWidgets import (
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.i18n import tr
-from arknights_video_pipeline.gui.theme import (
-    MaterialColors,
-    filled_button_qss as _build_filled_button_qss,
-    outlined_button_qss as _build_outlined_button_qss,
-)
+from arknights_video_pipeline.gui.theme import MaterialColors, MaterialTypography
+from arknights_video_pipeline.gui.theme.shape import Shape, ShapeRole
+from arknights_video_pipeline.gui.theme.state import Elevation
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 _COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -45,30 +44,11 @@ _PRESET_COLORS = [
 _PRESET_TOKENS = ("primary", "secondary", "error", "success", "warning")
 
 
-def _hex_edit_qss(colors: MaterialColors, error: bool = False) -> str:
-    """HEX 输入框 QSS：与 settings_row_builders._lineedit_qss 视觉一致"""
-    border = (f"2px solid {colors.error}" if error
-              else f"1px solid {colors.outline_variant}")
-    return (
-        "QLineEdit {"
-        f"  background-color: {colors.surface_variant};"
-        f"  color: {colors.on_surface};"
-        f"  border: {border};"
-        "  border-radius: 12px;"
-        "  padding: 8px 12px;"
-        "  min-height: 20px;"
-        "}"
-        "QLineEdit:focus {"
-        f"  border: 2px solid {colors.primary};"
-        "}"
-    )
-
-
 def _swatch_qss(hex_color: str, colors: MaterialColors) -> str:
     """小色块 QSS（对话框内预览与预设色板通用）"""
     return (
         f"background-color: {hex_color};"
-        f" border-radius: 12px;"
+        f" border-radius: {Shape.EXTRA_SMALL}px;"
         f" border: 1px solid {colors.outline_variant};"
     )
 
@@ -258,7 +238,7 @@ class ColorSwatchButton(QWidget):
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         parsed = QColor(color)
         self._color = parsed if parsed.isValid() else QColor("#FFFFFF")
         self._hovered = False
@@ -355,7 +335,7 @@ class ColorPickerDialog(QDialog):
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         parsed = QColor(initial)
         self._color = parsed if parsed.isValid() else QColor("#FFFFFF")
         self.setWindowTitle(tr("dialog.color_picker"))
@@ -369,7 +349,13 @@ class ColorPickerDialog(QDialog):
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = CardFrame()
+        # 对话框表面比普通卡片高一档（MD3 surface_container_high + 28dp + elevation 3）
+        card = CardFrame(
+            surface_role="surface_container_high",
+            radius=ShapeRole.DIALOG,
+            variant="elevated",
+        )
+        card.set_elevation(Elevation.DIALOG)
         self._card = card
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(28, 24, 28, 24)
@@ -384,10 +370,8 @@ class ColorPickerDialog(QDialog):
         header.addWidget(self._preview_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_lbl = QLabel(tr("dialog.color_picker"))
-        title_lbl.setStyleSheet(
-            "background: transparent; border: none;"
-            " font-weight: 500; font-size: 16px;"
-        )
+        title_lbl.setFont(MaterialTypography().font("title_large"))
+        title_lbl.setStyleSheet("background: transparent; border: none;")
         header.addWidget(title_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
         card_layout.addLayout(header)
@@ -404,10 +388,11 @@ class ColorPickerDialog(QDialog):
         hex_lbl = QLabel("HEX")
         hex_lbl.setStyleSheet(
             "background: transparent; border: none;"
-            " font-weight: 500; font-size: 13px;"
+            " font-weight: 500; font-size: 14px;"
         )
         hex_row.addWidget(hex_lbl)
         self._hex_edit = QLineEdit()
+        self._hex_edit.setObjectName("settingsField")
         self._hex_edit.setPlaceholderText("#RRGGBB")
         self._hex_edit.setValidator(QRegularExpressionValidator(
             QRegularExpression(r"^#[0-9A-Fa-f]{0,6}$")))
@@ -483,6 +468,14 @@ class ColorPickerDialog(QDialog):
 
     # ── 事件处理 ─────────────────────────────────────────
 
+    def _set_hex_error(self, error: bool) -> None:
+        """HEX 输入框错误态：走全局 QSS 的 ``error`` 属性，不写内联样式"""
+        self._hex_edit.setProperty("error", "true" if error else "false")
+        style = self._hex_edit.style()
+        style.unpolish(self._hex_edit)
+        style.polish(self._hex_edit)
+        self._hex_edit.update()
+
     def _on_pickers_changed(self) -> None:
         sv_color = self._sv_area.color()
         hue = max(self._hue_bar.color().hue(), 0)
@@ -496,7 +489,7 @@ class ColorPickerDialog(QDialog):
             self._sync_controls(update_hex=False)
         else:
             # 非法（含尚未输完）输入：立即标记错误边框，提供即时反馈
-            self._hex_edit.setStyleSheet(_hex_edit_qss(self._colors, error=True))
+            self._set_hex_error(True)
 
     def _apply_preset(self, hex_color: str) -> None:
         parsed = QColor(hex_color)
@@ -517,19 +510,17 @@ class ColorPickerDialog(QDialog):
         # HEX 输入框边框随校验状态刷新：合法→正常边框，非法→错误边框
         # （程序化 setText 后 textChanged 不触发，需在此统一刷新）
         valid = bool(_COLOR_RE.match(self._hex_edit.text()))
-        self._hex_edit.setStyleSheet(_hex_edit_qss(self._colors, error=not valid))
+        self._set_hex_error(not valid)
 
     # ── 主题同步 ─────────────────────────────────────────
 
     def _apply_colors(self) -> None:
         c = self._colors
-        self._card.set_surface_color(c.surface)
         self._sv_area.set_colors(c)
         self._hue_bar.set_colors(c)
         valid = bool(_COLOR_RE.match(self._hex_edit.text()))
-        self._hex_edit.setStyleSheet(_hex_edit_qss(c, error=not valid))
-        self._cancel_btn.setStyleSheet(_build_outlined_button_qss(c))
-        self._ok_btn.setStyleSheet(_build_filled_button_qss(c))
+        self._set_hex_error(not valid)
+        # 取消 / 确定按钮为自绘组件，主题变化自行跟随，不再写内联 QSS
         for btn, value, is_token in self._preset_buttons:
             color = getattr(c, value) if is_token else value
             btn.setStyleSheet(_swatch_qss(color, c))

@@ -1,15 +1,16 @@
-"""
-gui.components.tools_page - 工具完整页面
+"""gui.components.tools_page - 工具完整页面
 
 与主页 / 设置页同级的完整页面，由左侧导航栏的 Tools 项进入。
 页面结构（MD3）：
-- Hero 大标题
-- 工具索引卡片列表（按 TOOL_REGISTRY 顺序渲染）
-- 点击卡片（或卡片上的"打开"按钮）弹出独立预览窗口（ToolDialog），
-  窗口内为对应工具的 ToolView，可实时预览文字位置与内容
 
-新增工具无需改动本页：只需在 ``gui.components.tools.TOOL_REGISTRY``
-注册 ToolView 子类。
+- 页面头（标题 + 副标题）
+- 工具索引卡片（24dp 前导图标 + 标题 + 描述 + 尾部 text 按钮），
+  宽屏双列、其余单列
+- 点击卡片（或卡片上的"打开"按钮）弹出独立窗口（ToolDialog），
+  窗口内为对应工具的 ToolView
+
+工具视图按 ``ToolRegistry`` 延迟导入：索引页只依赖标题/描述文案，
+打开工具时才加载 pictex / movielite 等重资源模块。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -27,23 +29,34 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from arknights_video_pipeline.gui.assets.icons.nav_icons import make_icon_pixmap
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
-from arknights_video_pipeline.gui.components.tools import TOOL_REGISTRY, ToolView
+from arknights_video_pipeline.gui.components.page_header import PageHeader
+from arknights_video_pipeline.gui.components.tools import TOOL_REGISTRY
 from arknights_video_pipeline.gui.i18n import i18n, tr
-from arknights_video_pipeline.gui.theme import MaterialColors, MaterialTypography
+from arknights_video_pipeline.gui.theme import Grid, MaterialColors, MaterialTypography
+from arknights_video_pipeline.gui.theme.spacing import Margin, Space
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
+from arknights_video_pipeline.gui.theme.window_size import WindowSizeClass
+
+# 工具索引图标（Material Symbols 名称 → 24dp 前导图标）
+_TOOL_ICONS: dict[str, str] = {
+    "style1_text_range": "description",
+    "recognition": "pending",
+}
 
 
 class ToolDialog(QDialog):
-    """工具预览独立窗口：非模态，内含 ToolView + 关闭按钮"""
+    """工具预览独立窗口：非模态，内含 ToolView + 系统标题栏关闭"""
 
-    def __init__(self, tool_id: str, title_key: str, view_cls: type[ToolView],
+    def __init__(self, tool_id: str, title_key: str, view_cls: type,
                  config_proxy: Any, colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._tool_id = tool_id
         self._title_key = title_key
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         self.setWindowTitle(tr(title_key))
         self.setModal(False)
         # 独立正常窗口：任务栏独立条目，标题栏可最小化/最大化/关闭
@@ -52,22 +65,18 @@ class ToolDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
-        # 背景交给系统 palette（MaterialStyle 全局设置，与 message_dialog
-        # 一致）：不要给对话框设 WA_OpaquePaintEvent，否则跳过背景填充
-        # 会在内容四周露出未绘制区域（黑色边框）。拖动乱码防护由
-        # 预览控件自身的 WA_OpaquePaintEvent 承担。
+        # 背景交给系统 palette（MaterialStyle 全局设置）：不要设
+        # WA_OpaquePaintEvent，否则跳过背景填充、内容四周露出未绘制区域。
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMinimumSize(720, 520)
-        self.resize(1000, 720)
+        self.resize(1040, 760)
         self.setSizeGripEnabled(True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(16)
+        root.setContentsMargins(Space.XL, Space.XL, Space.XL, Space.XL)
+        root.setSpacing(Space.L)
 
-        # 内容放入滚动区：对话框可自由缩放，内容过小时出现滚动条。
-        # QScrollArea 是 QFrame 子类，需覆盖全局 QFrame 边框样式，否则
-        # 会出现一圈 outline_variant 描边（深色主题下呈黑色）。
+        # 内容放入滚动区：对话框可自由缩放，内容过小时出现滚动条
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -80,16 +89,15 @@ class ToolDialog(QDialog):
         self._scroll.viewport().setAutoFillBackground(False)
 
         self._view = view_cls(config_proxy=config_proxy, colors=self._colors)
-        # 进入工具视图：通知工具从配置文件（如 style1.json）加载参数值。
+        # 进入工具视图：通知工具从配置文件加载参数值。
         # 工具内编辑只改内存与预览，写盘仅在用户点击"应用/写入"按钮时进行
         self._view.on_entered()
         self._scroll.setWidget(self._view)
         root.addWidget(self._scroll, 1)
 
-        # 使用系统标准窗口样式：无自定义关闭按钮（用标题栏 X 关闭）
         i18n().language_changed.connect(self._retranslate)
 
-    def view(self) -> ToolView:
+    def view(self):
         return self._view
 
     def closeEvent(self, event) -> None:
@@ -113,8 +121,78 @@ class ToolDialog(QDialog):
         self._view.retranslate()
 
 
+class ToolCard(MaterialCard):
+    """工具索引卡片：前导图标 + 标题 / 描述 + 尾部 text 按钮"""
+
+    def __init__(self, tool_id: str, title_key: str, desc_key: str,
+                 colors: MaterialColors, parent: QWidget | None = None) -> None:
+        super().__init__(parent=parent)
+        self.tool_id = tool_id
+        self._colors = colors
+        self._typo = MaterialTypography()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # 卡片高度由内容决定，避免宽屏两列时被拉成同高
+        self.setSizePolicy(self.sizePolicy().horizontalPolicy(),
+                           self.sizePolicy().verticalPolicy())
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(Space.L)
+
+        self._icon_label = QLabel(self)
+        self._icon_label.setFixedSize(24, 24)
+        self._icon_label.setStyleSheet("background: transparent; border: none;")
+        row.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignTop)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(Space.XS)
+        self._title = QLabel(tr(title_key), self)
+        self._title.setFont(self._typo.font("title_medium"))
+        text_col.addWidget(self._title)
+
+        self._desc = QLabel(tr(desc_key), self)
+        self._desc.setFont(self._typo.font("body_small"))
+        self._desc.setWordWrap(True)
+        text_col.addWidget(self._desc)
+        row.addLayout(text_col, 1)
+
+        self._open_btn = MaterialButton(
+            tr("tools.open"), variant=MaterialButton.VARIANT_TEXT
+        )
+        row.addWidget(self._open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.add_layout(row)
+        self._apply_colors()
+        theme_controller().theme_changed.connect(self.set_colors)
+
+    def open_button(self) -> MaterialButton:
+        return self._open_btn
+
+    def set_texts(self, title: str, desc: str) -> None:
+        self._title.setText(title)
+        self._desc.setText(desc)
+
+    def set_colors(self, colors: MaterialColors) -> None:
+        self._colors = colors
+        self._apply_colors()
+
+    def _apply_colors(self) -> None:
+        c = self._colors
+        icon = _TOOL_ICONS.get(self.tool_id, "tools")
+        pixmap = make_icon_pixmap(icon, c.primary, size_px=24)
+        if pixmap is not None:
+            self._icon_label.setPixmap(pixmap)
+        self._title.setStyleSheet(
+            f"color: {c.on_surface}; background: transparent; border: none;"
+        )
+        self._desc.setStyleSheet(
+            f"color: {c.on_surface_variant}; background: transparent; border: none;"
+        )
+
+
 class ToolsPage(QWidget):
-    """工具页面：索引列表 + 点击卡片弹出预览窗口"""
+    """工具页面：索引卡片 + 点击弹出工具窗口"""
 
     # 任一工具将配置写入磁盘（如 style1.json）后发射，供 MainWindow 同步设置页
     tool_config_applied = pyqtSignal()
@@ -122,109 +200,107 @@ class ToolsPage(QWidget):
     def __init__(self, config_proxy: Any, colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         self._typo = MaterialTypography()
         self._config_proxy = config_proxy
-        self._tr_labels: list[tuple] = []
         self._dialogs: list[ToolDialog] = []
         # tool_id → 已打开的对话框（同一工具去重，重复打开时置前）
         self._dialog_by_tool: dict[str, ToolDialog] = {}
 
         self.setObjectName("toolsPage")
-        # 页面背景跟随全局 QSS；此处仅置透明避免覆盖 app 级背景
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
+        self._size_class = WindowSizeClass.EXPANDED
+        self._two_col: bool | None = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(40, 40, 40, 40)
-        root.setSpacing(32)
+        self._root = root
+        root.setContentsMargins(
+            Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED
+        )
+        root.setSpacing(Space.XXL)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        root.addWidget(self._build_hero())
-
-        cards_widget = QWidget()
-        cards_widget.setStyleSheet("background: transparent; border: none;")
-        index_layout = QVBoxLayout(cards_widget)
-        index_layout.setContentsMargins(0, 0, 0, 0)
-        index_layout.setSpacing(24)
-        index_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self._tool_cards: list[MaterialCard] = []
-        self._tool_card_titles: list[QLabel] = []
-        self._tool_card_descs: list[QLabel] = []
-        self._card_to_index: dict[MaterialCard, int] = {}
-
-        for index, (tool_id, title_key, view_cls) in enumerate(TOOL_REGISTRY):
-            card = MaterialCard()
-            card.set_surface_color(self._colors.surface)
-            card.setCursor(Qt.CursorShape.PointingHandCursor)
-            card.installEventFilter(self)
-            card_layout = card.layout()
-
-            title = QLabel(tr(title_key))
-            title.setStyleSheet(
-                f"color: {self._colors.on_surface}; background: transparent; border: none;"
-                " font-weight: 500; font-size: 16px;"
-            )
-            card_layout.addWidget(title)
-            self._tool_card_titles.append(title)
-
-            desc_key = f"tools.{tool_id}.desc"
-            desc = QLabel(tr(desc_key))
-            desc.setWordWrap(True)
-            desc.setStyleSheet(
-                f"color: {self._colors.on_surface_variant}; background: transparent;"
-                " border: none; font-size: 14px;"
-            )
-            card_layout.addWidget(desc)
-            self._tool_card_descs.append(desc)
-
-            open_btn = MaterialButton(
-                tr("tools.open"),
-                variant=MaterialButton.VARIANT_FILLED,
-            )
-            open_btn.clicked.connect(
-                lambda _checked=False, i=index: self._open_tool(i)
-            )
-            row = QHBoxLayout()
-            row.addStretch()
-            row.addWidget(open_btn)
-            card_layout.addLayout(row)
-
-            index_layout.addWidget(card)
-            self._tool_cards.append(card)
-            self._card_to_index[card] = index
-
-        root.addWidget(cards_widget)
-
-        # 语言切换时刷新页面文本
-        i18n().language_changed.connect(self._retranslate)
-
-    def _build_hero(self) -> QWidget:
-        """Hero 区域：大标题（与主页 / 设置页一致）"""
-        hero = QWidget()
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(0, 24, 0, 0)
-        hero_layout.setSpacing(16)
-        hero_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        title = QLabel(tr("tools.title"))
-        title.setFont(self._typo.display_large)
-        title.setStyleSheet(
-            "border: none; background: transparent;"
-            " font-size: 48px; font-weight: 600; line-height: 1.15;"
-            " letter-spacing: -1.5px;"
+        self._header = PageHeader(
+            tr("tools.title"), tr("tools.subtitle"), colors=self._colors
         )
-        title.setWordWrap(True)
-        hero_layout.addWidget(title)
-        self._tr_labels.append((title.setText, "tools.title"))
-        return hero
+        root.addWidget(self._header)
+
+        # 索引卡片网格（宽屏双列，其余单列；见 _apply_grid）
+        self._grid_host = QWidget(self)
+        self._grid_host.setStyleSheet("background: transparent; border: none;")
+        self._grid = QGridLayout(self._grid_host)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(Space.XL)
+        root.addWidget(self._grid_host)
+
+        self._cards: list[ToolCard] = []
+        for spec in TOOL_REGISTRY:
+            card = ToolCard(spec.tool_id, spec.title_key, spec.desc_key, self._colors)
+            card.open_button().clicked.connect(
+                lambda _checked=False, t=spec.tool_id: self._open_tool(t)
+            )
+            card.installEventFilter(self)
+            self._cards.append(card)
+
+        self._apply_grid(two_column=True)
+
+        i18n().language_changed.connect(self._retranslate)
+        theme_controller().theme_changed.connect(self.set_colors)
+        self._sync_columns()
+
+    def _sync_columns(self) -> None:
+        """按页面实际宽度决定索引卡片列数（双列需要 ≥760dp）"""
+        width = self.width()
+        if width > 0:
+            two = width >= 760
+        else:
+            two = Grid.columns(self._size_class) > 1
+        if two == self._two_col:
+            return
+        self._two_col = two
+        self._apply_grid(two)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_columns()
+
+    # ── 布局 / 响应式 ─────────────────────────────────────
+
+    def _apply_grid(self, two_column: bool) -> None:
+        """按列数重排工具卡片（宽屏双列，其余单列）"""
+        for card in self._cards:
+            self._grid.removeWidget(card)
+        if two_column:
+            self._grid.setColumnStretch(0, 1)
+            self._grid.setColumnStretch(1, 1)
+            for index, card in enumerate(self._cards):
+                self._grid.addWidget(
+                    card, index // 2, index % 2,
+                    Qt.AlignmentFlag.AlignTop,
+                )
+        else:
+            self._grid.setColumnStretch(0, 1)
+            self._grid.setColumnStretch(1, 0)
+            for index, card in enumerate(self._cards):
+                self._grid.addWidget(card, index, 0, Qt.AlignmentFlag.AlignTop)
+
+    def set_size_class(self, size_class: str) -> None:
+        """按尺寸类别调整页边距、页面头字号与卡片列数"""
+        if size_class == self._size_class:
+            return
+        self._size_class = size_class
+        margin = Margin.page(size_class)
+        self._root.setContentsMargins(margin, margin, margin, margin)
+        self._header.set_size_class(size_class)
+        self._sync_columns()
 
     # ── 打开工具（独立窗口） ─────────────────────────────
 
-    def _open_tool(self, index: int) -> None:
-        if not (0 <= index < len(TOOL_REGISTRY)):
+    def _open_tool(self, tool_id: str) -> None:
+        spec_by_id = {spec.tool_id: spec for spec in TOOL_REGISTRY}
+        spec = spec_by_id.get(tool_id)
+        if spec is None:
             return
-        tool_id, title_key, view_cls = TOOL_REGISTRY[index]
 
         # 去重：同一工具已打开时置前激活，而非新开窗口——多个同工具
         # 对话框会并发运行各自 worker 并各自 save_all() 写同一份配置
@@ -238,7 +314,7 @@ class ToolsPage(QWidget):
         # QApplication 的 quitOnLastWindowClosed 语义下主窗关闭后
         # 应用仍会驻留，直到该对话框被关闭
         dlg = ToolDialog(
-            tool_id, title_key, view_cls,
+            tool_id, spec.title_key, spec.load_view(),
             config_proxy=self._config_proxy, colors=self._colors,
             parent=self.window(),
         )
@@ -268,38 +344,26 @@ class ToolsPage(QWidget):
             dlg.close()
 
     def eventFilter(self, obj, event) -> bool:
-        # 点击卡片任意区域打开工具预览窗口（按钮自身处理点击，不会重复触发）
-        if event.type() == QEvent.Type.MouseButtonPress and obj in self._card_to_index:
-            self._open_tool(self._card_to_index[obj])
-            return True
+        # 点击卡片任意区域打开工具窗口（按钮自身处理点击，不会重复触发）
+        if event.type() == QEvent.Type.MouseButtonPress:
+            for card in self._cards:
+                if obj is card:
+                    self._open_tool(card.tool_id)
+                    return True
         return super().eventFilter(obj, event)
 
     # ── 主题 / 语言 ───────────────────────────────────────
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
-        for card, title, desc in zip(
-            self._tool_cards, self._tool_card_titles, self._tool_card_descs
-        ):
-            card.set_surface_color(colors.surface)
-            title.setStyleSheet(
-                f"color: {colors.on_surface}; background: transparent; border: none;"
-                " font-weight: 500; font-size: 16px;"
-            )
-            desc.setStyleSheet(
-                f"color: {colors.on_surface_variant}; background: transparent;"
-                " border: none; font-size: 14px;"
-            )
         for dlg in self._dialogs:
             dlg.set_colors(colors)
 
     def _retranslate(self) -> None:
-        for setter, key in self._tr_labels:
-            setter(tr(key))
-        for i, (tool_id, title_key, _view_cls) in enumerate(TOOL_REGISTRY):
-            if i < len(self._tool_card_titles):
-                self._tool_card_titles[i].setText(tr(title_key))
-            if i < len(self._tool_card_descs):
-                self._tool_card_descs[i].setText(tr(f"tools.{tool_id}.desc"))
+        self._header.set_title(tr("tools.title"))
+        self._header.set_subtitle(tr("tools.subtitle"))
+        for card, spec in zip(self._cards, TOOL_REGISTRY):
+            card.set_texts(tr(spec.title_key), tr(spec.desc_key))
+            card.open_button().setText(tr("tools.open"))
         for dlg in self._dialogs:
             dlg._retranslate()

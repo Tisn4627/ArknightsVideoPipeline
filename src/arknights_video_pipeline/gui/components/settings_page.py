@@ -1,16 +1,16 @@
 """
 gui.components.settings_page - 设置页面
 
-页面布局严格参考 Home 选项卡：Hero 区域 + 卡片网格 + 底部信息区，
-采用与 Home 一致的淡紫底色（``background``）+ 白色圆角卡片（``surface``）配色，
-字体、间距、交互反馈均与 Home 保持一致。
+页面布局：页面头（标题 + 副标题）+ 卡片网格（宽屏双列 / 其余单列）。
+卡片使用 ``surface_container_low`` + 1dp 描边（outlined 变体），
+与主页 / 工具页 / 关于页保持同一套层级语言。
 
 功能模块：
-1. 外观（Appearance）：浅色 / 深色主题切换，开关即时生效（实时预览）；
+1. 外观（Appearance）：浅色 / 深色主题、动态色彩与种子色，即时生效；
 2. 配置文件（Configuration files）：按类型选择并生成默认配置文件，
    与 CLI ``--init-config`` 行为一致，支持"一键选择全部"与"取消全部选择"。
-3. 高级（Advanced）：MAA 路径、Output 路径与日志级别的运行时配置，
-   全部竖直排列；这三个控件由 MainWindow 共享读写，Home 选项卡不再持有。
+3. 全局设置（Global）：Copilot 后端、MAA/Output 路径、识别参数与日志，
+   这些控件由 MainWindow 共享读写，Home 页不再持有。
 
 页面通过信号与 MainWindow 解耦：
 - ``theme_change_requested(bool)``：请求切换主题（True=深色）；
@@ -23,9 +23,10 @@ import sys
 from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QLabel,
-    QComboBox, QSpinBox, QSizePolicy,
+    QSpinBox, QSizePolicy, QDialog,
 )
 
 # 复用 CLI 初始化入口（core.pipeline 的私有函数）：暂无公开等价物，
@@ -35,19 +36,25 @@ from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
+from arknights_video_pipeline.gui.components.material_color_picker import (
+    ColorPickerDialog,
+    ColorSwatchButton,
+)
+from arknights_video_pipeline.gui.components.material_combo import MaterialComboBox
 from arknights_video_pipeline.gui.components.material_switch import MaterialSwitch
+from arknights_video_pipeline.gui.components.page_header import PageHeader
 from arknights_video_pipeline.gui.components.settings_row_builders import (
     FieldRow,
     build_switch_row, build_int_row, build_float_row,
     build_combo_row, build_path_row, build_string_row,
-    build_color_row, build_range_row, build_nullable_int_row,
+    build_color_row, build_range_row, build_nullable_int_row, make_row,
 )
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import (
-    MaterialColors, MaterialTypography,
-    filled_button_qss as _build_filled_button_qss,
-    outlined_button_qss as _build_outlined_button_qss,
+    BASELINE_SEED, Margin, MaterialColors, MaterialTypography, Space,
+    WindowSizeClass, normalize_hex, set_text_color,
 )
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 
 class SettingsPage(QWidget):
@@ -92,6 +99,9 @@ class SettingsPage(QWidget):
     resource_dir_changed = pyqtSignal(str)
     # 高级分区折叠状态变更信号（持久化到 gui.json）
     advanced_expanded_changed = pyqtSignal(bool)
+    # 动态色彩（Material You）：开关与种子色（持久化到 gui.json）
+    dynamic_color_changed = pyqtSignal(bool)
+    seed_color_changed = pyqtSignal(str)
 
     # (module_key, 标题翻译 key, 文件名)
     CONFIG_TYPES: list[tuple[str, str, str]] = [
@@ -118,12 +128,16 @@ class SettingsPage(QWidget):
         # 下出现横向裁切。这里 Preferred + horizontalStretch 让父级
         # 容器（QScrollArea）可以按视口宽度约束我们的宽度。
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         self._is_dark = is_dark
         self._typo = MaterialTypography()
+        self._size_class = "expanded"
+        # 配置复选框网格列数（页面宽 ≥640 时双列；卡片本身固定单列）
+        self._checkbox_two_col: bool | None = None
+        # 动态色彩（由 MainWindow 从 gui.json 回填）
+        self._is_dynamic = True
+        self._seed_color = BASELINE_SEED
         self._status_is_error = False
-        # showEvent 全量重排守卫：仅首次显示时执行（见 showEvent）
-        self._shown_once = False
 
         # 记录所有需要随主题刷新的辅助文本控件，便于统一更新颜色
         self._dim_labels: list[QLabel] = []
@@ -141,13 +155,17 @@ class SettingsPage(QWidget):
         self._apply_colors()
         # 语言切换时刷新所有静态文本
         i18n().language_changed.connect(self._retranslate)
+        # 订阅主题：字段行 / 卡片 / 辅助文字配色自动跟随
+        theme_controller().theme_changed.connect(self.set_colors)
 
     # ── UI 构建 ──────────────────────────────────────────
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(40, 40, 40, 40)
-        root.setSpacing(32)
+        root.setContentsMargins(
+            Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED
+        )
+        root.setSpacing(Space.XXL)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # Hero 区域（参考 Home：大标题 + 副标题 + 主按钮）
@@ -169,10 +187,10 @@ class SettingsPage(QWidget):
         # 仅包含独立的 Track / Formation / Actions / Performance 卡片
         # 全局设置与 VideoCompose 的高级字段已内嵌到各自卡片中
         self._collapsible_content = QWidget()
-        self._collapsible_content.setStyleSheet("background: transparent; border: none;")
+        self._collapsible_content.setObjectName("transparentPane")
         collapsible_layout = QVBoxLayout(self._collapsible_content)
         collapsible_layout.setContentsMargins(0, 0, 0, 0)
-        collapsible_layout.setSpacing(24)
+        collapsible_layout.setSpacing(Space.XL)
         self._track_card = self._build_track_card()
         self._formation_card = self._build_formation_card()
         self._actions_card = self._build_actions_card()
@@ -185,86 +203,80 @@ class SettingsPage(QWidget):
                 collapsible_layout.addWidget(card)
         self._collapsible_content.setVisible(False)  # 默认收起
 
-        # 卡片网格：单列竖直堆叠
+        # 卡片网格（宽屏双列 / 窄屏单列，由 _apply_grid_layout 统一排布）
         self._cards_grid = QGridLayout()
-        self._cards_grid.setSpacing(24)
+        self._cards_grid.setContentsMargins(0, 0, 0, 0)
+        self._cards_grid.setSpacing(Space.XL)
         self._cards_grid.setColumnStretch(0, 1)
         self._cards_container = QWidget()
-        self._cards_container.setStyleSheet("background: transparent; border: none;")
+        self._cards_container.setObjectName("transparentPane")
         self._cards_container.setLayout(self._cards_grid)
+        # 卡片宿主（QVBoxLayout: 卡片 + 底部 stretch）：
+        # 卡片按列宽填满，同时保持顶部对齐而不是被拉伸到行高
+        self._card_hosts: dict[int, QWidget] = {}
         root.addWidget(self._cards_container)
-        # 始终可见卡片
-        row = 0
-        for card in (
-            self._language_card,
-            self._appearance_card,
-            self._advanced_card, self._ffmpeg_card,
-            self._compose_style1_main_card, self._compose_style2_main_card,
-            self._config_card,
-        ):
-            if card is not None:
-                self._cards_grid.addWidget(card, row, 0)
-                row += 1
-        # 高级开关卡片 + 内容容器（内容 setVisible 控制显隐）
-        self._cards_grid.addWidget(self._advanced_toggle_card, row, 0)
-        row += 1
-        self._cards_grid.addWidget(self._collapsible_content, row, 0)
+        self._apply_grid_layout()
+        self._sync_checkbox_columns()
+
+    def _sync_checkbox_columns(self) -> None:
+        """配置复选框网格列数：页面足够宽时 2 列，否则单列
+
+        设置页卡片本身固定单列（表单字段需要宽度）；复选框没有输入框，
+        在宽卡片中双列排布可以缩短配置文件卡片的高度。
+        """
+        two = self.width() >= 640
+        if two == self._checkbox_two_col:
+            return
+        self._checkbox_two_col = two
+        self._reflow_checkbox_grid(two_col=two)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_checkbox_columns()
+
+    def _make_section_title(self, text: str) -> QLabel:
+        """卡片内小节标题（14/500，随主题刷新颜色）
+
+        字体与字距走 QFont 而不是 widget 级 stylesheet：``_apply_colors``
+        刷新 ``_dim_labels`` 时只重设 color，不会把 500 字重和字距覆盖掉。
+        """
+        label = QLabel(text)
+        font = self._typo.font("title_small")
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
+        label.setFont(font)
+        label.setWordWrap(True)
+        self._dim_labels.append(label)
+        return label
 
     def _build_hero(self) -> QWidget:
-        """Hero 区域：大标题 + 描述（与 Home 一致；不放置按钮，遵循
-        设计规范 Hero 区聚焦于内容引导）"""
-        hero = QWidget()
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(0, 24, 0, 0)
-        hero_layout.setSpacing(16)
-        hero_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        # MD3 Hero 标题：与 Home 一致使用 display_large + 48px 内联覆盖
-        self._title_label = QLabel(tr("settings.hero_title"))
-        self._title_label.setFont(self._typo.display_large)
-        self._title_label.setStyleSheet(
-            "border: none; background: transparent;"
-            " font-size: 48px; font-weight: 600; line-height: 1.15;"
-            " letter-spacing: -1.5px;"
+        """页面头（与主页 / 工具页 / 关于页共用 PageHeader）"""
+        self._header = PageHeader(
+            tr("settings.hero_title"), tr("settings.subtitle"), colors=self._colors
         )
-        self._title_label.setWordWrap(True)
-        hero_layout.addWidget(self._title_label)
-        self._tr_labels.append((self._title_label.setText, "settings.hero_title"))
-
-        return hero
+        self._tr_labels.append((self._header.set_title, "settings.hero_title"))
+        self._tr_labels.append((self._header.set_subtitle, "settings.subtitle"))
+        return self._header
 
     def _build_language_card(self) -> MaterialCard:
         """语言切换卡片（置顶）：下拉选择界面语言，立即生效"""
         card = MaterialCard(tr("settings.language.title"))
         self._tr_labels.append((card.set_title, "settings.language.title"))
 
-        row = QHBoxLayout()
-        row.setSpacing(16)
-        row.setContentsMargins(0, 4, 0, 4)
-        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        lang_label = QLabel(tr("settings.language.desc"))
-        lang_label.setFont(self._typo.body_medium)
-        lang_label.setWordWrap(True)
-        self._dim_labels.append(lang_label)
-        text_box.addWidget(lang_label)
-        self._tr_labels.append((lang_label.setText, "settings.language.desc"))
-        row.addLayout(text_box, 1)
-
-        self._lang_combo = QComboBox()
+        self._lang_combo = MaterialComboBox(colors=self._colors)
+        self._lang_combo.setObjectName("settingsField")
         for code, display_name in i18n().available_languages():
             self._lang_combo.addItem(display_name, code)
-        # 应用与其他下拉框（Log level 等）一致的内联样式，
-        # 主题切换时由 _apply_colors 刷新
-        self._lang_combo.setStyleSheet(self._lang_combo_qss())
-        # 同步当前语言到下拉框（阻塞信号避免触发 language_change_requested）
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        row.addWidget(self._lang_combo, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        card.add_layout(row)
+        self._lang_row = make_row(
+            "",
+            self._lang_combo,
+            colors=self._colors,
+            desc=tr("settings.language.desc"),
+            max_width=280,
+            wide=True,
+        )
+        self._tr_labels.append((self._lang_row.set_desc, "settings.language.desc"))
+        card.add_widget(self._lang_row.container)
         return card
 
     def _build_theme_card(self) -> MaterialCard:
@@ -274,43 +286,80 @@ class SettingsPage(QWidget):
         # 出现大片空白（双列网格中两卡片同高时尤为明显）。
         card.set_content_alignment(Qt.AlignmentFlag.AlignTop)
 
-        row = QHBoxLayout()
-        row.setSpacing(16)
-        row.setContentsMargins(0, 4, 0, 4)
-        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._theme_label = QLabel(tr("settings.appearance.label"))
-        self._theme_label.setFont(self._typo.title_medium)
-        self._theme_label.setStyleSheet("border: none; background: transparent;")
-        text_box.addWidget(self._theme_label)
-        self._tr_labels.append((self._theme_label.setText, "settings.appearance.label"))
-
-        self._theme_desc = QLabel(tr("settings.appearance.desc"))
-        self._theme_desc.setFont(self._typo.body_medium)
-        self._theme_desc.setWordWrap(True)
-        self._dim_labels.append(self._theme_desc)
-        text_box.addWidget(self._theme_desc)
-        self._tr_labels.append((self._theme_desc.setText, "settings.appearance.desc"))
-        row.addLayout(text_box, 1)
-
+        # ── 深色主题 ─────────────────────────────────────
         self._theme_switch = MaterialSwitch(checked=self._is_dark, colors=self._colors)
         self._theme_switch.toggled.connect(self._on_theme_toggled)
-        row.addWidget(self._theme_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._theme_row = make_row(
+            tr("settings.appearance.label"),
+            self._theme_switch,
+            colors=self._colors,
+            desc=tr("settings.appearance.desc"),
+            max_width=80,
+        )
+        self._tr_labels.append((self._theme_row.set_label, "settings.appearance.label"))
+        self._tr_labels.append((self._theme_row.set_desc, "settings.appearance.desc"))
+        card.add_widget(self._theme_row.container)
 
-        card.add_layout(row)
+        # ── 动态色彩（Material You）────────────────────────
+        self._dynamic_switch = MaterialSwitch(
+            checked=self._is_dynamic, colors=self._colors
+        )
+        self._dynamic_switch.toggled.connect(self._on_dynamic_color_toggled)
+        self._dynamic_row = make_row(
+            tr("settings.appearance.dynamic"),
+            self._dynamic_switch,
+            colors=self._colors,
+            desc=tr("settings.appearance.dynamic_desc"),
+            max_width=80,
+        )
+        self._tr_labels.append(
+            (self._dynamic_row.set_label, "settings.appearance.dynamic")
+        )
+        self._tr_labels.append(
+            (self._dynamic_row.set_desc, "settings.appearance.dynamic_desc")
+        )
+        card.add_widget(self._dynamic_row.container)
+
+        # ── 种子色 ────────────────────────────────────────
+        seed_control = QWidget()
+        seed_control.setObjectName("transparentPane")
+        seed_layout = QHBoxLayout(seed_control)
+        seed_layout.setContentsMargins(0, 0, 0, 0)
+        seed_layout.setSpacing(Space.M)
+        seed_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        # 值 + 色块作为一个紧凑组靠右：色块右缘与上方开关右缘对齐
+        seed_layout.addStretch(1)
+        self._seed_value = QLabel(self._seed_color)
+        self._seed_value.setFont(self._typo.body_medium)
+        self._dim_labels.append(self._seed_value)
+        seed_layout.addWidget(self._seed_value, 0)
+        self._seed_swatch = ColorSwatchButton(self._seed_color, colors=self._colors)
+        self._seed_swatch.setToolTip(tr("settings.appearance.seed_pick"))
+        self._seed_swatch.clicked.connect(self._on_pick_seed_color)
+        seed_layout.addWidget(self._seed_swatch, 0)
+
+        self._seed_row = make_row(
+            tr("settings.appearance.seed"),
+            seed_control,
+            colors=self._colors,
+            max_width=160,
+            wide=True,
+            field=True,
+            align_end=True,
+        )
+        self._tr_labels.append((self._seed_row.set_label, "settings.appearance.seed"))
+        card.add_widget(self._seed_row.container)
+
         return card
 
     def _build_config_card(self) -> MaterialCard:
         card = MaterialCard(tr("settings.config.title"))
         self._tr_labels.append((card.set_title, "settings.config.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
 
         self._config_desc = QLabel(tr("settings.config.desc"))
-        self._config_desc.setFont(self._typo.body_medium)
+        self._config_desc.setFont(self._typo.body_small)
         self._config_desc.setWordWrap(True)
         self._dim_labels.append(self._config_desc)
         self._tr_labels.append((self._config_desc.setText, "settings.config.desc"))
@@ -319,32 +368,35 @@ class SettingsPage(QWidget):
         # 复选框网格（容器，以便在窄屏下重新排列为单列）
         self._config_checkboxes: dict[str, MaterialCheckBox] = {}
         self._checkbox_grid = QGridLayout()
-        self._checkbox_grid.setSpacing(12)
+        self._checkbox_grid.setHorizontalSpacing(Space.XL)
+        self._checkbox_grid.setVerticalSpacing(Space.S)
         for key, title_key, filename in self.CONFIG_TYPES:
             # 传入当前主题 colors，避免 MaterialCheckBox 默认使用浅色
             # MaterialColors.light() 导致首次进入深色模式时 indicator
             # 保持白色的问题
-            cb = MaterialCheckBox(
-                f"{tr(title_key)}  ·  {filename}", colors=self._colors
-            )
+            cb = MaterialCheckBox(tr(title_key), colors=self._colors)
+            # 文件名放进 tooltip：完整 "标题 · path/to/file.json" 在窄卡片里
+            # 会顶到卡片边缘，读起来也更噪声
+            cb.setToolTip(filename)
             self._config_checkboxes[key] = cb
             self._checkbox_specs.append((cb, title_key, filename))
-        self._reflow_checkbox_grid(two_col=True)
+        self._reflow_checkbox_grid(two_col=False)
         layout.addLayout(self._checkbox_grid)
 
-        # 全选 / 清空：与主页按钮样式一致（使用包装容器以便窄屏重排）
+        # 全选 / 清空：tonal + text（不抢走"生成"的 filled 主操作）
         self._sel_buttons_container = QWidget()
-        self._sel_buttons_container.setStyleSheet("background: transparent; border: none;")
+        self._sel_buttons_container.setObjectName("transparentPane")
         self._sel_buttons_layout = QHBoxLayout(self._sel_buttons_container)
         self._sel_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self._sel_buttons_layout.setSpacing(12)
-        self._select_all_btn = MaterialButton(tr("settings.config.select_all"), variant=MaterialButton.VARIANT_TONAL)
-        self._clear_btn = MaterialButton(tr("settings.config.clear_all"), variant=MaterialButton.VARIANT_OUTLINED)
+        self._sel_buttons_layout.setSpacing(Space.M)
+        self._select_all_btn = MaterialButton(
+            tr("settings.config.select_all"), variant=MaterialButton.VARIANT_TONAL
+        )
+        self._clear_btn = MaterialButton(
+            tr("settings.config.clear_all"), variant=MaterialButton.VARIANT_TEXT
+        )
         self._tr_labels.append((self._select_all_btn.setText, "settings.config.select_all"))
         self._tr_labels.append((self._clear_btn.setText, "settings.config.clear_all"))
-        # 直接设置完整内联样式，避免全局 QSS 在某些场景下未生效
-        self._select_all_btn.setStyleSheet(self._filled_button_qss())
-        self._clear_btn.setStyleSheet(self._outlined_button_qss())
         self._select_all_btn.clicked.connect(self._on_select_all)
         self._clear_btn.clicked.connect(self._on_clear_all)
         # stretch 在前，将按钮推到右侧
@@ -355,19 +407,22 @@ class SettingsPage(QWidget):
 
         # 生成按钮 + 状态文本（同样使用包装容器支持窄屏重排）
         self._action_buttons_container = QWidget()
-        self._action_buttons_container.setStyleSheet("background: transparent; border: none;")
+        self._action_buttons_container.setObjectName("transparentPane")
         self._action_buttons_layout = QHBoxLayout(self._action_buttons_container)
         self._action_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self._action_buttons_layout.setSpacing(12)
-        self._generate_btn = MaterialButton(tr("settings.config.generate"), variant=MaterialButton.VARIANT_FILLED)
+        self._action_buttons_layout.setSpacing(Space.M)
+        self._generate_btn = MaterialButton(
+            tr("settings.config.generate"), variant=MaterialButton.VARIANT_FILLED
+        )
         self._tr_labels.append((self._generate_btn.setText, "settings.config.generate"))
-        self._generate_btn.setStyleSheet(self._filled_button_qss())
         self._generate_btn.clicked.connect(self._on_generate)
         self._config_status = QLabel("")
         self._config_status.setFont(self._typo.body_small)
         self._config_status.setWordWrap(True)
-        self._action_buttons_layout.addWidget(self._generate_btn)
+        # 状态文字占左侧剩余空间，主操作"生成默认配置"右对齐——
+        # 与上一行"一键选择全部 / 取消全部选择"的右对齐动作区一致
         self._action_buttons_layout.addWidget(self._config_status, 1)
+        self._action_buttons_layout.addWidget(self._generate_btn)
         layout.addWidget(self._action_buttons_container)
 
         card.add_layout(layout)
@@ -381,37 +436,23 @@ class SettingsPage(QWidget):
         """
         card = MaterialCard(tr("settings.advanced_toggle.title"))
         self._tr_labels.append((card.set_title, "settings.advanced_toggle.title"))
-        row = QHBoxLayout()
-        row.setSpacing(16)
-        row.setContentsMargins(0, 4, 0, 4)
-        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._advanced_toggle_label = QLabel(tr("settings.advanced_toggle.label"))
-        self._advanced_toggle_label.setFont(self._typo.title_medium)
-        self._advanced_toggle_label.setStyleSheet(
-            "border: none; background: transparent;"
-        )
-        text_box.addWidget(self._advanced_toggle_label)
-        self._tr_labels.append((self._advanced_toggle_label.setText, "settings.advanced_toggle.label"))
-
-        self._advanced_toggle_desc = QLabel(tr("settings.advanced_toggle.desc"))
-        self._advanced_toggle_desc.setFont(self._typo.body_medium)
-        self._advanced_toggle_desc.setWordWrap(True)
-        self._dim_labels.append(self._advanced_toggle_desc)
-        text_box.addWidget(self._advanced_toggle_desc)
-        self._tr_labels.append((self._advanced_toggle_desc.setText, "settings.advanced_toggle.desc"))
-        row.addLayout(text_box, 1)
-
-        self._advanced_switch = MaterialSwitch(
-            checked=False, colors=self._colors
-        )
+        self._advanced_switch = MaterialSwitch(checked=False, colors=self._colors)
         self._advanced_switch.toggled.connect(self._on_advanced_toggled)
-        row.addWidget(self._advanced_switch, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        card.add_layout(row)
+        self._advanced_row = make_row(
+            tr("settings.advanced_toggle.label"),
+            self._advanced_switch,
+            colors=self._colors,
+            desc=tr("settings.advanced_toggle.desc"),
+            max_width=80,
+        )
+        self._tr_labels.append(
+            (self._advanced_row.set_label, "settings.advanced_toggle.label")
+        )
+        self._tr_labels.append(
+            (self._advanced_row.set_desc, "settings.advanced_toggle.desc")
+        )
+        card.add_widget(self._advanced_row.container)
         return card
 
     def _build_advanced_card(self) -> MaterialCard:
@@ -421,12 +462,12 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.global.title"))
         self._tr_labels.append((card.set_title, "settings.global.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # 描述文本
         self._advanced_desc = QLabel(tr("settings.global.desc"))
-        self._advanced_desc.setFont(self._typo.body_medium)
+        self._advanced_desc.setFont(self._typo.body_small)
         self._advanced_desc.setWordWrap(True)
         self._dim_labels.append(self._advanced_desc)
         self._tr_labels.append((self._advanced_desc.setText, "settings.global.desc"))
@@ -442,26 +483,36 @@ class SettingsPage(QWidget):
         self._pipeline_field_rows["copilot_backend"] = row
         self._tr_labels.append((row.set_label, "settings.global.backend"))
 
-        # MAA 路径（单行标题 + FileSelector）：仅后端为 maa 时显示
+        # MAA 路径（左侧标签 + 无浮动标签的路径字段）：仅后端为 maa 时显示
         self._maa_selector = FileSelector(
             mode=FileSelector.MODE_DIRECTORY,
             label=tr("settings.global.maa_path"),
             placeholder=tr("settings.global.maa_path_placeholder"),
+            show_label=False,
         )
-        self._maa_selector.setVisible(False)
-        layout.addWidget(self._maa_selector)
+        self._maa_row = make_row(
+            tr("settings.global.maa_path"), self._maa_selector,
+            colors=self._colors, expanding=True, field=True,
+        )
+        self._maa_row.container.setVisible(False)
+        layout.addWidget(self._maa_row.container)
 
         # Output 路径
         self._output_selector = FileSelector(
             mode=FileSelector.MODE_DIRECTORY,
             label=tr("settings.global.output"),
             placeholder=tr("settings.global.output_placeholder"),
+            show_label=False,
         )
-        layout.addWidget(self._output_selector)
-        # 注册 selector label/placeholder 重翻译
-        self._tr_labels.append((self._maa_selector.set_label, "settings.global.maa_path"))
+        self._output_row = make_row(
+            tr("settings.global.output"), self._output_selector,
+            colors=self._colors, expanding=True, field=True,
+        )
+        layout.addWidget(self._output_row.container)
+        # 注册 selector 行标签 / placeholder 重翻译
+        self._tr_labels.append((self._maa_row.set_label, "settings.global.maa_path"))
         self._tr_labels.append((self._maa_selector.set_placeholder, "settings.global.maa_path_placeholder"))
-        self._tr_labels.append((self._output_selector.set_label, "settings.global.output"))
+        self._tr_labels.append((self._output_row.set_label, "settings.global.output"))
         self._tr_labels.append((self._output_selector.set_placeholder, "settings.global.output_placeholder"))
 
         # 将内部控件信号转发为公开信号，供 MainWindow 连接
@@ -472,37 +523,21 @@ class SettingsPage(QWidget):
 
         # ── 高级字段容器（开关关闭时隐藏，不占用布局空间）──
         self._global_advanced_container = QWidget()
-        self._global_advanced_container.setStyleSheet(
-            "background: transparent; border: none;"
-        )
+        self._global_advanced_container.setObjectName("transparentPane")
         adv_layout = QVBoxLayout(self._global_advanced_container)
         adv_layout.setContentsMargins(0, 0, 0, 0)
-        adv_layout.setSpacing(16)
+        adv_layout.setSpacing(Space.M)
 
-        # 日志级别：标签 + 组合框
-        log_row = QHBoxLayout()
-        log_row.setSpacing(8)
-        log_row.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._log_level_label = QLabel(tr("settings.global.log_level"))
-        self._log_level_label.setStyleSheet(
-            "border: none; background: transparent;"
-            " font-weight: 500; font-size: 13px;"
-        )
-        log_row.addWidget(self._log_level_label)
-        self._tr_labels.append((self._log_level_label.setText, "settings.global.log_level"))
-        self._log_level_combo = QComboBox()
+        # 日志级别：左侧标签 + MD3 下拉框（自绘 chevron）
+        self._log_level_combo = MaterialComboBox(colors=self._colors)
+        self._log_level_combo.setObjectName("settingsField")
         self._log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
-        log_row.addWidget(self._log_level_combo, 1)
-        self._log_level_arrow = QLabel("▾")
-        self._log_level_arrow.setFixedWidth(20)
-        self._log_level_arrow.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        self._log_level_row = make_row(
+            tr("settings.global.log_level"), self._log_level_combo,
+            colors=self._colors, max_width=280, wide=True, field=True,
         )
-        self._log_level_arrow.setStyleSheet(
-            "border: none; background: transparent; font-size: 14px;"
-        )
-        log_row.addWidget(self._log_level_arrow)
-        adv_layout.addLayout(log_row)
+        self._tr_labels.append((self._log_level_row.set_label, "settings.global.log_level"))
+        adv_layout.addWidget(self._log_level_row.container)
 
         self._log_level_combo.currentTextChanged.connect(self.log_level_changed)
 
@@ -559,10 +594,14 @@ class SettingsPage(QWidget):
             minimum=1, maximum=10, step=1,
             colors=self._colors,
             on_changed=self.copilot_max_retries_changed.emit,
+            desc=tr("settings.global.copilot_retries_desc"),
         )
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["copilot_max_retries"] = row
         self._tr_labels.append((row.set_label, "settings.global.copilot_retries"))
+        self._tr_labels.append(
+            (row.set_desc, "settings.global.copilot_retries_desc")
+        )
 
         # recognition 识别参数小节标题
         rec_title = QLabel(tr("settings.global.recognition_title"))
@@ -596,10 +635,14 @@ class SettingsPage(QWidget):
             tr("settings.global.stage_override"), default="",
             colors=self._colors,
             on_changed=self.stage_override_changed.emit,
+            desc=tr("settings.global.stage_override_desc"),
         )
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["stage_override"] = row
         self._tr_labels.append((row.set_label, "settings.global.stage_override"))
+        self._tr_labels.append(
+            (row.set_desc, "settings.global.stage_override_desc")
+        )
 
         # 输出 video_time 扩展字段
         row = build_switch_row(
@@ -629,7 +672,7 @@ class SettingsPage(QWidget):
             colors=self._colors,
             on_changed=self.formation_path_changed.emit,
         )
-        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        row.set_filter("JSON files (*.json);;All files (*.*)")
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["formation"] = row
         self._tr_labels.append((row.set_label, "settings.global.formation_path"))
@@ -640,7 +683,7 @@ class SettingsPage(QWidget):
             colors=self._colors,
             on_changed=self.actions_path_changed.emit,
         )
-        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        row.set_filter("JSON files (*.json);;All files (*.*)")
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["actions"] = row
         self._tr_labels.append((row.set_label, "settings.global.actions_path"))
@@ -651,7 +694,7 @@ class SettingsPage(QWidget):
             colors=self._colors,
             on_changed=self.track_path_changed.emit,
         )
-        row.widget.set_filter("JSON files (*.json);;All files (*.*)")
+        row.set_filter("JSON files (*.json);;All files (*.*)")
         adv_layout.addWidget(row.widget)
         self._pipeline_field_rows["track"] = row
         self._tr_labels.append((row.set_label, "settings.global.track_path"))
@@ -671,58 +714,39 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.performance.title"))
         self._tr_labels.append((card.set_title, "settings.performance.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # 多线程开关行：左侧标题+说明，右侧 MaterialSwitch
-        mt_row = QHBoxLayout()
-        mt_row.setSpacing(16)
-        mt_row.setContentsMargins(0, 4, 0, 4)
-        mt_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._mt_label = QLabel(tr("settings.performance.mt_label"))
-        self._mt_label.setFont(self._typo.title_medium)
-        self._mt_label.setStyleSheet("border: none; background: transparent;")
-        text_box.addWidget(self._mt_label)
-        self._tr_labels.append((self._mt_label.setText, "settings.performance.mt_label"))
-
-        self._mt_desc = QLabel(tr("settings.performance.mt_desc"))
-        self._mt_desc.setFont(self._typo.body_medium)
-        self._mt_desc.setWordWrap(True)
-        self._dim_labels.append(self._mt_desc)
-        text_box.addWidget(self._mt_desc)
-        self._tr_labels.append((self._mt_desc.setText, "settings.performance.mt_desc"))
-        mt_row.addLayout(text_box, 1)
-
         self._mt_switch = MaterialSwitch(checked=False, colors=self._colors)
         self._mt_switch.toggled.connect(self._on_multithreading_toggled)
-        mt_row.addWidget(self._mt_switch, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addLayout(mt_row)
-
-        # 最大并发数行：标签 + QSpinBox，与 Log level 行节奏一致
-        # 仅在多线程启用时可编辑；关闭时置灰，避免用户误以为串行模式下
-        # 该值会影响行为。
-        conc_row = QHBoxLayout()
-        conc_row.setSpacing(8)
-        conc_row.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._conc_label = QLabel(tr("settings.performance.max_concurrent"))
-        self._conc_label.setStyleSheet(
-            "border: none; background: transparent;"
-            " font-weight: 500; font-size: 13px;"
+        self._mt_row = make_row(
+            tr("settings.performance.mt_label"), self._mt_switch,
+            colors=self._colors, desc=tr("settings.performance.mt_desc"),
+            max_width=80,
         )
-        conc_row.addWidget(self._conc_label)
-        self._tr_labels.append((self._conc_label.setText, "settings.performance.max_concurrent"))
+        self._tr_labels.append((self._mt_row.set_label, "settings.performance.mt_label"))
+        self._tr_labels.append((self._mt_row.set_desc, "settings.performance.mt_desc"))
+        layout.addWidget(self._mt_row.container)
+
+        # 最大并发数行：仅在多线程启用时可编辑；关闭时置灰
         self._conc_spin = QSpinBox()
+        self._conc_spin.setObjectName("settingsField")
+        self._conc_spin.setFont(self._typo.body_large)
         self._conc_spin.setRange(1, 16)
         self._conc_spin.setValue(1)
         self._conc_spin.setSingleStep(1)
         self._conc_spin.setEnabled(False)
         self._conc_spin.valueChanged.connect(self._on_max_concurrent_changed)
-        conc_row.addWidget(self._conc_spin, 1)
-        layout.addLayout(conc_row)
+        self._conc_row = make_row(
+            tr("settings.performance.max_concurrent"), self._conc_spin,
+            colors=self._colors, max_width=160, wide=True, field=True,
+            align_end=True,
+        )
+        self._tr_labels.append(
+            (self._conc_row.set_label, "settings.performance.max_concurrent")
+        )
+        layout.addWidget(self._conc_row.container)
 
         card.add_layout(layout)
         return card
@@ -741,12 +765,12 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.ffmpeg.title"))
         self._tr_labels.append((card.set_title, "settings.ffmpeg.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # 描述 + Windows-only 提示
         self._ffmpeg_desc = QLabel(tr("settings.ffmpeg.desc"))
-        self._ffmpeg_desc.setFont(self._typo.body_medium)
+        self._ffmpeg_desc.setFont(self._typo.body_small)
         self._ffmpeg_desc.setWordWrap(True)
         self._dim_labels.append(self._ffmpeg_desc)
         layout.addWidget(self._ffmpeg_desc)
@@ -759,39 +783,37 @@ class SettingsPage(QWidget):
         layout.addWidget(self._ffmpeg_platform_hint)
         self._tr_labels.append((self._ffmpeg_platform_hint.setText, "settings.ffmpeg.platform_hint"))
 
-        # 启用开关行：左侧标题+说明，右侧 MaterialSwitch
-        enable_row = QHBoxLayout()
-        enable_row.setSpacing(16)
-        enable_row.setContentsMargins(0, 4, 0, 4)
-        enable_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._ffmpeg_enable_label = QLabel(tr("settings.ffmpeg.enable_label"))
-        self._ffmpeg_enable_label.setFont(self._typo.title_medium)
-        self._ffmpeg_enable_label.setStyleSheet("border: none; background: transparent;")
-        text_box.addWidget(self._ffmpeg_enable_label)
-        self._tr_labels.append((self._ffmpeg_enable_label.setText, "settings.ffmpeg.enable_label"))
-        enable_row.addLayout(text_box, 1)
-
+        # 启用开关行：左侧标题，右侧 MaterialSwitch
         self._ffmpeg_switch = MaterialSwitch(checked=False, colors=self._colors)
         self._ffmpeg_switch.toggled.connect(self._on_ffmpeg_custom_toggled)
-        enable_row.addWidget(self._ffmpeg_switch, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addLayout(enable_row)
+        self._ffmpeg_row = make_row(
+            tr("settings.ffmpeg.enable_label"), self._ffmpeg_switch,
+            colors=self._colors, max_width=80,
+        )
+        self._tr_labels.append(
+            (self._ffmpeg_row.set_label, "settings.ffmpeg.enable_label")
+        )
+        layout.addWidget(self._ffmpeg_row.container)
 
         # 路径选择器（目录模式，选择 ffmpeg.exe 所在目录）
         self._ffmpeg_selector = FileSelector(
             mode=FileSelector.MODE_DIRECTORY,
             label=tr("settings.ffmpeg.title"),
             placeholder=tr("settings.ffmpeg.placeholder"),
+            show_label=False,
         )
         self._ffmpeg_selector.path_changed.connect(self._on_ffmpeg_path_changed)
-        self._tr_labels.append((self._ffmpeg_selector.set_label, "settings.ffmpeg.title"))
         self._tr_labels.append((self._ffmpeg_selector.set_placeholder, "settings.ffmpeg.placeholder"))
         # 开关默认关闭时路径选择器禁用
         self._ffmpeg_selector.setEnabled(False)
-        layout.addWidget(self._ffmpeg_selector)
+        self._ffmpeg_path_row = make_row(
+            tr("settings.ffmpeg.title"), self._ffmpeg_selector,
+            colors=self._colors, expanding=True, field=True,
+        )
+        self._tr_labels.append(
+            (self._ffmpeg_path_row.set_label, "settings.ffmpeg.title")
+        )
+        layout.addWidget(self._ffmpeg_path_row.container)
 
         card.add_layout(layout)
         return card
@@ -836,7 +858,7 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.track.title"))
         self._tr_labels.append((card.set_title, "settings.track.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         desc = QLabel(tr("settings.track.desc"))
@@ -919,12 +941,9 @@ class SettingsPage(QWidget):
         self._track_bs_section = QWidget()
         bs_layout = QVBoxLayout(self._track_bs_section)
         bs_layout.setContentsMargins(0, 0, 0, 0)
-        bs_layout.setSpacing(16)
+        bs_layout.setSpacing(Space.M)
 
-        bs_title = QLabel(tr("settings.track.battle_start.title"))
-        bs_title.setFont(self._typo.body_medium)
-        bs_title.setWordWrap(True)
-        self._dim_labels.append(bs_title)
+        bs_title = self._make_section_title(tr("settings.track.battle_start.title"))
         bs_layout.addWidget(bs_title)
         self._tr_labels.append((bs_title.setText, "settings.track.battle_start.title"))
 
@@ -956,7 +975,7 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.formation.title"))
         self._tr_labels.append((card.set_title, "settings.formation.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         desc = QLabel(tr("settings.formation.desc"))
@@ -988,7 +1007,7 @@ class SettingsPage(QWidget):
         card = MaterialCard(tr("settings.actions.title"))
         self._tr_labels.append((card.set_title, "settings.actions.title"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         desc = QLabel(tr("settings.actions.desc"))
@@ -1028,7 +1047,7 @@ class SettingsPage(QWidget):
         self._tr_labels.append((
             lambda s=style: card.set_title(tr("settings.compose.title", style=s)), None))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.M)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         desc = QLabel(tr("settings.compose.desc", style=style))
@@ -1069,14 +1088,8 @@ class SettingsPage(QWidget):
             on_changed=self._emit_sub(cn, "video_quality")), "settings.compose.video_quality")
 
         # 文字叠加（text_overlay）子区域标题
-        overlay_title = QLabel(tr("settings.compose.overlay_title"))
-        overlay_title.setStyleSheet(
-            f"color: {c.on_surface_variant}; border: none;"
-            f" background: transparent; font-weight: 500; font-size: 13px;"
-            f" letter-spacing: 0.5px; margin-top: 8px;"
-        )
+        overlay_title = self._make_section_title(tr("settings.compose.overlay_title"))
         layout.addWidget(overlay_title)
-        self._dim_labels.append(overlay_title)
         self._tr_labels.append((overlay_title.setText, "settings.compose.overlay_title"))
 
         tp = "text_overlay"
@@ -1105,14 +1118,8 @@ class SettingsPage(QWidget):
         # 逐操作显示（map_overlay）子区域标题（仅 style1：地图操作序号 + 面板当前操作高亮）
         # 主区仅保留总开关；数字尺寸/字号/颜色与面板高亮等细项已迁至下方高级设置容器。
         if style == "style1":
-            map_title = QLabel(tr("settings.compose.map_overlay_title"))
-            map_title.setStyleSheet(
-                f"color: {c.on_surface_variant}; border: none;"
-                f" background: transparent; font-weight: 500; font-size: 13px;"
-                f" letter-spacing: 0.5px; margin-top: 8px;"
-            )
+            map_title = self._make_section_title(tr("settings.compose.map_overlay_title"))
             layout.addWidget(map_title)
-            self._dim_labels.append(map_title)
             self._tr_labels.append((map_title.setText, "settings.compose.map_overlay_title"))
 
             mp = "map_overlay"
@@ -1124,13 +1131,23 @@ class SettingsPage(QWidget):
 
         # ── 高级字段容器（开关关闭时隐藏，不占用布局空间）──
         adv_container = QWidget()
-        adv_container.setStyleSheet("background: transparent; border: none;")
+        adv_container.setObjectName("transparentPane")
         adv_layout = QVBoxLayout(adv_container)
         adv_layout.setContentsMargins(0, 0, 0, 0)
-        adv_layout.setSpacing(16)
+        adv_layout.setSpacing(Space.M)
 
         # 行注册闭包（控件加入高级字段容器布局）
         add_adv = self._make_row_registrar(adv_layout, cn)
+
+        # 高级字段按所属主分区加小标题：避免字体/阴影字段直接跟在
+        # "逐操作显示"开关后面而看不出归属
+        text_adv_title = self._make_section_title(
+            tr("settings.compose.overlay_advanced_title")
+        )
+        adv_layout.addWidget(text_adv_title)
+        self._tr_labels.append(
+            (text_adv_title.setText, "settings.compose.overlay_advanced_title")
+        )
 
         add_adv(f"{tp}.font", build_string_row(
             tr("settings.compose.font"), default="SOURCEHANSANSCN-HEAVY.OTF", colors=c,
@@ -1197,6 +1214,14 @@ class SettingsPage(QWidget):
                 on_changed=self._emit_sub(cn, f"{tp}.bottom_margin")), "settings.compose.bottom_margin")
 
         if style == "style1":
+            map_adv_title = self._make_section_title(
+                tr("settings.compose.map_overlay_advanced_title")
+            )
+            adv_layout.addWidget(map_adv_title)
+            self._tr_labels.append(
+                (map_adv_title.setText, "settings.compose.map_overlay_advanced_title")
+            )
+
             # map_overlay 高级字段：数据驱动注册，字段清单与构建参数
             # 与原先的重复 add_adv 行逐一对应（行构建函数与键名完全一致）
             mp_fields: list[tuple[str, Callable[..., FieldRow], dict[str, Any]]] = [
@@ -1273,48 +1298,82 @@ class SettingsPage(QWidget):
             self._compose_style2_advanced_container = adv_container
         return card
 
-    def _apply_grid_layout(self, two_column: bool = False) -> None:
-        """卡片网格布局：始终保持单列竖直堆叠，
-        保留 two_column 参数签名以兼容历史调用点（忽略其值）。
+    def _card_host(self, card: QWidget) -> QWidget:
+        """把卡片包进"卡片 + 底部伸缩"的宿主，按内容宽度填满并顶部对齐
 
-        单列布局避免 2x2 错位，并让卡片保持等宽，与 Hero 标题对齐。
+        宿主垂直方向 Fixed：行高取卡片自身 sizeHint，避免 QGridLayout
+        把多余高度分给某一行而在卡片下方形成异常空白。
         """
-        # 参数兼容：历史断点会传 True，但视觉上卡片单列更协调，故忽略
+        host = self._card_hosts.get(id(card))
+        if host is None:
+            host = QWidget(self._cards_container)
+            host.setObjectName("transparentPane")
+            # 垂直 Fixed：行高取卡片自身的 sizeHint，避免 QGridLayout 把
+            # 多出来的高度分配给某一行，在短卡片下方形成异常空白
+            host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            host_layout = QVBoxLayout(host)
+            host_layout.setContentsMargins(0, 0, 0, 0)
+            host_layout.setSpacing(0)
+            host_layout.addWidget(card)
+            host_layout.addStretch(1)
+            self._card_hosts[id(card)] = host
+        return host
+
+    def _apply_grid_layout(self) -> None:
+        """设置页卡片固定单列
+
+        设置项是表单而不是仪表盘：双列会把字段控件压到约 194dp，长文件名
+        与路径被截断；同一行两张卡的高度差异还会让下一张通栏卡从较高卡片
+        底部开始，看起来"卡片不对齐"。单列后所有卡片等宽，控件宽度足够，
+        卡片之间只按顺序排列。
+        """
         for i in reversed(range(self._cards_grid.count())):
             item = self._cards_grid.itemAt(i)
             if item and item.widget():
                 self._cards_grid.removeWidget(item.widget())
 
         self._cards_grid.setColumnStretch(0, 1)
-        self._cards_grid.setColumnStretch(1, 0)
-        # 始终可见卡片单列竖直堆叠；任一卡片为 None 时跳过（FFmpeg 卡片在非 Windows 上为 None）
         r = 0
         for card in (
             self._language_card,
             self._appearance_card,
-            self._advanced_card, self._ffmpeg_card,
-            self._compose_style1_main_card, self._compose_style2_main_card,
+            self._advanced_card,
+            self._ffmpeg_card,
             self._config_card,
+            self._compose_style1_main_card,
+            self._compose_style2_main_card,
+            self._advanced_toggle_card,
+            self._collapsible_content,
         ):
-            if card is not None:
-                self._cards_grid.addWidget(card, r, 0)
-                r += 1
-        # 高级开关卡片 + 内容容器（内容 setVisible 控制显隐）
-        self._cards_grid.addWidget(self._advanced_toggle_card, r, 0)
-        r += 1
-        self._cards_grid.addWidget(self._collapsible_content, r, 0)
+            if card is None:
+                continue
+            self._cards_grid.addWidget(
+                self._card_host(card), r, 0, Qt.AlignmentFlag.AlignTop
+            )
+            r += 1
 
     def _reflow_checkbox_grid(self, two_col: bool) -> None:
-        """根据可用宽度决定复选框网格是 1 列还是 2 列"""
-        # 清空当前布局
+        """根据可用宽度决定复选框网格是 1 列还是 2 列（统一列宽）"""
         for i in reversed(range(self._checkbox_grid.count())):
             item = self._checkbox_grid.itemAt(i)
             if item and item.widget():
                 self._checkbox_grid.removeWidget(item.widget())
-        # 重新排列
         cols = 2 if two_col else 1
+        max_w = max(
+            (cb.sizeHint().width() for cb in self._config_checkboxes.values()),
+            default=0,
+        )
         for i, cb in enumerate(self._config_checkboxes.values()):
-            self._checkbox_grid.addWidget(cb, i // cols, i % cols)
+            self._checkbox_grid.addWidget(
+                cb, i // cols, i % cols,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            )
+        for column in range(self._checkbox_grid.columnCount()):
+            self._checkbox_grid.setColumnMinimumWidth(column, 0)
+            self._checkbox_grid.setColumnStretch(column, 0)
+        for column in range(cols):
+            self._checkbox_grid.setColumnMinimumWidth(column, max_w)
+        self._checkbox_grid.setColumnStretch(cols, 1)
 
     def _reflow_button_rows(self, vertical: bool) -> None:
         """窄屏下将按钮行改为垂直堆叠，避免按钮被压缩到不可点"""
@@ -1338,6 +1397,8 @@ class SettingsPage(QWidget):
                     if is_sel_row:
                         # 全选/清空按钮靠右对齐
                         layout.addWidget(w, alignment=Qt.AlignmentFlag.AlignRight)
+                    elif w is self._generate_btn:
+                        layout.addWidget(w, alignment=Qt.AlignmentFlag.AlignRight)
                     else:
                         layout.addWidget(w)
             else:
@@ -1348,8 +1409,9 @@ class SettingsPage(QWidget):
                     layout.addWidget(self._select_all_btn)
                     layout.addWidget(self._clear_btn)
                 else:
-                    layout.addWidget(self._generate_btn)
+                    # 状态文字占左侧剩余空间，主操作右对齐
                     layout.addWidget(self._config_status, 1)
+                    layout.addWidget(self._generate_btn)
 
     # ── 事件处理 ──────────────────────────────────────────
 
@@ -1378,7 +1440,8 @@ class SettingsPage(QWidget):
             else:
                 setter(tr(key))
         for cb, title_key, filename in self._checkbox_specs:
-            cb.setText(f"{tr(title_key)}  ·  {filename}")
+            cb.setText(tr(title_key))
+            cb.setToolTip(filename)
 
     def _on_theme_toggled(self, dark: bool) -> None:
         self._is_dark = dark
@@ -1417,9 +1480,9 @@ class SettingsPage(QWidget):
         self.max_concurrent_changed.emit(value)
 
     def _on_copilot_backend_changed(self, backend: str) -> None:
-        """Copilot 后端切换：转发信号并同步 MAA 路径选择框显隐（仅 maa 后端显示）"""
+        """Copilot 后端切换：转发信号并同步 MAA 路径行显隐（仅 maa 后端显示）"""
         self.copilot_backend_changed.emit(backend)
-        self._maa_selector.setVisible(backend == "maa")
+        self._maa_row.container.setVisible(backend == "maa")
 
     def _on_ffmpeg_custom_toggled(self, enabled: bool) -> None:
         # 开关切换时同步路径选择器可用态
@@ -1486,9 +1549,7 @@ class SettingsPage(QWidget):
         self._status_is_error = error
         color = self._colors.error if error else self._colors.on_surface_variant
         self._config_status.setText(text)
-        self._config_status.setStyleSheet(
-            f"color: {color}; border: none; background: transparent;"
-        )
+        set_text_color(self._config_status, color)
 
     # ── 主题与状态同步 ────────────────────────────────────
 
@@ -1496,6 +1557,8 @@ class SettingsPage(QWidget):
         """主题切换时刷新页面所有颜色相关样式"""
         self._colors = colors
         self._theme_switch.set_colors(colors)
+        self._dynamic_switch.set_colors(colors)
+        self._seed_swatch.set_colors(colors)
         self._advanced_switch.set_colors(colors)
         self._mt_switch.set_colors(colors)
         if getattr(self, "_ffmpeg_switch", None) is not None:
@@ -1509,9 +1572,7 @@ class SettingsPage(QWidget):
         # 状态文本颜色随主题刷新
         if self._config_status.text():
             color = self._colors.error if self._status_is_error else self._colors.on_surface_variant
-            self._config_status.setStyleSheet(
-                f"color: {color}; border: none; background: transparent;"
-            )
+            set_text_color(self._config_status, color)
 
     @property
     def colors(self) -> MaterialColors:
@@ -1524,6 +1585,52 @@ class SettingsPage(QWidget):
         self._theme_switch.blockSignals(True)
         self._theme_switch.set_checked(dark)
         self._theme_switch.blockSignals(False)
+
+    # ── 动态色彩（Material You）──────────────────────────
+
+    def is_dynamic_color(self) -> bool:
+        """当前动态色彩开关状态"""
+        return self._is_dynamic
+
+    def set_dynamic_color(self, enabled: bool) -> None:
+        """同步动态色彩开关（不发射信号，避免回写配置）"""
+        self._is_dynamic = bool(enabled)
+        self._dynamic_switch.blockSignals(True)
+        self._dynamic_switch.set_checked(bool(enabled))
+        self._dynamic_switch.blockSignals(False)
+        # 动态色彩关闭时种子色不参与推导，置灰但保留用户选择
+        self._seed_swatch.setEnabled(bool(enabled))
+        self._seed_value.setEnabled(bool(enabled))
+
+    def seed_color(self) -> str:
+        """当前种子色"""
+        return self._seed_color
+
+    def set_seed_color(self, color: str) -> None:
+        """同步种子色（非法值忽略）"""
+        try:
+            normalized = normalize_hex(color)
+        except ValueError:
+            return
+        self._seed_color = normalized
+        self._seed_value.setText(normalized)
+        self._seed_swatch.set_color(normalized)
+
+    def _on_dynamic_color_toggled(self, enabled: bool) -> None:
+        self._is_dynamic = enabled
+        self._seed_swatch.setEnabled(enabled)
+        self._seed_value.setEnabled(enabled)
+        self.dynamic_color_changed.emit(enabled)
+
+    def _on_pick_seed_color(self) -> None:
+        dialog = ColorPickerDialog(
+            initial=self._seed_color, colors=self._colors, parent=self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            text = dialog.get_color()
+            if text:
+                self.set_seed_color(text)
+                self.seed_color_changed.emit(self._seed_color)
 
     # ── 高级配置控件公开访问 ────────────────────────────────
 
@@ -1591,8 +1698,8 @@ class SettingsPage(QWidget):
         row = self._pipeline_field_rows.get("copilot_backend")
         if row:
             row.set_value(backend, block_signal=True)
-        # 同步 MAA 路径选择框显隐（仅 maa 后端显示）
-        self._maa_selector.setVisible(backend == "maa")
+        # 同步 MAA 路径行显隐（仅 maa 后端显示）
+        self._maa_row.container.setVisible(backend == "maa")
 
     def set_copilot_timeout(self, value: int) -> None:
         row = self._pipeline_field_rows.get("copilot_timeout_seconds")
@@ -1713,40 +1820,17 @@ class SettingsPage(QWidget):
     def _apply_colors(self) -> None:
         # 注意：不要在此调用 self.setStyleSheet()，否则会覆盖整棵 widget tree
         # 的全局 QSS，导致 MaterialCard（白底圆角）与 MaterialButton 失去样式。
-        # 页面整体背景由全局 QWidget { background-color } 规则统一控制；
-        # 此处仅刷新辅助文本颜色（仅作用于单标签，不影响子控件）。
+        # 页面整体背景由 QPalette::Window 统一绘制；
+        # 辅助文本颜色走 QPalette（逐只 setStyleSheet 是主题切换的卡顿源之一）
         dim = self._colors.on_surface_variant
         for w in self._dim_labels:
-            w.setStyleSheet(
-                f"color: {dim}; border: none; background: transparent;"
-            )
+            set_text_color(w, dim)
         # 同步刷新"重置配置文件"卡片内的复选框配色：MaterialCheckBox 在
         # 初始化时使用默认浅色主题（indicator fill = surface = 白），若不在
         # 主题切换时显式调用 set_colors()，深色模式下 indicator 会保持白色
         # 矩形块，与深色背景形成刺眼对比。
         for cb in getattr(self, "_config_checkboxes", {}).values():
             cb.set_colors(self._colors)
-        # 高级卡片内 Log level 标签：使用 on_surface_variant 跟随主题
-        if getattr(self, "_log_level_label", None) is not None:
-            self._log_level_label.setStyleSheet(
-                f"color: {dim}; border: none; background: transparent;"
-                f" font-weight: 500; font-size: 13px;"
-            )
-        # 高级卡片内 Log level 下拉箭头：使用 on_surface_variant 跟随主题
-        if getattr(self, "_log_level_arrow", None) is not None:
-            self._log_level_arrow.setStyleSheet(
-                f"color: {dim}; border: none; background: transparent;"
-                f" font-size: 14px;"
-            )
-        # 高级卡片内 Log level 下拉框：与 FileSelector 内 QLineEdit
-        # 保持完全一致的视觉规格（surface_variant 底色、outline_variant
-        # 边框、12px 圆角、聚焦 2px primary 边框）
-        if getattr(self, "_log_level_combo", None) is not None:
-            self._log_level_combo.setStyleSheet(self._log_level_combo_qss())
-        # 语言切换卡片内下拉框：同步主题色到内联样式（含下拉箭头、
-        # hover/focus 状态、二级菜单配色），确保深色模式下颜色正确
-        if getattr(self, "_lang_combo", None) is not None:
-            self._lang_combo.setStyleSheet(self._lang_combo_qss())
         # 高级卡片内 MAA / Output 文件选择器：同步主题色到
         # 内联样式（输入框 + 浏览按钮），确保与主页 Video/Background 一致
         for selector in (getattr(self, "_maa_selector", None),
@@ -1756,231 +1840,32 @@ class SettingsPage(QWidget):
         # FFmpeg 卡片内文件选择器：同步主题色
         if getattr(self, "_ffmpeg_selector", None) is not None:
             self._ffmpeg_selector.set_colors(self._colors)
-        # 性能卡片内"最大并发数"标签：与 Log level 标签同色
-        if getattr(self, "_conc_label", None) is not None:
-            self._conc_label.setStyleSheet(
-                f"color: {dim}; border: none; background: transparent;"
-                f" font-weight: 500; font-size: 13px;"
-            )
-        # 性能卡片内 QSpinBox：与 Log level 下拉框保持一致视觉规格
-        if getattr(self, "_conc_spin", None) is not None:
-            self._conc_spin.setStyleSheet(self._conc_spin_qss())
         # 同步刷新卡片背景色：MaterialCard 使用 paintEvent 自绘圆角背景，
-        # 此处需调用 set_surface_color 更新颜色，确保暗色模式正确
-        all_cards = [
-            self._language_card,
-            self._appearance_card, self._config_card, self._advanced_card,
-            self._ffmpeg_card,
-            self._compose_style1_main_card, self._compose_style2_main_card,
-            self._advanced_toggle_card,
-            self._track_card, self._formation_card, self._actions_card,
-            self._performance_card,
-        ]
-        for card in all_cards:
-            if card is not None:
-                card.set_surface_color(self._colors.surface)
-        # 同步刷新按钮配色，使其在主题切换后保持视觉一致
-        if getattr(self, "_select_all_btn", None) is not None:
-            self._select_all_btn.setStyleSheet(self._filled_button_qss())
-        if getattr(self, "_clear_btn", None) is not None:
-            self._clear_btn.setStyleSheet(self._outlined_button_qss())
-        if getattr(self, "_generate_btn", None) is not None:
-            self._generate_btn.setStyleSheet(self._filled_button_qss())
-
-    # ── 内联样式辅助（避免依赖全局 QSS 的级联） ───────────
-
-    def _filled_button_qss(
-        self, font_size: int = 14, font_weight: int = 500,
-        padding: str = "10px 24px",
-    ) -> str:
-        """filled/tonal 按钮的内联样式：主色填充、白色文字、圆角
-
-        委托 gui.theme.button_qss.filled_button_qss 实现（修复 M15）。
-        """
-        return _build_filled_button_qss(
-            self._colors,
-            font_size=font_size,
-            font_weight=font_weight,
-            padding=padding,
-        )
-
-    def _outlined_button_qss(
-        self, font_size: int = 14, font_weight: int = 500,
-        padding: str = "10px 24px",
-    ) -> str:
-        """outlined 按钮的内联样式：透明背景、主色描边与文字
-
-        委托 gui.theme.button_qss.outlined_button_qss 实现（修复 M15）。
-        """
-        return _build_outlined_button_qss(
-            self._colors,
-            font_size=font_size,
-            font_weight=font_weight,
-            padding=padding,
-        )
-
-    def _log_level_combo_qss(self, error: bool = False) -> str:
-        """Log level 下拉框内联样式：与主界面 Video 路径输入框
-        （FileSelector 内 QLineEdit，由全局 QSS 驱动）保持完全一致的
-        视觉规格 —— surface_variant 底色、outline_variant 边框、12px 圆角、
-        8px/12px 内边距、20px 最小高度、聚焦时 2px primary 边框。
-
-        通过 ``error`` 参数切换错误状态（与 FileSelector.set_valid 行为一致：
-        2px solid error 边框），便于上层按需标记非法输入。
-        """
-        c = self._colors
-        border = f"2px solid {c.error}" if error else f"1px solid {c.outline_variant}"
-        return (
-            "QComboBox {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface};"
-            f"  border: {border};"
-            f"  border-radius: 12px;"
-            f"  padding: 8px 12px;"
-            f"  min-height: 20px;"
-            "}"
-            "QComboBox:focus {"
-            f"  border: 2px solid {c.primary};"
-            "}"
-            "QComboBox:disabled {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface_variant};"
-            "}"
-            "QComboBox QAbstractItemView {"
-            f"  background-color: {c.surface};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline};"
-            f"  border-radius: 8px;"
-            f"  selection-background-color: {c.primary_container};"
-            f"  selection-color: {c.on_primary_container};"
-            f"  outline: none;"
-            "}"
-        )
-
-    def _lang_combo_qss(self) -> str:
-        """语言下拉框内联样式：与 Log level 下拉框（``_log_level_combo_qss``）
-        及 ``settings_row_builders._combo_qss`` 保持完全一致的视觉规格 ——
-        surface_variant 底色、outline_variant 边框、12px 圆角、8px/12px 内边距、
-        20px 最小高度、聚焦时 2px primary 边框。"""
-        c = self._colors
-        return (
-            "QComboBox {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline_variant};"
-            f"  border-radius: 12px;"
-            f"  padding: 8px 12px;"
-            f"  min-height: 20px;"
-            "}"
-            "QComboBox:focus {"
-            f"  border: 2px solid {c.primary};"
-            "}"
-            "QComboBox:disabled {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface_variant};"
-            "}"
-            "QComboBox QAbstractItemView {"
-            f"  background-color: {c.surface};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline};"
-            f"  border-radius: 8px;"
-            f"  selection-background-color: {c.primary_container};"
-            f"  selection-color: {c.on_primary_container};"
-            f"  outline: none;"
-            "}"
-        )
-
-    def _conc_spin_qss(self) -> str:
-        """最大并发数 QSpinBox 内联样式：与 Log level 下拉框保持一致的
-        视觉规格（surface_variant 底色、outline_variant 边框、12px 圆角、
-        聚焦 2px primary 边框）。
-
-        右侧原生上下箭头按钮已隐藏（width: 0），改由纯文本输入方式设置
-        数值；用户仍可通过键盘输入或滚轮调整，保持界面简洁。"""
-        c = self._colors
-        return (
-            "QSpinBox {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline_variant};"
-            f"  border-radius: 12px;"
-            f"  padding: 8px 12px;"
-            f"  min-height: 20px;"
-            "}"
-            "QSpinBox:focus {"
-            f"  border: 2px solid {c.primary};"
-            "}"
-            "QSpinBox:disabled {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface_variant};"
-            "}"
-            # 隐藏右侧上下箭头按钮
-            "QSpinBox::up-button, QSpinBox::down-button {"
-            "  width: 0px;"
-            "  border: none;"
-            "}"
-            "QSpinBox::up-arrow, QSpinBox::down-arrow {"
-            "  width: 0px;"
-            "  height: 0px;"
-            "  border: none;"
-            "}"
-        )
+        # 卡片背景由 CardFrame 自订阅主题信号；按钮为自绘组件，同样自动跟随，
+        # 因此这里不再枚举卡片与按钮（历史实现每次新增卡片都要往清单里加一行）
 
     # ── 响应式 ────────────────────────────────────────────
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if getattr(self, "_cards_grid", None) is None:
+    def set_size_class(self, size_class: str) -> None:
+        """按 MD3 窗口尺寸类别调整页边距、卡片列数与控件排布
+
+        断点由 ``WindowSizeClass`` 统一提供（600 / 840），不再使用
+        480 / 720 / 1000 三个页面私有魔数——否则窗口与页面各自判定，
+        会出现"导航已收起、卡片还是双列"的错位。
+        """
+        if size_class == getattr(self, "_size_class", None):
             return
-        w = self.width()
-        # 三档断点（以 settings page 宽度计）：
-        #   >= 1000  双列卡片 + 2 列复选框 + 横向按钮
-        #   720~1000  双列卡片 + 1 列复选框 + 横向按钮
-        #                （单列复选框可保留较长文件名不被裁切）
-        #   480~720  单列卡片 + 1 列复选框 + 横向按钮
-        #   < 480   单列卡片 + 1 列复选框 + 纵向按钮
-        two_col_cards = w >= 720
-        two_col_checkboxes = w >= 1000
-        vertical_buttons = w < 480
-        # 断点未跨越时跳过重排：_apply_grid_layout/_reflow_* 是全量
-        # remove/add 操作，连续拖拽窗口时逐帧执行会明显卡顿
-        if (
-            two_col_cards != getattr(self, "_last_two_col_cards", None)
-            or two_col_checkboxes != getattr(self, "_last_two_col_cb", None)
-            or vertical_buttons != getattr(self, "_last_vertical_btn", None)
-        ):
-            self._last_two_col_cards = two_col_cards
-            self._last_two_col_cb = two_col_checkboxes
-            self._last_vertical_btn = vertical_buttons
-            self._apply_grid_layout(two_column=two_col_cards)
-            self._reflow_checkbox_grid(two_col=two_col_checkboxes)
-            self._reflow_button_rows(vertical=vertical_buttons)
-        # 页面边距随宽度收缩
+        self._size_class = size_class
+
+        margin = Margin.page(size_class)
         root_layout = self.layout()
         if isinstance(root_layout, QVBoxLayout):
-            margin = (20, 24, 20, 24) if w < 560 else (40, 40, 40, 40)
-            if getattr(self, "_last_margins", None) != margin:
-                self._last_margins = margin
-                root_layout.setContentsMargins(*margin)
+            root_layout.setContentsMargins(margin, margin, margin, margin)
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        # 仅首次显示时执行全量重排：showEvent 在每次切换页面/恢复窗口时
-        # 都会触发，重复执行 _apply_grid_layout 等全量 remove/add 操作
-        # 会造成明显卡顿，后续显示直接跳过（断点变化由 resizeEvent 处理）
-        if self._shown_once:
-            return
-        self._shown_once = True
-        # 首次显示时强制根据当前宽度刷新一次布局，避免初始默认布局
-        # 与响应式断点不一致（例如默认是 2 列卡片 + 2 列复选框）。
-        # 清除断点缓存以强制 resizeEvent/showEvent 路径真正执行重排
-        for attr in ("_last_two_col_cards", "_last_two_col_cb",
-                     "_last_vertical_btn", "_last_margins"):
-            if hasattr(self, attr):
-                delattr(self, attr)
-        if getattr(self, "_cards_grid", None) is not None:
-            w = self.width()
-            self._apply_grid_layout(two_column=w >= 720)
-            self._reflow_checkbox_grid(two_col=w >= 1000)
-            self._reflow_button_rows(vertical=w < 480)
+        self._sync_checkbox_columns()
+        self._reflow_button_rows(vertical=size_class == WindowSizeClass.COMPACT)
+
+        header = getattr(self, "_header", None)
+        if header is not None:
+            header.set_size_class(size_class)
 

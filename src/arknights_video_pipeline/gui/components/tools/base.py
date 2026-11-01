@@ -13,6 +13,7 @@ from typing import Any
 from PyQt6.QtWidgets import QWidget
 
 from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 
 class ToolView(QWidget):
@@ -33,7 +34,7 @@ class ToolView(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config_proxy = config_proxy
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
 
     def set_colors(self, colors: MaterialColors) -> None:
         """主题切换时刷新配色（子类覆盖）"""

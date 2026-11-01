@@ -16,7 +16,7 @@ from arknights_video_pipeline.gui.assets.app_icon import (
     apply_windows_taskbar_identity,
     load_app_icon,
 )
-from arknights_video_pipeline.gui.theme import MaterialStyle, MaterialTypography
+from arknights_video_pipeline.gui.theme import theme_controller
 from arknights_video_pipeline.gui.theme.font_manager import FontManager
 
 
@@ -60,9 +60,9 @@ def create_application(argv: list[str]) -> QApplication:
     # 注册内置字体（Roboto / Noto Sans SC），缺失时静默回退系统字体
     FontManager.load()
 
-    # 应用 Material Design 3 主题
-    style = MaterialStyle(typography=MaterialTypography())
-    style.apply(app)
+    # 应用 Material Design 3 主题（统一由 ThemeController 调度：
+    # QSS + QPalette + 全局字体，并向已订阅的组件广播 theme_changed）
+    theme_controller().apply(dark=False, app=app)
 
     return app
 

@@ -1,251 +1,220 @@
-"""
-gui.components.message_dialog - Material 风格消息/确认对话框
+"""gui.components.message_dialog - MD3 Basic Dialog
 
-采用与主页一致的 Material 风格：白色圆角卡片 + 主题色按钮。
+规格（MD3）：
+
+- 容器 28dp 圆角、``surface_container_high``、内边距 24dp、宽 280-560dp；
+- 图标 24dp（无彩色底盘），颜色取 ``secondary`` / ``warning`` / ``error``；
+- 标题 ``headline_small``（24/400），正文 ``body_medium``（14/400，
+  ``on_surface_variant``）；
+- 按钮为 **text 按钮**，右对齐、间距 8dp（历史上是彩色圆图标 + 实心按钮，
+  属于"第三方卡片弹窗"的形态，与页面的克制语言脱节）。
+
 取代 ``QMessageBox``，避免 OK / Yes / No 按钮被默认 QSS 裁切/遮挡。
 
-支持三种使用方式：
+支持四种用法：
     InfoDialog / WarningDialog / CriticalDialog —— 单按钮信息提示
-    ConfirmDialog —— Yes / No 确认
+    ConfirmDialog —— 取消 / 确认
 """
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy,
+    QDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from arknights_video_pipeline.gui.components.material_card import CardFrame
+from arknights_video_pipeline.gui.assets.icons.nav_icons import make_icon_pixmap
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
+from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.i18n import tr
-from arknights_video_pipeline.gui.theme import (
-    MaterialColors,
-    filled_button_qss as _build_filled_button_qss,
-    outlined_button_qss as _build_outlined_button_qss,
-)
+from arknights_video_pipeline.gui.theme.colors import MaterialColors
+from arknights_video_pipeline.gui.theme.shape import ShapeRole
+from arknights_video_pipeline.gui.theme.spacing import Space
+from arknights_video_pipeline.gui.theme.state import Elevation
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
+from arknights_video_pipeline.gui.theme.typography import MaterialTypography
+
+__all__ = [
+    "ConfirmDialog",
+    "CriticalDialog",
+    "InfoDialog",
+    "WarningDialog",
+]
+
+_ICON_SIZE = 24
 
 
 class _BaseMessageDialog(QDialog):
-    """带圆形 icon + 标题 + 描述 + 按钮的 Material 风格 dialog。"""
+    """MD3 基础对话框（图标 + 标题 + 正文 + 文本按钮）"""
 
-    def __init__(self, title: str, text: str, icon_text: str,
-                 icon_role: str = "secondary",
-                 colors: MaterialColors | None = None,
-                 parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        text: str,
+        icon_name: str,
+        icon_role: str = "secondary",
+        colors: MaterialColors | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._colors = colors or MaterialColors.light()
-        # icon 背景角色："secondary" 或 "error"，色值取自主题 Token，
-        # 主题切换时随 set_colors 刷新（不再硬编码十六进制）。
+        self._colors = colors or theme_controller().colors()
+        self._icon_name = icon_name
         self._icon_role = icon_role
+        self._typography = MaterialTypography()
+
         self.setWindowTitle(title)
         self.setModal(True)
-        # 显式最小尺寸 + 适配内容高度，按钮不会被裁切
-        self.setMinimumSize(360, 180)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(560)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        # 不设 WA_StyledBackground，让 QDialog 走系统背景，
-        # 由 CardFrame 自身画白色圆角卡片，避免 minimum 失效
 
         outer = QVBoxLayout(self)
-        # 较大外层 margin 防止按钮贴近屏幕边缘
-        outer.setContentsMargins(24, 24, 24, 24)
+        outer.setContentsMargins(Space.XL, Space.XL, Space.XL, Space.XL)
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = CardFrame()
-        self._card = card
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(28, 24, 28, 24)
-        card_layout.setSpacing(16)
+        # MD3 对话框容器：surface_container_high + 28dp 圆角 + elevation 3
+        self._card = CardFrame(
+            surface_role="surface_container_high",
+            radius=ShapeRole.DIALOG,
+            variant="elevated",
+        )
+        self._card.set_elevation(Elevation.DIALOG)
+        self._card.setStyleSheet("background: transparent; border: none;")
+        card_layout = QVBoxLayout(self._card)
+        card_layout.setContentsMargins(Space.XL, Space.XL, Space.XL, Space.XL)
+        card_layout.setSpacing(Space.XL)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # 顶部：圆形 icon（左对齐，不与标题挤在一起）
         header = QHBoxLayout()
-        header.setSpacing(16)
+        header.setSpacing(Space.L)
         header.setContentsMargins(0, 0, 0, 0)
-        icon = QLabel(icon_text)
-        icon.setObjectName("msgIcon")
-        icon.setFixedSize(40, 40)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(self._icon_qss())
-        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        self._icon = QLabel(self._card)
+        self._icon.setFixedSize(_ICON_SIZE, _ICON_SIZE)
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon.setStyleSheet("background: transparent; border: none;")
+        header.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(6)
+        text_col.setSpacing(Space.XS)
         text_col.setContentsMargins(0, 0, 0, 0)
 
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("msgTitle")
-        title_lbl.setWordWrap(True)
-        title_lbl.setStyleSheet(
-            f"color: {self._colors.on_surface}; background: transparent; border: none;"
-            " font-size: 18px; font-weight: 600;"
-        )
-        text_col.addWidget(title_lbl)
+        self._title_label = QLabel(title, self._card)
+        self._title_label.setWordWrap(True)
+        self._title_label.setFont(self._typography.font("headline_small"))
+        text_col.addWidget(self._title_label)
 
-        body_lbl = QLabel(text)
-        body_lbl.setObjectName("msgBody")
-        body_lbl.setWordWrap(True)
-        body_lbl.setStyleSheet(
-            f"color: {self._colors.on_surface_variant}; background: transparent; border: none;"
-            " font-size: 14px; line-height: 1.5;"
-        )
-        text_col.addWidget(body_lbl)
+        self._body_label = QLabel(text, self._card)
+        self._body_label.setWordWrap(True)
+        self._body_label.setFont(self._typography.font("body_medium"))
+        text_col.addWidget(self._body_label)
 
         header.addLayout(text_col, 1)
         card_layout.addLayout(header)
 
-        # 按钮行
         self._button_row = QHBoxLayout()
-        self._button_row.setSpacing(8)
-        self._button_row.setContentsMargins(0, 4, 0, 0)
+        self._button_row.setSpacing(Space.S)
+        self._button_row.setContentsMargins(0, 0, 0, 0)
         self._button_row.addStretch()
         card_layout.addLayout(self._button_row)
 
-        outer.addWidget(card)
-        # 按钮构建/样式刷新/尺寸适配统一延迟到 _finalize()：子类（如
-        # ConfirmDialog）需在 super().__init__() 之后先初始化按钮文案
-        # 属性，再显式调用 _finalize()，避免基类构造期间读取未定义属性
+        outer.addWidget(self._card)
 
-    # ── 子类钩子 ─────────────────────────────────────────
-    def _build_buttons(self) -> None:
-        """子类重写：在 self._button_row 中放置按钮。"""
-        raise NotImplementedError
-
-    def _finalize(self) -> None:
-        """构建按钮 → 刷新样式 → 适配尺寸（子类构造完成后显式调用）
-
-        基类构造不再直接调用 ``_build_buttons``：ConfirmDialog 等子类
-        需要先设置按钮文案属性（``_confirm_text`` / ``_cancel_text``），
-        再统一走此入口，保证按钮文案行为不变。
-        """
-        # 先建按钮，再刷样式，最后适配尺寸
-        self._build_buttons()
         self._apply_colors()
-        self.adjustSize()
+        theme_controller().theme_changed.connect(self.set_colors)
 
-    # ── 主题同步 ─────────────────────────────────────────
-    def _icon_qss(self) -> str:
-        """icon 圆形背景 QSS：按角色取 Token 色，文字用 on_* 保证对比度"""
+    # ── 主题 ─────────────────────────────────────────────
+
+    def _icon_color(self) -> str:
         c = self._colors
-        if self._icon_role == "error":
-            bg, fg = c.error, c.on_error
-        else:
-            bg, fg = c.secondary, c.on_secondary
-        return (
-            f"background-color: {bg}; color: {fg};"
-            " border: none; border-radius: 20px;"
-            " font-size: 20px; font-weight: 600;"
-        )
+        return {
+            "error": c.error,
+            "warning": c.warning,
+        }.get(self._icon_role, c.secondary)
 
     def _apply_colors(self) -> None:
         c = self._colors
-        self._card.set_surface_color(c.surface)
-        icon = self.findChild(QLabel, "msgIcon")
-        if icon is not None:
-            icon.setStyleSheet(self._icon_qss())
-        for lbl in self.findChildren(QLabel):
-            if lbl.objectName() == "msgTitle":
-                lbl.setStyleSheet(
-                    f"color: {c.on_surface}; background: transparent; border: none;"
-                    " font-size: 18px; font-weight: 600;"
-                )
-            elif lbl.objectName() == "msgBody":
-                lbl.setStyleSheet(
-                    f"color: {c.on_surface_variant}; background: transparent; border: none;"
-                    " font-size: 14px; line-height: 1.5;"
-                )
-        # 让子类在颜色变化时重新构建按钮颜色
-        self._refresh_buttons()
-
-    def _refresh_buttons(self) -> None:
-        """子类可重写：根据 self._colors 刷新按钮样式。"""
-        pass
+        pixmap = make_icon_pixmap(self._icon_name, self._icon_color(), size_px=_ICON_SIZE)
+        if pixmap is not None:
+            self._icon.setPixmap(pixmap)
+        self._title_label.setStyleSheet(
+            f"color: {c.on_surface}; background: transparent; border: none;"
+        )
+        self._body_label.setStyleSheet(
+            f"color: {c.on_surface_variant}; background: transparent; border: none;"
+        )
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
         self._apply_colors()
 
-    # ── 按钮 QSS 工厂 ─────────────────────────────────────
-    def _filled_button_qss(self, primary: bool = True) -> str:
-        """filled button 内联 QSS，避免被全局 QPushButton 样式表覆盖。
+    # ── 按钮工厂 ─────────────────────────────────────────
 
-        委托 gui.theme.button_qss.filled_button_qss 实现（修复 M15）。
-        ``primary=False`` 时退化为 outlined 风格以保持向后兼容。
+    def _add_button(self, text: str, *, primary: bool = False) -> MaterialButton:
+        """追加一个 text 按钮（MD3 对话框的按钮形态）
+
+        MD3 对话框的操作区使用 text 按钮，靠文字颜色而不是填充色表达
+        "主操作"；``primary`` 仅决定按钮是否获得默认焦点。
         """
+        button = MaterialButton(text, MaterialButton.VARIANT_TEXT)
         if primary:
-            return _build_filled_button_qss(self._colors)
-        return _build_outlined_button_qss(self._colors)
-
-    def _outlined_button_qss(self) -> str:
-        """outlined button 内联 QSS。
-
-        委托 gui.theme.button_qss.outlined_button_qss 实现（修复 M15）。
-        """
-        return _build_outlined_button_qss(self._colors)
+            button.setDefault(True)
+        button.setMinimumWidth(64)
+        self._button_row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        return button
 
 
 class InfoDialog(_BaseMessageDialog):
-    """信息提示对话框（成功/普通信息，单个 OK 按钮）。"""
+    """信息提示对话框（成功/普通信息，单个按钮）"""
 
     def __init__(self, title: str, text: str,
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(
-            title=title, text=text,
-            icon_text="i", icon_role="secondary",
+            title=title, text=text, icon_name="info", icon_role="secondary",
             colors=colors, parent=parent,
         )
-        self._finalize()
-
-    def _build_buttons(self) -> None:
-        ok_btn = MaterialButton(tr("dialog.ok"))
-        ok_btn.setMinimumWidth(96)
-        ok_btn.setMinimumHeight(40)
-        ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        ok_btn = self._add_button(tr("dialog.ok"))
         ok_btn.clicked.connect(self.accept)
-        self._button_row.addWidget(ok_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._ok_btn = ok_btn
-
-    def _refresh_buttons(self) -> None:
-        if getattr(self, "_ok_btn", None) is not None:
-            self._ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        self.adjustSize()
 
 
 class WarningDialog(_BaseMessageDialog):
-    """警告对话框（单个 OK 按钮，error 主题色）。"""
+    """警告对话框（单个按钮，warning 色调）"""
 
     def __init__(self, title: str, text: str,
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(
-            title=title, text=text,
-            icon_text="!", icon_role="error",
+            title=title, text=text, icon_name="warning", icon_role="warning",
             colors=colors, parent=parent,
         )
-        self._finalize()
-
-    def _build_buttons(self) -> None:
-        ok_btn = MaterialButton(tr("dialog.ok"))
-        ok_btn.setMinimumWidth(96)
-        ok_btn.setMinimumHeight(40)
-        ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        ok_btn = self._add_button(tr("dialog.ok"))
         ok_btn.clicked.connect(self.accept)
-        self._button_row.addWidget(ok_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._ok_btn = ok_btn
-
-    def _refresh_buttons(self) -> None:
-        if getattr(self, "_ok_btn", None) is not None:
-            self._ok_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        self.adjustSize()
 
 
-class CriticalDialog(WarningDialog):
-    """严重错误对话框（继承 WarningDialog，单个 OK 按钮）。"""
-    pass
+class CriticalDialog(_BaseMessageDialog):
+    """严重错误对话框（单个按钮，error 色调）"""
+
+    def __init__(self, title: str, text: str,
+                 colors: MaterialColors | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(
+            title=title, text=text, icon_name="error", icon_role="error",
+            colors=colors, parent=parent,
+        )
+        ok_btn = self._add_button(tr("dialog.ok"))
+        ok_btn.clicked.connect(self.accept)
+        self._ok_btn = ok_btn
+        self.adjustSize()
 
 
 class ConfirmDialog(_BaseMessageDialog):
-    """确认对话框（Cancel / Confirm 两个按钮）。"""
+    """确认对话框（取消 / 确认）"""
 
     CONFIRMED = 1
     CANCELLED = 0
@@ -256,40 +225,19 @@ class ConfirmDialog(_BaseMessageDialog):
                  colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(
-            title=title, text=text,
-            icon_text="?", icon_role="secondary",
+            title=title, text=text, icon_name="info", icon_role="secondary",
             colors=colors, parent=parent,
         )
-        # super().__init__() 完成后再初始化按钮文案属性（原实现先于
-        # 基类构造赋值，依赖 PyQt 未初始化实例可赋属性的行为，顺序不安全），
-        # 随后统一走 _finalize() 构建按钮，按钮文案行为不变
-        self._confirm_text = confirm_text or tr("dialog.confirm")
-        self._cancel_text = cancel_text or tr("dialog.cancel")
-        self._finalize()
-
-    def _build_buttons(self) -> None:
-        cancel_btn = MaterialButton(self._cancel_text, variant=MaterialButton.VARIANT_OUTLINED)
-        cancel_btn.setMinimumWidth(96)
-        cancel_btn.setMinimumHeight(40)
-        cancel_btn.setStyleSheet(self._outlined_button_qss())
+        cancel_btn = self._add_button(cancel_text or tr("dialog.cancel"))
         cancel_btn.clicked.connect(self._on_cancel)
-        self._button_row.addWidget(cancel_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._cancel_btn = cancel_btn
 
-        confirm_btn = MaterialButton(self._confirm_text)
-        confirm_btn.setMinimumWidth(96)
-        confirm_btn.setMinimumHeight(40)
-        confirm_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        confirm_btn = self._add_button(confirm_text or tr("dialog.confirm"), primary=True)
         confirm_btn.setDefault(True)
         confirm_btn.clicked.connect(self._on_confirm)
-        self._button_row.addWidget(confirm_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._confirm_btn = confirm_btn
 
-    def _refresh_buttons(self) -> None:
-        if getattr(self, "_cancel_btn", None) is not None:
-            self._cancel_btn.setStyleSheet(self._outlined_button_qss())
-        if getattr(self, "_confirm_btn", None) is not None:
-            self._confirm_btn.setStyleSheet(self._filled_button_qss(primary=True))
+        self.adjustSize()
 
     def _on_confirm(self) -> None:
         self.done(self.CONFIRMED)

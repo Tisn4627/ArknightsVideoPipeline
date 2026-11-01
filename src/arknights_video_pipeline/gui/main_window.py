@@ -10,22 +10,27 @@ gui.main_window - 主窗口
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QEvent, QObject
+from PyQt6.QtCore import (
+    QEvent, QObject, QPointF, QPropertyAnimation, QTimer, Qt,
+)
 from PyQt6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QScrollArea, QComboBox,
+    QScrollArea, QComboBox, QGraphicsOpacityEffect,
     QApplication, QLabel, QFrame, QStackedWidget,
 )
 
+from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
+
 from arknights_video_pipeline.gui.components import (
     AboutPage, BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
-    MaterialCheckBox, NavigationRail, ProgressCard, SettingsPage, ToolsPage,
+    MaterialCheckBox, MaterialFab, MaterialTextField, NavigationBar, NavigationRail,
+    PageHeader, ProgressCard, SettingsPage, ToolsPage,
 )
 from arknights_video_pipeline.gui.i18n import init_i18n, i18n, tr
 from arknights_video_pipeline.gui.theme import (
-    MaterialColors, MaterialStyle, MaterialTypography, apply_titlebar_theme,
-    GuiConfig,
+    Grid, GuiConfig, Layout, Margin, MaterialColors, MaterialTypography, Space,
+    WindowSizeClass, apply_titlebar_theme, set_text_color, theme_controller,
 )
 from arknights_video_pipeline.service import ConfigProxy, PipelineService
 
@@ -54,6 +59,9 @@ class MainWindow(QMainWindow):
         # _on_validation_finished 消费）
         self._pending_run_paths: list[str] = []
         self._pending_run_json_paths: list[str | None] = []
+        # UI 运行态（与 service.is_running() 独立）：点击"开始"后立即置位，
+        # 避免后台线程启动前的空档里 FAB 仍然可见可点。
+        self._ui_running = False
         # 标记首次 showEvent 是否已处理（用于在窗口句柄就绪后应用标题栏主题）
         self._titlebar_applied = False
 
@@ -61,13 +69,17 @@ class MainWindow(QMainWindow):
         init_i18n(language=self._gui_config.language(), parent=self)
 
         self.setWindowTitle(tr("app.title"))
-        self.setMinimumSize(720, 480)
-        self.resize(900, 600)
+        # 最小尺寸对齐 MD3 compact 档（< 600）：440dp 是设置页最窄卡片
+        # （字段行 180 + 16 + 160 + 卡片内边距 32 = 388）加紧凑页边距 32 后
+        # 不产生横向滚动条的下限；仍远小于 600，窄窗可用而不是被卡在 720。
+        self.setMinimumSize(440, 480)
+        self.resize(1000, 700)
 
         self._progress_card = ProgressCard()
 
         self._build_central_widget()
-        # 启动时按配置主题应用 QSS（create_application 默认应用浅色，需覆盖）
+        # 启动时按配置主题应用（create_application 已装浅色 QSS + 调色板，
+        # 配色一致时 ThemeController 会跳过重绘）
         self._apply_initial_theme()
         self._connect_signals()
         self._load_config_to_ui()
@@ -78,29 +90,53 @@ class MainWindow(QMainWindow):
 
     def _build_central_widget(self) -> None:
         central = QWidget()
+        central.setObjectName("appShell")
+        central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self._central = central
+        # 外壳：侧边 rail + 页面栈；compact 档改为底部导航条
+        shell = QVBoxLayout(central)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
 
-        # 左侧 Navigation Rail
-        self._nav_rail = NavigationRail(colors=MaterialColors.light())
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        # 左侧 Navigation Rail（扩宽档显示图标 + 标签，中等档仅图标）
+        self._nav_rail = NavigationRail(colors=theme_controller().colors())
         self._nav_rail.selection_changed.connect(self._on_nav_changed)
-        main_layout.addWidget(self._nav_rail)
+        body_layout.addWidget(self._nav_rail)
 
-        # 右侧页面栈：Home / Settings
+        # 右侧页面栈：Home / Settings / Tools / About
         self._stack = QStackedWidget()
-        main_layout.addWidget(self._stack, 1)
+        self._stack.setObjectName("pageStack")
+        self._stack.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        body_layout.addWidget(self._stack, 1)
+        shell.addWidget(body, 1)
+
+        # compact 档底部导航（与 rail 共用 selection_changed 语义）
+        self._nav_bar = NavigationBar(colors=theme_controller().colors())
+        self._nav_bar.selection_changed.connect(self._on_nav_changed)
+        self._nav_bar.hide()
+        shell.addWidget(self._nav_bar)
 
         # ── Home 页 ─────────────────────────────────────
         self._home_scroll = QScrollArea()
         self._home_scroll.setWidgetResizable(True)
         self._home_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # 内容列最大宽度 1120dp 居中：超宽屏上不把卡片拉成一条
+        self._home_scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self._content = QWidget()
+        self._content.setObjectName("homePage")
+        self._content.setMaximumWidth(Grid.MAX_CONTENT_WIDTH)
         self._content_layout = QVBoxLayout(self._content)
-        self._content_layout.setContentsMargins(40, 40, 40, 40)
-        self._content_layout.setSpacing(32)
+        self._content_layout.setContentsMargins(
+            Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED, Margin.EXPANDED
+        )
+        self._content_layout.setSpacing(Space.XXL)
         self._content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._home_scroll.setWidget(self._content)
         # 监听 home_scroll 视口尺寸变化以同步设置内容最大宽度与
@@ -110,7 +146,7 @@ class MainWindow(QMainWindow):
 
         # ── Settings 页 ─────────────────────────────────
         self._settings_page = SettingsPage(
-            colors=MaterialColors.light(), is_dark=self._is_dark
+            colors=theme_controller().colors(), is_dark=self._is_dark
         )
         self._settings_page.theme_change_requested.connect(self._on_theme_change_requested)
         self._settings_page.home_requested.connect(lambda: self._nav_rail.set_selected(0))
@@ -118,46 +154,31 @@ class MainWindow(QMainWindow):
         self._settings_scroll.setWidgetResizable(True)
         self._settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        # 关键：让滚动区域视口透明，使 SettingsPage 的背景色可见。
-        # 这里使用 objectName + ID 选择器限定作用域，避免无差别级联到
-        # SettingsPage 及其所有子控件（否则会覆盖 app 级 QSS，导致
-        # QWidget/QFrame 背景色失效，卡片显示为透明）。
-        self._settings_scroll.viewport().setObjectName("settingsScrollViewport")
-        self._settings_scroll.viewport().setStyleSheet(
-            "QWidget#settingsScrollViewport { background-color: transparent; }"
+        self._settings_scroll.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
+        # 设置页是表单，单列布局并限制在较窄的内容宽度，避免双列压缩
+        # 控件宽度造成文件名/路径截断，也避免同排卡片高度不一致
+        self._settings_page.setMaximumWidth(Grid.SETTINGS_MAX_WIDTH)
         self._settings_scroll.setWidget(self._settings_page)
-        # 让 SettingsPage 跟随滚动视口宽度：QScrollArea 在 setWidgetResizable
-        # 时仍会使用 widget 的 sizeHint.minimumWidth 作为下界。由于
-        # SettingsPage 内部"返回主页"按钮全宽（由 hero widget 撑大），
-        # 其 sizeHint 经常超过视口，导致横向裁切。这里设置 maxWidth 让
-        # settings page 始终不超出视口，触发响应式断点切换单列布局。
-        self._settings_page.setMaximumWidth(
-            self._settings_scroll.viewport().width()
-        )
-        self._settings_scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self._settings_scroll)
 
         # ── Info (About) 页 ──────────────────────────────
-        self._about_page = AboutPage(colors=MaterialColors.light())
+        self._about_page = AboutPage(colors=theme_controller().colors())
         self._about_scroll = QScrollArea()
         self._about_scroll.setWidgetResizable(True)
         self._about_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._about_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._about_scroll.viewport().setObjectName("aboutScrollViewport")
-        self._about_scroll.viewport().setStyleSheet(
-            "QWidget#aboutScrollViewport { background-color: transparent; }"
+        self._about_scroll.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
+        self._about_page.setMaximumWidth(Grid.MAX_CONTENT_WIDTH)
         self._about_scroll.setWidget(self._about_page)
-        self._about_page.setMaximumWidth(
-            self._about_scroll.viewport().width()
-        )
-        self._about_scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self._about_scroll)
 
         # ── Tools 页 ──────────────────────────────────────
         self._tools_page = ToolsPage(
-            config_proxy=self._config, colors=MaterialColors.light()
+            config_proxy=self._config, colors=theme_controller().colors()
         )
         # 应用工具配置成功后同步设置页子配置字段行
         self._tools_page.tool_config_applied.connect(
@@ -167,15 +188,11 @@ class MainWindow(QMainWindow):
         self._tools_scroll.setWidgetResizable(True)
         self._tools_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._tools_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._tools_scroll.viewport().setObjectName("toolsScrollViewport")
-        self._tools_scroll.viewport().setStyleSheet(
-            "QWidget#toolsScrollViewport { background-color: transparent; }"
+        self._tools_scroll.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
+        self._tools_page.setMaximumWidth(Grid.MAX_CONTENT_WIDTH)
         self._tools_scroll.setWidget(self._tools_page)
-        self._tools_page.setMaximumWidth(
-            self._tools_scroll.viewport().width()
-        )
-        self._tools_scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self._tools_scroll)
 
         self._build_hero()
@@ -184,34 +201,69 @@ class MainWindow(QMainWindow):
         # 避免首次进入时仍为默认浅色样式）
         self._apply_skip_theme(self._settings_page.colors)
 
-    def _build_hero(self) -> None:
-        """Hero 区域：大标题 + 描述 + 主按钮"""
-        hero = QWidget()
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(0, 24, 0, 0)
-        hero_layout.setSpacing(24)
-        hero_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self._hero_title_label = QLabel(tr("home.title"))
-        # MD3 Hero 标题：使用 display_large 字体作为基线 + 内联 QSS
-        # 覆盖更大的像素尺寸与字重，符合设计规范中 Hero 区域"大号"
-        # display_large 标题的视觉强调。
-        self._hero_title_label.setFont(MaterialTypography().display_large)
-        self._hero_title_label.setStyleSheet(
-            "border: none; background: transparent;"
-            " font-size: 48px; font-weight: 600; line-height: 1.15;"
-            " letter-spacing: -1.5px;"
+        # 主页主操作锚点：MD3 extended FAB（浮于内容右下，不进滚动区）
+        self._fab = MaterialFab(
+            "add", tr("batch.add_videos"), extended=True, parent=central
         )
-        self._hero_title_label.setWordWrap(True)
-        hero_layout.addWidget(self._hero_title_label)
+        self._fab.setToolTip(tr("batch.add_videos"))
+        self._fab.clicked.connect(self._on_fab_clicked)
+        self._fab.adjustSize()
+        self._fab.raise_()
 
-        self._content_layout.addWidget(hero)
+    def _build_hero(self) -> None:
+        """页面头：标题 + 说明，字号随窗口尺寸类别降级"""
+        self._header = PageHeader(
+            tr("home.title"),
+            tr("home.subtitle"),
+            colors=theme_controller().colors(),
+        )
+        self._content_layout.addWidget(self._header)
+
+    def _on_fab_clicked(self) -> None:
+        """FAB：打开批量列表的"添加视频"流程"""
+        self._batch_list.open_add_dialog()
+
+    def _position_fab(self) -> None:
+        """把 FAB 定位到内容列右下角（compact 档避让底部导航条）
+
+        使用主页内容列（最大宽度 1120 居中）的右边缘而不是窗口右边缘，
+        超宽屏下 FAB 仍贴近内容，不会被甩到屏幕角落。
+        """
+        fab = getattr(self, "_fab", None)
+        central = getattr(self, "_central", None)
+        content = getattr(self, "_content", None)
+        scroll = getattr(self, "_home_scroll", None)
+        if fab is None or central is None or content is None or scroll is None:
+            return
+        viewport = scroll.viewport()
+        viewport_rect = viewport.rect()
+        viewport_top_left = viewport.mapTo(central, QPointF(0, 0))
+        left = content.mapTo(central, QPointF(0, 0)).x()
+        # 内容列窄于视口时用内容右边缘；否则退回到视口右边缘
+        content_right = left + content.width()
+        if content.width() >= viewport_rect.width():
+            content_right = viewport_top_left.x() + viewport_rect.width()
+        # 视口本身已经位于底部导航条上方，无需再减一次 NAV_BAR 高度
+        bottom = viewport_top_left.y() + viewport_rect.height()
+        margin = Space.XL
+        x = content_right - fab.width() - margin
+        y = bottom - fab.height() - margin
+        fab.move(max(margin, int(x)), max(margin, int(y)))
+        fab.raise_()
+
+    def _schedule_fab_position(self) -> None:
+        """布局完成后再定位 FAB（构造 / resize 期间几何尚未稳定）"""
+        QTimer.singleShot(0, self._position_fab)
 
     def _build_cards_grid(self) -> None:
-        """卡片网格：配置、步骤、进度、日志（支持响应式单列/双列）"""
+        """卡片网格：输入配置 + 视频队列（左右两列）、状态与日志（通栏）"""
         self._cards_grid = QGridLayout()
-        self._cards_grid.setSpacing(24)
-        self._cards_grid.setColumnStretch(0, 1)
+        # 去掉 QGridLayout 的默认 9px 内边距：卡片应与页面内容列（32dp
+        # 页边距）左对齐，而不是再缩进 9px
+        self._cards_grid.setContentsMargins(0, 0, 0, 0)
+        self._cards_grid.setSpacing(Layout.CARD_GAP)
+        self._cards_grid.setColumnStretch(0, 5)
+        self._cards_grid.setColumnStretch(1, 4)
 
         self._config_card = self._build_config_card()
         self._steps_card = self._build_steps_card()
@@ -227,41 +279,51 @@ class MainWindow(QMainWindow):
         self._log_card.add_widget(self._log_viewer)
 
         self._cards_container = QWidget()
+        self._cards_container.setObjectName("transparentPane")
         self._cards_container.setLayout(self._cards_grid)
         self._content_layout.addWidget(self._cards_container)
+        # 底部留白：滚到底时最后一张卡片不被右下角 FAB 压住
+        self._content_layout.addSpacing(Space.XXXL + Space.XXL)
 
         self._apply_grid_layout(two_column=True)
 
     def _apply_grid_layout(self, two_column: bool) -> None:
-        """应用双列或单列卡片布局"""
-        # 移除现有 widget（不删除）
+        """应用双列或单列卡片布局
+
+        双列：输入配置 | 视频队列；处理状态与运行日志通栏，避免右列被
+        拉成一条贯穿三行的空白卡片。
+        """
         for i in reversed(range(self._cards_grid.count())):
             item = self._cards_grid.itemAt(i)
             if item and item.widget():
                 self._cards_grid.removeWidget(item.widget())
 
-        self._cards_grid.setColumnStretch(0, 1)
+        self._last_two_col = two_column
+        self._cards_grid.setColumnStretch(0, 5)
         if two_column:
-            self._cards_grid.setColumnStretch(1, 1)
+            self._cards_grid.setColumnStretch(1, 4)
+            # 双列首行两张卡不加 AlignTop：填满各自列宽，并与行高一致
+            # （队列卡随配置卡同高，列表区多得约 80dp 可视高度）
             self._cards_grid.addWidget(self._config_card, 0, 0)
-            self._cards_grid.addWidget(self._steps_card, 0, 1, 3, 1)
-            self._cards_grid.addWidget(self._progress_card_widget, 1, 0)
-            self._cards_grid.addWidget(self._log_card, 2, 0)
+            self._cards_grid.addWidget(self._steps_card, 0, 1)
+            self._cards_grid.addWidget(self._progress_card_widget, 1, 0, 1, 2)
+            self._cards_grid.addWidget(self._log_card, 2, 0, 1, 2)
         else:
-            # 单列时清除第二列 stretch
             self._cards_grid.setColumnStretch(1, 0)
-            self._cards_grid.addWidget(self._config_card, 0, 0)
-            self._cards_grid.addWidget(self._steps_card, 1, 0)
-            self._cards_grid.addWidget(self._progress_card_widget, 2, 0)
-            self._cards_grid.addWidget(self._log_card, 3, 0)
+            # 单列：所有卡片按自身内容高度排列，避免被网格纵向拉伸
+            for row, card in enumerate((
+                self._config_card,
+                self._steps_card,
+                self._progress_card_widget,
+                self._log_card,
+            )):
+                self._cards_grid.addWidget(card, row, 0, Qt.AlignmentFlag.AlignTop)
 
     def _reflow_skip_checkboxes(self, available_width: int) -> None:
         """根据可用宽度重新排列 Skip 步骤复选框网格的列数
 
-        复选框本身是固定尺寸的（由 MaterialCheckBox 决定），若全部
-        横向铺开会撑大所在容器的 minimum width，导致窄屏出现横向
-        滚动条。本方法计算每行可容纳多少列并重新插入到 QGridLayout，
-        使 5 个复选框在窄屏下自动换行。
+        每个列宽统一取"最宽复选框 + 间距"，避免各列按自身文字宽度收缩，
+        出现"第一行三列、第二行两列且缩进不齐"的参差感。
         """
         grid = getattr(self, "_skip_grid_layout", None)
         checkboxes = list(getattr(self, "_skip_checkboxes", {}).values())
@@ -270,75 +332,68 @@ class MainWindow(QMainWindow):
         if available_width <= 0:
             available_width = 0
 
-        # 计算单个复选框的最大宽度（包含水平 spacing）
         spacing = grid.horizontalSpacing()
         if spacing is None or spacing < 0:
-            spacing = 12
-        max_cb_w = 0
-        for cb in checkboxes:
-            hint = cb.sizeHint().width()
-            if hint > max_cb_w:
-                max_cb_w = hint
+            spacing = Space.M
+        max_cb_w = max((cb.sizeHint().width() for cb in checkboxes), default=80)
         if max_cb_w <= 0:
-            max_cb_w = 80  # 兜底值
+            max_cb_w = 80
 
-        # 每行最少 1 列，最多 5 列
+        # 每行最少 1 列，最多 3 列；列数按"n 列 + (n-1) 个间距"精确计算，
+        # 避免 3 列时总宽超出可用宽度、逼出横向滚动条
         per_col = max_cb_w + spacing
-        cols = max(1, min(len(checkboxes), available_width // per_col))
-
-        # 列数未变化时跳过重排：resize 期间本方法被高频调用
-        # （resizeEvent 与视口 eventFilter 双路径），全量 remove/add
-        # 仅在列数真正变化时才有意义
-        if cols == getattr(self, "_last_skip_cols", None):
-            return
+        cols = max(1, min(3, (available_width + spacing) // per_col))
         self._last_skip_cols = cols
 
-        # 先清空再按新列数重排
         for i in reversed(range(grid.count())):
             item = grid.itemAt(i)
             if item and item.widget():
                 grid.removeWidget(item.widget())
         for i, cb in enumerate(checkboxes):
-            grid.addWidget(cb, i // cols, i % cols)
+            grid.addWidget(
+                cb,
+                i // cols,
+                i % cols,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            )
+        # 先把所有列（含历史遗留的空列）的最小宽度与伸展清零，再只为
+        # 当前使用的列设置统一列宽：QGridLayout 不会删除空列，残留的
+        # columnMinimumWidth 会把卡片最小宽度越撑越大（英文界面尤甚）
+        for column in range(grid.columnCount()):
+            grid.setColumnMinimumWidth(column, 0)
+            grid.setColumnStretch(column, 0)
+        for column in range(cols):
+            grid.setColumnMinimumWidth(column, max_cb_w)
+        grid.setColumnStretch(cols, 1)
 
     def _config_card_content_width(self) -> int:
-        """计算当前布局下 Input configuration 卡片的内容可用宽度
+        """当前布局下输入配置卡片的内容可用宽度（驱动 Skip 复选框重排）
 
-        在 2 列布局中，配置卡占据左半列；1 列布局中则占据全部可用宽度。
-        该宽度用于驱动 Skip 复选框的列数重排。
+        以滚动视口宽度（即时更新）推算，而不是读卡片自身的 ``width()``：
+        resize 期间卡片几何可能还是旧值，会保留上一次的列数并撑出横向滚动条。
         """
         viewport_w = self._home_scroll.viewport().width()
         if viewport_w <= 0:
             return 0
-        # 复刻 _content_layout 的左右内边距 40*2
-        content_w = max(0, viewport_w - 80)
-        two_col = getattr(self, "_last_two_col", False)
-        if two_col:
-            # 双列：去掉列间距 24 后对半
-            return max(0, (content_w - 24) // 2 - 20)  # 20 = 卡片左右内边距
-        # 单列
-        return max(0, content_w - 20)
+        margin = Margin.page(getattr(self, "_size_class", WindowSizeClass.EXPANDED))
+        content_w = max(0, viewport_w - 2 * margin)
+        if getattr(self, "_last_two_col", False):
+            content_w = (content_w - Layout.CARD_GAP) // 2
+        return max(0, content_w - 2 * Space.L)
 
     def _apply_skip_theme(self, colors: MaterialColors) -> None:
         """根据当前主题刷新 Skip steps 容器与复选框配色
 
-        主页的 skip_group 原先使用硬编码 ``background-color: #FFFFFF``，
-        在深色模式下会形成刺眼的白色块。这里将容器底色改为与卡片
-        surface 一致（亮色为 #FFFBFE、暗色为 #141218），标题文字使用
-        on_surface_variant，复选框则调用 set_colors() 同步 indicator
-        与 label 颜色。
+        容器保持透明（让内容直接落在卡片表面上），标题使用
+        ``label_large``（14/500）+ ``on_surface_variant``；复选框各自订阅
+        主题信号，这里只负责标题。
         """
-        if getattr(self, "_skip_group", None) is not None:
-            self._skip_group.setStyleSheet(
-                f"background-color: {colors.surface}; border: none;"
-            )
         if getattr(self, "_skip_title", None) is not None:
-            self._skip_title.setStyleSheet(
-                f"background-color: transparent; border: none;"
-                f" color: {colors.on_surface_variant};"
-                f" font-weight: 500; font-size: 12px;"
-                f" letter-spacing: 0.5px;"
-            )
+            title = self._skip_title
+            title.setFont(MaterialTypography().font("label_large"))
+            # 文字色走 QPalette：逐只 setStyleSheet 会新建 QStyleSheetStyle
+            # 并触发 polish，是主题切换卡顿的来源之一
+            set_text_color(title, colors.on_surface_variant)
         for cb in getattr(self, "_skip_checkboxes", {}).values():
             cb.set_colors(colors)
 
@@ -353,7 +408,7 @@ class MainWindow(QMainWindow):
         """
         card = MaterialCard(tr("home.input_config"))
         layout = QVBoxLayout()
-        layout.setSpacing(16)
+        layout.setSpacing(Space.L)
 
         self._bg_selector = FileSelector(
             mode=FileSelector.MODE_OPEN_FILE,
@@ -367,23 +422,22 @@ class MainWindow(QMainWindow):
 
         self._style_combo = QComboBox()
         self._style_combo.addItems(["style1", "style2"])
-        # 内联创建 Style 行以便存储 label 引用供 _retranslate 使用
-        self._style_label = QLabelEx(tr("home.style"))
-        self._style_label.setFixedWidth(72)
-        style_row = QHBoxLayout()
-        style_row.setSpacing(12)
-        style_row.addWidget(self._style_label)
-        style_row.addWidget(self._style_combo, 1)
-        layout.addLayout(style_row)
+        # 与其他字段一致：MD3 描边字段 + 浮动标签（不再用固定宽度左标签）
+        self._style_field = MaterialTextField(
+            self._style_combo,
+            label=tr("home.style"),
+            colors=theme_controller().colors(),
+        )
+        layout.addWidget(self._style_field)
 
         # 跳过步骤：与上方 input rows 节奏一致的 sub-section
         # 背景与标题颜色需跟随主题切换（深色模式下不能继续用白色），
         # 因此在 _apply_skip_theme() 中按当前主题刷新其内联样式。
         skip_group = QWidget()
-        skip_group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        skip_group.setObjectName("transparentPane")
         skip_layout = QVBoxLayout(skip_group)
         skip_layout.setContentsMargins(0, 0, 0, 0)
-        skip_layout.setSpacing(10)
+        skip_layout.setSpacing(Space.M)
 
         skip_title = QLabel(tr("home.skip_steps"))
         skip_title.setAttribute(
@@ -395,8 +449,8 @@ class MainWindow(QMainWindow):
 
         skip_flow = QGridLayout()
         skip_flow.setContentsMargins(0, 0, 0, 0)
-        skip_flow.setHorizontalSpacing(20)
-        skip_flow.setVerticalSpacing(8)
+        skip_flow.setHorizontalSpacing(Space.L)
+        skip_flow.setVerticalSpacing(Space.S)
         self._skip_checkboxes: dict[str, MaterialCheckBox] = {}
         for key, label in [
             ("copilot", tr("home.skip.copilot")),
@@ -418,9 +472,9 @@ class MainWindow(QMainWindow):
         skip_layout.addLayout(skip_flow)
         layout.addWidget(skip_group)
 
-        # 操作按钮
+        # 操作按钮：一屏只有一个 filled（开始），取消走 outlined
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(12)
+        btn_layout.setSpacing(Space.M)
         self._run_btn = MaterialButton(tr("home.start"), variant=MaterialButton.VARIANT_FILLED)
         self._cancel_btn = MaterialButton(tr("home.cancel"), variant=MaterialButton.VARIANT_OUTLINED)
         self._cancel_btn.setEnabled(False)
@@ -437,6 +491,11 @@ class MainWindow(QMainWindow):
         """批量视频文件列表卡片（取代原 Pipeline steps 面板）"""
         card = MaterialCard(tr("home.video_files"))
         self._batch_list = BatchVideoList(colors=self._settings_page.colors)
+        # 主页的主操作是右下角 FAB，卡片内不再放第二个"添加视频"按钮
+        self._batch_list.set_add_visible(False)
+        # 单列布局下限制列表高度，避免整张卡片被父布局拉成一屏
+        # （two-line 行高 80dp，4 行约 332dp，须留出滚动余量）
+        self._batch_list.set_list_max_height(360)
         card.add_widget(self._batch_list)
         return card
 
@@ -479,6 +538,11 @@ class MainWindow(QMainWindow):
         # 高级分区折叠状态：从 gui.json 加载初始值 + 连接变更信号
         sp.set_advanced_expanded(self._gui_config.is_advanced_expanded())
         sp.advanced_expanded_changed.connect(self._gui_config.set_advanced_expanded)
+        # 动态色彩：开关 + 种子色（持久化到 gui.json，切换即时生效）
+        sp.dynamic_color_changed.connect(self._on_dynamic_color_changed)
+        sp.seed_color_changed.connect(self._on_seed_color_changed)
+        sp.set_dynamic_color(self._gui_config.is_dynamic_color())
+        sp.set_seed_color(self._gui_config.seed_color())
         # 语言切换：SettingsPage 下拉框 → i18n.set_language → language_changed → 全局 _retranslate
         sp.language_change_requested.connect(self._on_language_change_requested)
         # 同步当前语言到 SettingsPage 下拉框（阻塞信号避免回环）
@@ -491,6 +555,9 @@ class MainWindow(QMainWindow):
         # 按钮
         self._run_btn.clicked.connect(self._on_run)
         self._cancel_btn.clicked.connect(self._on_cancel)
+
+        # 主题信号：Skip steps 容器/标题的内联配色随主题刷新（其余组件自订阅）
+        theme_controller().theme_changed.connect(self._apply_skip_theme)
 
         # 服务信号（批量原生，带文件索引）
         self._service.file_started.connect(self._batch_list.set_file_running)
@@ -651,17 +718,64 @@ class MainWindow(QMainWindow):
             self._run_btn.setEnabled(bool(paths))
 
     def _on_nav_changed(self, index: int) -> None:
-        # 0=Home, 1=Settings, 2=Tools, 3=Info（完整页面，与主页/设置页同级）
-        if index == 0:
-            self._stack.setCurrentWidget(self._home_scroll)
-        elif index == 1:
+        """导航切换：两侧外壳互相同步 + 页面淡入
+
+        0=Home, 1=Settings, 2=Tools, 3=Info（四个同级页面）。
+        两个导航外壳的 ``set_selected`` 都有同值早退，因此相互调用不会递归。
+        """
+        self._nav_rail.set_selected(index, animate=False)
+        self._nav_bar.set_selected(index, animate=False)
+
+        pages = {
+            0: self._home_scroll,
+            1: self._settings_scroll,
+            2: self._tools_scroll,
+            3: self._about_scroll,
+        }
+        page = pages.get(index)
+        if page is None or page is self._stack.currentWidget():
+            return
+        if index == 1:
             # 进入设置页时同步主题开关状态（不触发信号）
             self._settings_page.set_dark(self._is_dark)
-            self._stack.setCurrentWidget(self._settings_scroll)
-        elif index == 2:
-            self._stack.setCurrentWidget(self._tools_scroll)
-        elif index == 3:
-            self._stack.setCurrentWidget(self._about_scroll)
+        self._switch_page(page)
+        # FAB 是主页专属的主操作锚点，其他页面不显示
+        self._update_fab_visibility()
+        self._schedule_fab_position()
+
+    def _update_fab_visibility(self) -> None:
+        """按当前页面与运行状态更新 FAB 可见性（唯一实现）"""
+        fab = getattr(self, "_fab", None)
+        if fab is None:
+            return
+        on_home = self._stack.currentWidget() is self._home_scroll
+        # 同时看 UI 运行态与 worker 状态：点击"开始"后服务在后台线程启动有
+        # 延迟，仅看 service.is_running() 会让 FAB 在启动瞬间残留可见。
+        fab.setVisible(
+            on_home and not (getattr(self, "_ui_running", False)
+                             or self._service.is_running())
+        )
+
+    def _switch_page(self, page: QWidget) -> None:
+        """切换页面并播放 150ms 淡入（只改 opacity，不做几何动画）"""
+        self._stack.setCurrentWidget(page)
+        if not Motion.enabled:
+            return
+        effect = QGraphicsOpacityEffect(page)
+        page.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(Duration.SHORT2)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(Easing.standard())
+
+        def _cleanup() -> None:
+            # 动画结束即移除 effect：QGraphicsEffect 会阻断子控件部分绘制路径
+            page.setGraphicsEffect(None)
+
+        anim.finished.connect(_cleanup)
+        self._page_anim = anim
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     # ── 语言切换 ──────────────────────────────────────────
 
@@ -681,14 +795,15 @@ class MainWindow(QMainWindow):
     def _retranslate(self) -> None:
         """语言切换时刷新主页所有静态文本"""
         self.setWindowTitle(tr("app.title"))
-        self._hero_title_label.setText(tr("home.title"))
+        self._header.set_title(tr("home.title"))
+        self._header.set_subtitle(tr("home.subtitle"))
         self._config_card.set_title(tr("home.input_config"))
         self._steps_card.set_title(tr("home.video_files"))
         self._progress_card_widget.set_title(tr("home.processing_status"))
         self._log_card.set_title(tr("home.runtime_logs"))
         self._bg_selector.set_label(tr("home.background"))
         self._bg_selector.set_placeholder(tr("home.background_placeholder"))
-        self._style_label.setText(tr("home.style"))
+        self._style_field.set_label(tr("home.style"))
         self._skip_title.setText(tr("home.skip_steps"))
         # Skip 复选框标签（MAA 为产品名保留原文，其余步骤名按语言刷新）
         skip_labels = {
@@ -700,8 +815,17 @@ class MainWindow(QMainWindow):
         }
         for key, cb in self._skip_checkboxes.items():
             cb.setText(skip_labels.get(key, key))
+        # 语言切换后复选框宽度变化，重排列宽与列数
+        self._reflow_skip_checkboxes(self._config_card_content_width())
         self._run_btn.setText(tr("home.start"))
         self._cancel_btn.setText(tr("home.cancel"))
+        # FAB 文案随语言刷新（它不在任何卡片的重翻译注册表里）
+        if getattr(self, "_fab", None) is not None:
+            self._fab.setText(tr("batch.add_videos"))
+            self._fab.setToolTip(tr("batch.add_videos"))
+            self._fab.updateGeometry()
+            self._fab.adjustSize()
+            self._schedule_fab_position()
 
     # ── 操作处理 ──────────────────────────────────────────
 
@@ -752,6 +876,9 @@ class MainWindow(QMainWindow):
             self._progress_card.reset()
             self._log_viewer.clear_logs()
             self._set_running_ui(True)
+            # 运行态 FAB 立即隐藏（_set_running_ui 内已刷新，这里再显式调用
+            # 以覆盖服务尚未真正启动的瞬间）
+            self._update_fab_visibility()
             # 调用方刚完成校验，validate=False 避免同一批次 ffprobe 重复探测
             if not self._service.run_pipeline(paths, json_paths, validate=False):
                 self._set_running_ui(False)
@@ -777,6 +904,7 @@ class MainWindow(QMainWindow):
             )
 
     def _set_running_ui(self, running: bool) -> None:
+        self._ui_running = running
         self._run_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
         self._batch_list.set_editable(not running)
@@ -792,74 +920,60 @@ class MainWindow(QMainWindow):
         self._settings_page.set_sub_config_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
+        # 运行期间隐藏 FAB（此时主操作已变为"取消"）
+        if getattr(self, "_fab", None) is not None:
+            self._update_fab_visibility()
 
     def _on_theme_change_requested(self, dark: bool) -> None:
-        """设置页主题开关触发：应用主题并同步设置页配色"""
+        """设置页主题开关触发：应用主题并持久化偏好"""
         self._toggle_theme(dark)
-        colors = MaterialColors.dark() if dark else MaterialColors.light()
-        self._settings_page.set_colors(colors)
         # 持久化到独立 GUI 配置（config/gui.json），与 pipeline 配置完全解耦
         self._gui_config.set_theme("dark" if dark else "light")
 
     def _apply_initial_theme(self) -> None:
-        """启动时按独立 GUI 配置（config/gui.json）中的主题刷新界面与标题栏
+        """启动时按 ``config/gui.json`` 初始化主题
 
-        ``create_application`` 默认应用浅色主题；若配置为深色，需在此
-        覆盖 QSS、卡片表面色与标题栏。仅当 ``self._is_dark`` 为 True
-        时执行完整切换；浅色时仅尝试应用标题栏（QSS 已是浅色无需重刷）。
+        ``create_application`` 已安装全局 QSS 并应用浅色 QPalette；这里走一次
+        ``_toggle_theme``，让 ``ThemeController`` 的状态与界面一致。若配置是
+        浅色，配色与已应用调色板相同，``ThemeController`` 会跳过重绘；配置为
+        深色或自定义配色时才应用 QPalette，并对输入类控件重新 polish。
         """
-        if self._is_dark:
-            self._toggle_theme(True)
-        else:
-            # 浅色：QSS 已由 create_application 应用，仅尝试标题栏
-            apply_titlebar_theme(self, False)
+        self._toggle_theme(self._is_dark)
 
     def _toggle_theme(self, dark: bool) -> None:
+        """切换主题：只更新控制器，组件通过 ``theme_changed`` 自刷新
+
+        历史实现用 20 余处 ``if getattr(...)`` 手工枚举需要刷新的控件，
+        每新增一个控件都要记得加一行，漏一处就出现"深色下残留白块"。
+        现在组件在各自构造函数里订阅主题信号，本方法不再维护清单。
+        """
         self._is_dark = dark
-        colors = MaterialColors.dark() if dark else MaterialColors.light()
-        style = MaterialStyle(colors=colors, typography=MaterialTypography())
-        app = QApplication.instance()
-        if app is not None:
-            style.apply(app)
-        # 更新导航栏、设置页与辅助文字颜色
-        self._nav_rail.set_colors(colors)
-        self._settings_page.set_colors(colors)
-        # 同步刷新关于页配色
-        if getattr(self, "_about_page", None) is not None:
-            self._about_page.set_colors(colors)
-        # 同步刷新工具页配色（索引卡片 + 各工具视图）
-        if getattr(self, "_tools_page", None) is not None:
-            self._tools_page.set_colors(colors)
-        # 同步刷新主页所有卡片的表面色（paintEvent 自绘模式需手动更新）
-        for card in (
-            getattr(self, "_config_card", None),
-            getattr(self, "_steps_card", None),
-            getattr(self, "_progress_card_widget", None),
-            getattr(self, "_log_card", None),
-            # 内层 ProgressCard（自绘 surface 同样需要刷新，
-            # 否则在深色模式下仍为白色背景，与外层卡片形成色块差）
-            getattr(self, "_progress_card", None),
-        ):
-            if card is not None:
-                card.set_surface_color(colors.surface)
-        # 同步刷新主页 FileSelector 内联样式（输入框 + 浏览按钮）
-        if getattr(self, "_bg_selector", None) is not None:
-            self._bg_selector.set_colors(colors)
-        # 同步刷新批量视频列表配色（行/进度条/状态图标按主题切换）
-        if getattr(self, "_batch_list", None) is not None:
-            self._batch_list.set_colors(colors)
-        # 同步刷新 Skip steps 容器、标题与复选框配色（修复深色模式下
-        # 硬编码白色背景导致的刺眼白块，以及复选框 indicator 颜色不更新）
-        self._apply_skip_theme(colors)
-        # 同步刷新日志查看器配色：LogViewer 内部按行重新染字符，
-        # 无需清空历史日志；解决深色模式下 [INFO] 文字几乎不可见问题
-        if getattr(self, "_log_viewer", None) is not None:
-            self._log_viewer.set_colors(colors)
-        # 标题栏放在最后：QSS 重计算（~200ms）+ 自定义组件刷新完成后，
-        # 标题栏与主界面在同一帧切换，避免标题栏先变/主界面后变的视觉不同步。
-        # apply_titlebar_theme 含 DwmFlush（~15ms），放在最后让 DWM 合成
-        # 新帧时主界面已完成重绘，标题栏与主界面同时上屏。
+        self._apply_theme_colors()
+        # 设置页开关保持同步（不触发信号，避免回环）
+        if getattr(self, "_settings_page", None) is not None:
+            self._settings_page.set_dark(dark)
+        # 标题栏放在最后：等所有订阅者重绘完成再切 DWM 主题，
+        # 让标题栏与主界面在同一帧上屏，避免"标题栏先变/内容后变"
         apply_titlebar_theme(self, dark)
+
+    def _apply_theme_colors(self) -> None:
+        """按当前明暗 + 种子色 + 动态色彩开关重新应用主题"""
+        theme_controller().apply(
+            dark=self._is_dark,
+            seed=self._gui_config.seed_color(),
+            dynamic=self._gui_config.is_dynamic_color(),
+            app=QApplication.instance(),
+        )
+
+    def _on_dynamic_color_changed(self, enabled: bool) -> None:
+        """设置页动态色彩开关：持久化并立即重建配色"""
+        self._gui_config.set_dynamic_color(enabled)
+        self._apply_theme_colors()
+
+    def _on_seed_color_changed(self, color: str) -> None:
+        """设置页种子色变更：持久化并立即重建配色"""
+        self._gui_config.set_seed_color(color)
+        self._apply_theme_colors()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -867,86 +981,51 @@ class MainWindow(QMainWindow):
         if not self._titlebar_applied:
             self._titlebar_applied = True
             apply_titlebar_theme(self, self._is_dark)
+        self._schedule_fab_position()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        width = self.width()
-        # 响应式：窄屏折叠导航栏
-        self._nav_rail.set_compact(width < 960)
-        # 响应式：卡片网格在窄屏时切换为单列（仅在断点变化时重建，避免卡顿）
+        # 响应式只由尺寸类别驱动（compact / medium / expanded）
+        self._apply_size_class(WindowSizeClass.of(self.width()))
+        self._reflow_skip_checkboxes(self._config_card_content_width())
+        self._position_fab()
+        self._schedule_fab_position()
+
+    def _apply_size_class(self, size_class: str) -> None:
+        """按 MD3 尺寸类别调整导航外壳、页边距、栅格与页面头字号"""
+        if size_class == getattr(self, "_size_class", None):
+            return
+        self._size_class = size_class
+
+        compact = WindowSizeClass.uses_bottom_navigation(size_class)
+        self._nav_rail.setVisible(not compact)
+        self._nav_bar.setVisible(compact)
+        self._nav_rail.set_compact(not WindowSizeClass.rail_shows_labels(size_class))
+
+        margin = Margin.page(size_class)
+        self._content_layout.setContentsMargins(margin, margin, margin, margin)
+
         if getattr(self, "_cards_grid", None) is not None:
-            nav_width = 56 if width < 960 else 88
-            content_width = max(0, width - nav_width - 80)  # 80 = 左右内边距 40*2
-            new_two_col = content_width >= 720
-            if new_two_col != getattr(self, "_last_two_col", None):
-                self._last_two_col = new_two_col
-                self._apply_grid_layout(two_column=new_two_col)
-            # 重新排列 Skip 复选框网格列数，避免窄屏下 5 个固定宽度
-            # 复选框横向铺开撑出整个内容（导致 home_scroll 出现横滚条）
-            skip_w = self._config_card_content_width()
-            if skip_w > 0:
-                self._reflow_skip_checkboxes(skip_w)
-        # 限制 home 内容宽度不超过视口，避免内容 sizeHint 超过视口时
-        # 触发横向滚动条
-        if getattr(self, "_home_scroll", None) is not None and getattr(
-            self, "_content", None
-        ) is not None:
-            vw = self._home_scroll.viewport().width()
-            if vw > 0 and self._content.maximumWidth() != vw:
-                self._content.setMaximumWidth(vw)
-        # 同步 SettingsPage 最大宽度，让其跟随滚动视口（避免横向裁切）
-        if getattr(self, "_settings_scroll", None) is not None:
-            vw = self._settings_scroll.viewport().width()
-            if vw > 0 and self._settings_page.maximumWidth() != vw:
-                self._settings_page.setMaximumWidth(vw)
-        # 同步 AboutPage 最大宽度（与 SettingsPage 同理）
-        if getattr(self, "_about_scroll", None) is not None:
-            vw = self._about_scroll.viewport().width()
-            if vw > 0 and self._about_page.maximumWidth() != vw:
-                self._about_page.setMaximumWidth(vw)
-        # 同步 ToolsPage 最大宽度（与 SettingsPage 同理）
-        if getattr(self, "_tools_scroll", None) is not None:
-            vw = self._tools_scroll.viewport().width()
-            if vw > 0 and self._tools_page.maximumWidth() != vw:
-                self._tools_page.setMaximumWidth(vw)
+            self._apply_grid_layout(two_column=Grid.columns(size_class) > 1)
+            self._reflow_skip_checkboxes(self._config_card_content_width())
+
+        if getattr(self, "_header", None) is not None:
+            self._header.set_size_class(size_class)
+
+        for page, setter in (
+            (getattr(self, "_settings_page", None), "set_size_class"),
+            (getattr(self, "_about_page", None), "set_size_class"),
+            (getattr(self, "_tools_page", None), "set_size_class"),
+        ):
+            hook = getattr(page, setter, None)
+            if callable(hook):
+                hook(size_class)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        # 监听 home/settings 滚动视口的尺寸变化（窗口尺寸变化时触发），
-        # 同步更新对应页面的最大宽度，确保响应式断点正确切换。
-        if event.type() == QEvent.Type.Resize:
-            if (
-                getattr(self, "_home_scroll", None) is not None
-                and obj is self._home_scroll.viewport()
-            ):
-                vw = self._home_scroll.viewport().width()
-                if vw > 0 and getattr(self, "_content", None) is not None:
-                    if self._content.maximumWidth() != vw:
-                        self._content.setMaximumWidth(vw)
-                # 视口变化时同步重新排列 Skip 复选框
-                skip_w = self._config_card_content_width()
-                if skip_w > 0:
-                    self._reflow_skip_checkboxes(skip_w)
-            elif (
-                getattr(self, "_settings_scroll", None) is not None
-                and obj is self._settings_scroll.viewport()
-            ):
-                vw = self._settings_scroll.viewport().width()
-                if vw > 0:
-                    self._settings_page.setMaximumWidth(vw)
-            elif (
-                getattr(self, "_about_scroll", None) is not None
-                and obj is self._about_scroll.viewport()
-            ):
-                vw = self._about_scroll.viewport().width()
-                if vw > 0:
-                    self._about_page.setMaximumWidth(vw)
-            elif (
-                getattr(self, "_tools_scroll", None) is not None
-                and obj is self._tools_scroll.viewport()
-            ):
-                vw = self._tools_scroll.viewport().width()
-                if vw > 0:
-                    self._tools_page.setMaximumWidth(vw)
+        # 主页视口尺寸变化时重排 Skip 复选框（页面宽度本身由
+        # QScrollArea 的居中对齐 + 内容最大宽度约束，不再手工同步）
+        if event.type() == QEvent.Type.Resize and obj is self._home_scroll.viewport():
+            self._reflow_skip_checkboxes(self._config_card_content_width())
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:

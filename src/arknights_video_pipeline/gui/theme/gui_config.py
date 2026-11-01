@@ -21,6 +21,8 @@ from typing import Any
 from PyQt6.QtCore import QObject
 
 from arknights_video_pipeline.core.utils import PROJECT_ROOT
+from arknights_video_pipeline.gui.theme.hct import normalize_hex
+from arknights_video_pipeline.gui.theme.scheme import BASELINE_SEED
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,13 @@ _SUPPORTED_LANGUAGES = ("zh-CN", "en-US")
 _DEFAULT_LANGUAGE = "zh-CN"
 
 # 默认 GUI 配置（config/gui.json 缺失时使用）
+# dynamic_color / seed_color 对应设置页的"动态色彩 + 种子色"（Material You）
 _GUI_DEFAULTS: dict[str, Any] = {
     "theme": "light",
     "advanced_expanded": False,
     "language": _DEFAULT_LANGUAGE,
+    "dynamic_color": True,
+    "seed_color": BASELINE_SEED,
 }
 
 
@@ -149,6 +154,44 @@ class GuiConfig(QObject):
             return
         if self._data.get("language") != language:
             self._data["language"] = language
+            self._trigger_save()
+
+    # ── 动态色彩（Material You）──────────────────────────
+
+    def is_dynamic_color(self) -> bool:
+        """是否启用动态色彩（关闭时回到品牌基线紫）"""
+        return bool(self._data.get("dynamic_color", True))
+
+    def set_dynamic_color(self, enabled: bool) -> None:
+        """设置动态色彩开关并持久化"""
+        enabled = bool(enabled)
+        if self._data.get("dynamic_color") != enabled:
+            self._data["dynamic_color"] = enabled
+            self._trigger_save()
+
+    def seed_color(self) -> str:
+        """种子色（非法值回退到品牌基线紫）"""
+        raw = self._data.get("seed_color", BASELINE_SEED)
+        try:
+            return normalize_hex(str(raw))
+        except ValueError:
+            logger.warning("非法的种子色配置 %r，回退到 %s", raw, BASELINE_SEED)
+            return BASELINE_SEED
+
+    def set_seed_color(self, color: str) -> None:
+        """设置种子色并持久化
+
+        Args:
+            color: ``#RRGGBB``；非法值忽略并记录 warning（不抛异常，
+                避免 UI 回调因用户输入崩溃）
+        """
+        try:
+            normalized = normalize_hex(color)
+        except ValueError:
+            logger.warning("非法的种子色: %r，已忽略", color)
+            return
+        if self.seed_color() != normalized:
+            self._data["seed_color"] = normalized
             self._trigger_save()
 
     # ── 高级分区折叠状态 ─────────────────────────────────

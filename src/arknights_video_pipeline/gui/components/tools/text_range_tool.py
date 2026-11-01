@@ -53,6 +53,7 @@ from arknights_video_pipeline.gui.components.settings_row_builders import (
 from arknights_video_pipeline.gui.components.tools.base import ToolView
 from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 # 与 video_compose.create_text_clip / map_overlay._PANEL_PADDING 一致的主文本内边距
 _PANEL_PADDING = 10
@@ -102,7 +103,7 @@ class TextRangePreview(QWidget):
     def __init__(self, colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         self._bg: QPixmap | None = None
         self._out_size: tuple[int, int] | None = None
         self._video_rect: QRectF | None = None
@@ -388,7 +389,6 @@ class Style1TextRangeTool(ToolView):
 
         # ── 预览卡片（置于最前，打开工具立即可见渲染结果） ──
         self._preview_card = MaterialCard(tr("tools.style1_text_range.range_title"))
-        self._preview_card.set_surface_color(c.surface)
         preview_layout = self._preview_card.layout()
 
         self._preview = TextRangePreview(colors=c)
@@ -401,7 +401,7 @@ class Style1TextRangeTool(ToolView):
         self._info_label.setWordWrap(True)
         self._info_label.setStyleSheet(
             f"color: {c.on_surface_variant}; background: transparent; border: none;"
-            " font-size: 13px;"
+            " font-size: 14px;"
         )
         preview_layout.addWidget(self._info_label)
 
@@ -409,14 +409,13 @@ class Style1TextRangeTool(ToolView):
 
         # ── 参数卡片 ──────────────────────────────────────
         self._param_card = MaterialCard(tr(self.title_key))
-        self._param_card.set_surface_color(c.surface)
         card_layout = self._param_card.layout()
         card_layout.setSpacing(12)
 
         self._json_label = QLabel(tr("tools.style1_text_range.input_json"))
         self._json_label.setStyleSheet(
             f"color: {c.on_surface_variant}; background: transparent; border: none;"
-            " font-size: 13px;"
+            " font-size: 14px;"
         )
         self._tr_labels.append((self._json_label.setText, "tools.style1_text_range.input_json"))
         card_layout.addWidget(self._json_label)
@@ -486,7 +485,7 @@ class Style1TextRangeTool(ToolView):
             f"  border-radius: 12px;"
             f"  padding: 8px 12px;"
             "  font-family: Consolas, 'Courier New', monospace;"
-            "  font-size: 13px;"
+            "  font-size: 14px;"
             "}"
             "QPlainTextEdit:focus {"
             f"  border: 2px solid {c.primary};"
@@ -498,7 +497,7 @@ class Style1TextRangeTool(ToolView):
         title = QLabel(tr(label_key))
         title.setStyleSheet(
             f"color: {c.on_surface_variant}; border: none;"
-            f" background: transparent; font-weight: 500; font-size: 13px;"
+            f" background: transparent; font-weight: 500; font-size: 14px;"
             f" letter-spacing: 0.5px; margin-top: 8px;"
         )
         self._tr_labels.append((title.setText, label_key))
@@ -884,7 +883,7 @@ class Style1TextRangeTool(ToolView):
             text = "\n".join(parts)
         self._info_label.setStyleSheet(
             f"color: {color}; background: transparent; border: none;"
-            " font-size: 13px;"
+            " font-size: 14px;"
         )
         self._info_label.setText(text)
 
@@ -921,8 +920,7 @@ class Style1TextRangeTool(ToolView):
     def set_colors(self, colors: MaterialColors) -> None:
         super().set_colors(colors)
         c = colors
-        self._param_card.set_surface_color(c.surface)
-        self._preview_card.set_surface_color(c.surface)
+        # 卡片背景由 CardFrame 自订阅主题，这里只刷新本视图持有的控件
         self._json_editor.setStyleSheet(self._json_editor_qss(c))
         self._bg_selector.set_colors(c)
         self._preview.set_colors(c)

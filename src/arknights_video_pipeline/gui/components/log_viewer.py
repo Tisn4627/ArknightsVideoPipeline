@@ -2,23 +2,19 @@
 gui.components.log_viewer - 日志查看器
 
 只读文本框，根据日志级别着色，支持自动滚动。
+本类提供 ``set_colors`` 接口：主题切换时由 ``theme_changed`` 自动调用。
 
 颜色策略
 --------
-不同主题下需要对各级别使用专属对比度达标的颜色（深色模式下不能继续
-使用浅色主题的深色文字，否则在 #121014 背景上几乎不可见）。
-本类提供 ``set_colors`` 接口：MainWindow 在主题切换时调用，根据
-``MaterialColors`` 计算各日志级别对应的 16 进制色串。
+级别色**全部来自 ``MaterialColors`` 角色**，组件内不再维护十六进制常量
+（历史实现把两套主题的日志色写死在组件里，调色板改动会漏掉它）：
 
-WCAG 对比度参考（深色模式背景 = #49454F 即 surface_variant，为
-QPlainTextEdit 实际背景；浅色模式背景 = #FFFBFE）：
-- DEBUG    #C0BCC4  深色 5.00:1 / 浅色 4.45:1  AA
-- INFO     #E6E1E5  深色 7.24:1 / 浅色 16.7:1 AAA
-- WARNING  #FFB74D  深色 5.40:1 / 浅色 3.04:1  AA（深）/ AA Large（浅）
-- ERROR    #FFA0A0  深色 4.80:1 / 浅色 2.61:1  AA（深）/ AA Large（浅）
-- CRITICAL #FF8A80  深色 4.09:1 (Large/Bold ok) / 浅色 3.04:1
-  等级标签在主题切换后会重染为加粗体（font-weight=700），按 WCAG
-  规范计作 Large text 适用 3:1 阈值。
+- ``DEBUG``   → ``on_surface_variant``
+- ``INFO``    → ``on_surface``
+- ``WARNING`` → ``warning``（扩展语义角色，与主色同源）
+- ``ERROR``   / ``CRITICAL`` → ``error``（标签加粗，按 Large text 计对比度）
+
+浅色取 tone 40 附近的深色、深色取 tone 80 的亮色，对比度由角色本身保证。
 """
 
 from __future__ import annotations
@@ -29,50 +25,36 @@ from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QMenu
 
 from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
+from arknights_video_pipeline.gui.theme.typography import MaterialTypography
 
 
-# 浅色主题调色板（保留原色组，向后兼容）
-_LIGHT_LEVEL_COLORS: dict[str, str] = {
-    "DEBUG": "#79747E",
-    "INFO": "#1C1B1F",
-    "WARNING": "#ED6C02",
+#: 未传入 colors 时的兜底色（正常路径都会由 MaterialColors 覆盖）
+_FALLBACK_LEVEL_COLORS: dict[str, str] = {
+    "DEBUG": "#49454F",
+    "INFO": "#1D1B20",
+    "WARNING": "#7D5700",
     "ERROR": "#B3261E",
     "CRITICAL": "#B3261E",
 }
 
-# 深色主题调色板：颜色经过 WCAG AA 对比度验证，针对实际背景
-# surface_variant (#49454F) 设计。INFO 使用 on_surface，DEBUG 使用
-# 比 on_surface_variant 略亮的 #C0BCC4 以达到 4.5:1；WARNING/ERROR/
-# CRITICAL 使用 Material A100/A200 红色与橙色变体。
-_DARK_LEVEL_COLORS: dict[str, str] = {
-    "DEBUG": "#C0BCC4",    # 5.00:1 (AA)  中性灰
-    "INFO": "#E6E1E5",     # 7.24:1 (AAA) on_surface
-    "WARNING": "#FFB74D",  # 5.40:1 (AA)  亮橙
-    "ERROR": "#FFA0A0",    # 4.80:1 (AA)  粉红
-    "CRITICAL": "#FF8A80",  # 4.09:1 (Large/Bold=3:1 OK) 亮红
-}
-
 
 def _colors_for(colors: MaterialColors) -> dict[str, str]:
-    """根据 MaterialColors 推导各日志级别色串
+    """由颜色角色推导各日志级别色串
 
-    使用 ``colors.is_dark`` 风格的判断并不存在；这里采用背景亮度
-    启发式（surface 越深则视为深色主题），保证与 ``MaterialColors``
-    的暗/亮工厂方法保持一致。
+    级别色全部来自 ``MaterialColors``：
+    ``DEBUG → on_surface_variant``、``INFO → on_surface``、
+    ``WARNING → warning``、``ERROR/CRITICAL → error``。
+    浅色取 tone 40 附近的深色、深色取 tone 80 的亮色，对比度由角色本身
+    保证，组件内不再维护两套十六进制常量。
     """
-    # 浅色 surface 为 #FFFBFE，深色 surface 为 #141218
-    # 这里以 surface 颜色的 R+G+B 总和判断（与 MaterialColors 实际取值
-    # 解耦，避免遗漏手动构造的 colors 实例）。
-    surface = colors.surface.lstrip("#")
-    if len(surface) == 6:
-        r, g, b = (int(surface[i : i + 2], 16) for i in (0, 2, 4))
-    else:
-        r = g = b = 0
-    is_dark = (r + g + b) / 3 < 128
-    if is_dark:
-        return dict(_DARK_LEVEL_COLORS)
-    # 浅色：仍可对 WARNING/ERROR 使用稍亮色以提升可读性
-    return dict(_LIGHT_LEVEL_COLORS)
+    return {
+        "DEBUG": colors.on_surface_variant,
+        "INFO": colors.on_surface,
+        "WARNING": colors.warning,
+        "ERROR": colors.error,
+        "CRITICAL": colors.error,
+    }
 
 
 class LogViewer(QPlainTextEdit):
@@ -93,14 +75,20 @@ class LogViewer(QPlainTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        # 等宽字体走统一工厂（12px，行高紧凑，便于扫读日志）
+        self.setFont(MaterialTypography().mono)
+        self.setPlaceholderText(tr("home.logs_empty"))
+        self.document().setDocumentMargin(4)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         # 限制日志最大行数（超出自动丢弃最旧内容）
         self.setMaximumBlockCount(self.MAX_BLOCKS)
         self._level_colors: dict[str, str] = (
             _colors_for(colors) if colors is not None
-            else dict(_LIGHT_LEVEL_COLORS)
+            else dict(_FALLBACK_LEVEL_COLORS)
         )
+        # 订阅主题：日志级别配色自动跟随，无需调用方手工刷新
+        theme_controller().theme_changed.connect(self.set_colors)
 
     def set_colors(self, colors: MaterialColors) -> None:
         """主题切换时刷新各级别颜色，并按行重染已存在的日志文本。
@@ -119,7 +107,7 @@ class LogViewer(QPlainTextEdit):
         """按行重染已存在的日志文本（不丢失内容）"""
         doc = self.document()
         block = doc.begin()
-        info_color = self._level_colors.get("INFO", "#E6E1E5")
+        info_color = self._level_colors.get("INFO", _FALLBACK_LEVEL_COLORS["INFO"])
         while block.isValid():
             text = block.text()
             if not text:

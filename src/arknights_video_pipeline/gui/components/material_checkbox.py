@@ -1,31 +1,34 @@
-"""
-gui.components.material_checkbox - Material Design 3 复选框
+"""gui.components.material_checkbox - MD3 复选框
 
-完全自绘 indicator：因为 PyQt 的 ``QCheckBox::indicator`` 不支持
-``image: url(...)`` 替换内置渲染（Qt 5/6 行为），需要子类化 + paintEvent
-直接绘制 MD3 复选框图标。状态：
-- 未选中：外框（outline 颜色） + 透明背景
-- 选中：填充（primary） + 白色对勾（来自 check_box 图标）
-- 悬停：边框换 primary
-- 禁用：opacity 0.38（MD3 标准）
+完全自绘 indicator（PyQt 的 ``QCheckBox::indicator`` 不支持用 SVG 替换
+内置渲染），状态如下：
+
+- 未选中：透明底 + 2dp ``on_surface_variant`` 描边；
+- 选中：``primary`` 填充 + **``on_primary`` 对勾**（历史上硬编码白色，
+  深色主题下浅紫底 + 白勾对比度仅约 1.7:1，几乎看不见）；
+- 悬停：8% 墨层（indicator 外围 40dp 圆形），描边转 ``on_surface``；
+- 禁用：容器 12% / 内容 38%；
+- 勾选有 150ms 描边展开动画，焦点有 2dp 焦点环。
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize
-from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen
-from PyQt6.QtWidgets import QWidget, QLabel
+from PyQt6.QtCore import QRect, QRectF, QPropertyAnimation, QPointF, QSize, Qt, pyqtProperty, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtWidgets import QLabel, QWidget
 
-from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.colors import MaterialColors
+from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
+from arknights_video_pipeline.gui.theme.palette import set_text_color
+from arknights_video_pipeline.gui.theme.state import StateLayer, blend, with_alpha
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
+from arknights_video_pipeline.gui.theme.typography import MaterialTypography
+
+__all__ = ["MaterialCheckBox"]
 
 
 class MaterialCheckBox(QWidget):
-    """MD3 复选框：自定义 indicator + 文本标签。
-
-    - 未选中：外框（hover 时换 primary） + 透明填充
-    - 选中：primary 填充 + 白色对勾（QPainterPath 绘制，MD3 check 比例）
-    - 禁用：opacity 0.38（MD3 标准）
-    """
+    """MD3 复选框：自绘 indicator + 文本标签 + 勾选动画"""
 
     toggled = pyqtSignal(bool)
 
@@ -35,22 +38,81 @@ class MaterialCheckBox(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._checked = False
-        self._colors = colors or MaterialColors.light()
+        self._colors = colors or theme_controller().colors()
         self._hover = False
+        self._alpha = 0.0
+        self._check = 0.0  # 勾选进度（0-1）
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # 文本子控件（右侧 label），左侧 indicator 由 paintEvent 自绘
+        # 字号走 QFont、文字色走 QPalette：不设 widget 级样式表，
+        # 主题切换时无需逐个重设（省掉 polish 与布局失效）
         self._label = QLabel(text, self)
-        self._label.setStyleSheet(
-            f"background-color: transparent; border: none;"
-            f" color: {self._colors.on_surface}; font-size: 13px;"
-        )
+        self._label.setFont(MaterialTypography().font("body_medium"))
+        set_text_color(self._label, self._colors.on_surface)
         self._label.move(self.INDICATOR_SIZE + 8, 0)
         self._label.adjustSize()
         self._relayout()
 
+        self._check_anim = QPropertyAnimation(self, b"checkProgress", self)
+        self._check_anim.setDuration(Duration.SHORT2)
+        self._check_anim.setEasingCurve(Easing.standard())
+
+        self._layer_anim = QPropertyAnimation(self, b"overlayAlpha", self)
+        self._layer_anim.setDuration(Duration.SHORT1)
+        self._layer_anim.setEasingCurve(Easing.standard())
+
+        # 订阅主题：indicator 与文字颜色自动跟随
+        theme_controller().theme_changed.connect(self.set_colors)
+
+    # ── 动画属性 ─────────────────────────────────────────
+
+    def _get_check(self) -> float:
+        return self._check
+
+    def _set_check(self, value: float) -> None:
+        if value == self._check:
+            return
+        self._check = value
+        self.update()
+
+    checkProgress = pyqtProperty(float, fget=_get_check, fset=_set_check)
+
+    def _get_alpha(self) -> float:
+        return self._alpha
+
+    def _set_alpha(self, value: float) -> None:
+        if value == self._alpha:
+            return
+        self._alpha = value
+        self.update()
+
+    overlayAlpha = pyqtProperty(float, fget=_get_alpha, fset=_set_alpha)
+
+    def _animate_check(self, checked: bool) -> None:
+        target = 1.0 if checked else 0.0
+        duration = Motion.duration(Duration.SHORT2)
+        if duration <= 0:
+            self._set_check(target)
+            return
+        self._check_anim.stop()
+        self._check_anim.setStartValue(self._check)
+        self._check_anim.setEndValue(target)
+        self._check_anim.start()
+
+    def _animate_layer(self, target: float) -> None:
+        duration = Motion.duration(Duration.SHORT1)
+        if duration <= 0:
+            self._set_alpha(target)
+            return
+        self._layer_anim.stop()
+        self._layer_anim.setStartValue(self._alpha)
+        self._layer_anim.setEndValue(target)
+        self._layer_anim.start()
+
     # ── 状态接口 ──────────────────────────────────────────
+
     def isChecked(self) -> bool:  # noqa: N802 - Qt 命名
         return self._checked
 
@@ -58,16 +120,11 @@ class MaterialCheckBox(QWidget):
         if checked == self._checked:
             return
         self._checked = checked
-        self.update()
+        self._animate_check(checked)
         self.toggled.emit(checked)
 
     def setCheckedSilent(self, checked: bool) -> None:  # noqa: N802
-        """程序化回填且不发射 toggled。
-
-        供加载配置/重置默认值场景使用，替代调用方手写
-        ``blockSignals`` 样板（Qt 的 QAbstractButton.setChecked 即为
-        静默语义，此处命名保持一致）。
-        """
+        """程序化回填且不发射 toggled（加载配置/重置默认值场景）"""
         if checked == self._checked:
             return
         self.blockSignals(True)
@@ -94,15 +151,13 @@ class MaterialCheckBox(QWidget):
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
-        self._label.setStyleSheet(
-            f"background-color: transparent; border: none;"
-            f" color: {colors.on_surface}; font-size: 13px;"
-        )
+        set_text_color(self._label, colors.on_surface)
         self.update()
 
     # ── 事件 ──────────────────────────────────────────────
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
             self.setChecked(not self._checked)
             event.accept()
             return
@@ -110,12 +165,12 @@ class MaterialCheckBox(QWidget):
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hover = True
-        self.update()
+        self._animate_layer(StateLayer.HOVER)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hover = False
-        self.update()
+        self._animate_layer(0.0)
         super().leaveEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
@@ -125,58 +180,97 @@ class MaterialCheckBox(QWidget):
             return
         super().keyPressEvent(event)
 
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.update()
+
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = self._label.fontMetrics()
         return QSize(self.INDICATOR_SIZE + 8 + fm.horizontalAdvance(self._label.text()) + 4,
                      max(self.INDICATOR_SIZE, fm.height() + 4))
 
     def resizeEvent(self, event) -> None:  # noqa: N802
-        # label 跟随 self 调整位置（上下居中）
         fm = self._label.fontMetrics()
         self._label.move(self.INDICATOR_SIZE + 8, (self.height() - fm.height()) // 2)
         super().resizeEvent(event)
 
+    # ── 绘制 ─────────────────────────────────────────────
+
     def paintEvent(self, event) -> None:  # noqa: N802
-        # 整体绘制：左侧 indicator 由 QPainter 直绘（绕过 PyQt
-        # QCheckBox::indicator 不支持 image: url 的限制），
-        # 右侧文字交给 QLabel 子控件（Material 风格：左 indicator + 右 label）
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        rect = QRect(0, (self.height() - self.INDICATOR_SIZE) // 2,
-                     self.INDICATOR_SIZE, self.INDICATOR_SIZE)
-        checked = self._checked and self.isEnabled()
-        if not self.isEnabled():
-            p.setOpacity(0.38)  # MD3 disabled 透明度
+        c = self._colors
+        enabled = self.isEnabled()
+        size = self.INDICATOR_SIZE
+        rect = QRect(0, (self.height() - size) // 2, size, size)
+        center = QPointF(rect.center())
 
-        if checked:
-            # 选中：primary 填充方块 + 白色对勾
-            p.setBrush(QColor(self._colors.primary))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(rect, 2.0, 2.0)
-            # 对勾路径（按 24px viewBox 比例缩放到 INDICATOR_SIZE）：
-            #   起点(3, 12) → 拐点(10, 18) → 终点(21, 5)
-            check_path = QPainterPath()
-            s = self.INDICATOR_SIZE / 24.0
-            check_path.moveTo(3 * s, 12 * s)
-            check_path.lineTo(10 * s, 18 * s)
-            check_path.lineTo(21 * s, 5 * s)
-            pen = QPen(QColor("#FFFFFF"))
+        # 墨层：indicator 外围 20dp 圆形
+        if self._alpha > 0.0 and enabled:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(with_alpha(c.on_surface, self._alpha))
+            painter.drawEllipse(center, 20.0, 20.0)
+
+        if not enabled:
+            painter.setOpacity(1.0)
+
+        if self._checked:
+            container = (
+                c.primary
+                if enabled
+                else blend(c.surface, c.on_surface, StateLayer.DISABLED_CONTAINER).name()
+            )
+            content = (
+                c.on_primary
+                if enabled
+                else blend(c.surface, c.on_surface, StateLayer.DISABLED_CONTENT).name()
+            )
+            painter.setBrush(QColor(container))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect, 2.0, 2.0)
+
+            # 对勾：按进度展开（0 → 完整路径）
+            s = size / 24.0
+            full = QPainterPath()
+            full.moveTo(3 * s, 12 * s)
+            full.lineTo(10 * s, 18 * s)
+            full.lineTo(21 * s, 5 * s)
+            pen = QPen(QColor(content))
             pen.setWidthF(2.0)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            p.setPen(pen)
-            p.drawPath(check_path)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if self._check >= 0.999:
+                painter.drawPath(full)
+            else:
+                painter.setOpacity(max(0.0, min(1.0, self._check)))
+                painter.drawPath(full)
+                painter.setOpacity(1.0)
         else:
-            # 未选中：透明填充 + 边框（hover 时换 primary 色）
-            p.setBrush(QColor(self._colors.surface))
             border_color = (
-                self._colors.primary if self._hover
-                else self._colors.outline
+                c.on_surface_variant if enabled
+                else blend(c.surface, c.on_surface, StateLayer.DISABLED_CONTENT).name()
             )
+            if self._hover and enabled:
+                border_color = c.on_surface
             pen = QPen(QColor(border_color))
             pen.setWidth(2)
-            p.setPen(pen)
-            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 2.0, 2.0)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 2.0, 2.0)
 
-        p.end()
+        # 焦点环
+        if self.hasFocus() and enabled:
+            ring = QPen(QColor(c.primary))
+            ring.setWidthF(2.0)
+            painter.setPen(ring)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(rect).adjusted(-3, -3, 3, 3), 4.0, 4.0)
+
+        painter.end()
