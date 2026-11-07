@@ -107,9 +107,12 @@ class MaterialTypography:
         """
         from arknights_video_pipeline.gui.theme.font_manager import FontManager
 
+        # 中文回退必须排在系统字体之前：内置 Noto Sans SC 与 Roboto 同为
+        # MD3 品牌字族的 CJK 补充，避免同一句里 Latin 用 Roboto、CJK 却
+        # 落到 Microsoft YaHei（两套字形混排会显得廉价且基线不稳）。
         base = [
-            "Roboto", "Google Sans", "Segoe UI", "Microsoft YaHei UI",
-            "Noto Sans SC", "Arial", "sans-serif",
+            "Roboto", "Noto Sans SC", "Google Sans", "Segoe UI",
+            "Microsoft YaHei UI", "Arial", "sans-serif",
         ]
         ordered: list[str] = []
         for name in [*FontManager.available_families(), *base]:

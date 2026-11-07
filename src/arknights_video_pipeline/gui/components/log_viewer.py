@@ -21,13 +21,12 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QMenu
+from PyQt6.QtWidgets import QMenu, QPlainTextEdit, QWidget
 
 from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
-
 
 #: 未传入 colors 时的兜底色（正常路径都会由 MaterialColors 覆盖）
 _FALLBACK_LEVEL_COLORS: dict[str, str] = {
@@ -139,7 +138,8 @@ class LogViewer(QPlainTextEdit):
                 )
                 fmt = QTextCharFormat()
                 fmt.setForeground(QColor(tag_color))
-                fmt.setFontWeight(700)  # 加粗等级标签，提升扫读性
+                # MD3 只使用 400 / 500 字重；500 已足以让等级标签从正文中区分
+                fmt.setFontWeight(500)
                 cursor.setCharFormat(fmt)
             block = block.next()
 

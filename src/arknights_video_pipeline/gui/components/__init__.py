@@ -11,14 +11,21 @@ from arknights_video_pipeline.gui.components.batch_video_list import BatchVideoL
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
 from arknights_video_pipeline.gui.components.log_viewer import LogViewer
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
-from arknights_video_pipeline.gui.components.material_card import CardFrame, MaterialCard
+from arknights_video_pipeline.gui.components.material_card import (
+    CardFrame,
+    MaterialCard,
+)
 from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
 from arknights_video_pipeline.gui.components.material_combo import MaterialComboBox
 from arknights_video_pipeline.gui.components.material_fab import MaterialFab
-from arknights_video_pipeline.gui.components.material_icon_button import MaterialIconButton
+from arknights_video_pipeline.gui.components.material_icon_button import (
+    MaterialIconButton,
+)
 from arknights_video_pipeline.gui.components.material_progress import MaterialProgress
 from arknights_video_pipeline.gui.components.material_switch import MaterialSwitch
-from arknights_video_pipeline.gui.components.material_text_field import MaterialTextField
+from arknights_video_pipeline.gui.components.material_text_field import (
+    MaterialTextField,
+)
 from arknights_video_pipeline.gui.components.navigation_bar import NavigationBar
 from arknights_video_pipeline.gui.components.navigation_rail import NavigationRail
 from arknights_video_pipeline.gui.components.page_header import PageHeader

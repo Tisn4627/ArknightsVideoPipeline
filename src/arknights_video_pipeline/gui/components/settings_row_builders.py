@@ -22,11 +22,19 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QRegularExpression
+from PyQt6.QtCore import QEvent, QObject, QRegularExpression, QSize, Qt
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import (
-    QBoxLayout, QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
-    QSpinBox, QSizePolicy, QVBoxLayout, QWidget,
+    QBoxLayout,
+    QDialog,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
@@ -331,6 +339,7 @@ def build_switch_row(
     shell = _RowShell(label, c, desc)
 
     switch = MaterialSwitch(checked=default, colors=c)
+    switch.setAccessibleName(label)
     if on_changed:
         switch.toggled.connect(on_changed)
     shell.add_control(switch)

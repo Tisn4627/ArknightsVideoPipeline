@@ -43,10 +43,15 @@ QSS **不支持** `line-height`、`letter-spacing`、`box-shadow`、`transition`
 ### 1.4 字体与图标
 
 - **字体**：`MaterialTypography` 统一工厂，px 单轨 + `QFont.setFamilies`
-  回退链（`Roboto` → `Noto Sans SC` → 系统无衬线）；禁止裸 `QFont()`。
-- **图标**：统一 **Material Symbols Rounded**（`gui/assets/icons/svg/`），
-  通过 `make_icon_pixmap(name, color, size)` 栅格化并按 `lru_cache` 缓存；
-  颜色由调用方传 token，禁止在组件里硬编码。
+  回退链（`Roboto` → **`Noto Sans SC`（内置，中文优先）** → `Microsoft YaHei UI`
+  → 系统无衬线）；禁止裸 `QFont()`。
+- **图标**：统一 **Material Symbols Rounded**（`gui/assets/icons/svg/`，
+  viewBox `0 -960 960 960`），每个图标提供 `default`（outlined）与
+  `fill1`（filled）两个变体，并按 **20 / 24 / 40dp 光学尺寸**各存一份源
+  文件（`<name>_20.svg` / `<name>_40.svg`），避免把 24dp 描边放大到 40dp
+  后变粗；通过 `make_icon_pixmap(name, color, size)` 栅格化并按
+  `lru_cache` 缓存；颜色由调用方传 token，禁止在组件里硬编码。
+  导航项选中时按进度做 outline → filled 交叉淡入（两个变体各预渲染一次）。
 
 ### 1.5 主题切换链路
 
@@ -68,7 +73,7 @@ GuiConfig(theme / dynamic_color / seed_color)
 
 | 层 | 载体 | 切换时动作 |
 |---|---|---|
-| 文字 / 背景 / 选中色 | `QPalette`（`theme/palette.py`） | `setPalette` 后清空 QSS 写入的显式调色板，让新调色板沿控件树传播 |
+| 文字 / 背景 / 选中色 | `QPalette`（`theme/palette.py`；`Base = surface_container_highest`、`AlternateBase = surface_container`） | `setPalette` 后清空 QSS 写入的显式调色板，让新调色板沿控件树传播 |
 | 描边 / 滚动条 / 菜单等原生控件的外观 | QSS 里的 `palette(role)` | 对这些控件（输入框 / 滚动条等，约 180 个）逐只 `unpolish + polish`，重新解析 |
 | 自绘组件（卡片、按钮、开关、复选框、导航、进度条…） | `theme_changed` 信号 | 用新 token 重绘，不经过样式表 |
 
@@ -151,7 +156,9 @@ GuiConfig(theme / dynamic_color / seed_color)
 | 平面 | 角色 |
 |---|---|
 | 窗口 / 页面背景 | `surface` |
-| 卡片（filled） | `surface_container_low` |
+| 卡片（outlined） | `surface` + 1dp `outline_variant` 描边 |
+| 卡片（filled） | `surface_container_highest` |
+| 卡片（elevated） | `surface_container_low` + level1 阴影 |
 | 菜单 / 下拉浮层 | `surface_container` |
 | 对话框 | `surface_container_high` |
 | 抽屉 / 模态大面板 | `surface_container_highest` |
@@ -257,18 +264,21 @@ GuiConfig(theme / dynamic_color / seed_color)
 | 组件 | 规格 |
 |---|---|
 | 按钮 | 高 40dp（小 32 / 大 48）、圆角 full、左右内距 24dp、图标 18dp + 8dp；filled / tonal / elevated / outlined / text 五变体 |
-| 图标按钮 | 40dp、圆角 full、图标 24dp；standard / filled / tonal / outlined |
+| 图标按钮 | 40dp、圆角 full、图标 20/24dp；standard / filled / tonal / outlined |
 | 输入框 | 主页浮动标签字段高 56dp + 8dp 标签区、圆角 4dp、1dp `outline`、聚焦 2dp `primary`（内缩）；设置页字段用 48dp 桌面密度 |
-| 卡片 | 圆角 12dp；默认 `outlined` 变体：`surface_container` 底 + 1dp `outline_variant` 描边；`elevated` 才叠加 level1 阴影 |
-| FAB | regular 56dp 圆形；extended 高 56dp、圆角 16dp、左右内距 20dp；elevation 3 |
-| 导航 Rail | 宽 80dp、项高 56dp、指示器 56×32 圆角 16、标签 `label_medium` |
-| 导航 Bar | 高 80dp、指示器 64×32、3-5 项（compact 档） |
-| 对话框 | 圆角 28dp、宽 280-560、`surface_container_high` + elevation 3、图标 24dp、text 按钮右对齐间距 8dp |
-| 进度 | 轨道 4dp、圆头、百分比文字在条外 |
+| 卡片 | 圆角 12dp；`outlined` = `surface` 底 + 1dp `outline_variant` 描边；`filled` = `surface_container_highest` 无描边；`elevated` = `surface_container_low` + level1 阴影；卡片间距 8dp |
+| FAB | regular 56dp 圆形；extended 高 56dp、圆角 16dp、左右内距 20dp；elevation 3；距边缘 16dp |
+| 导航 Rail | 宽 80dp、项高 56dp、指示器 56×32 圆角 16、标签 `label_medium`；选中图标由 outlined 交叉淡入 filled 变体 |
+| 导航 Bar | 高 80dp、`surface_container` 底（无分隔线）、指示器 64×32、3-5 项（compact 档） |
+| 对话框 | 无边框 + 透明窗口、圆角 28dp、宽 280-560、`surface_container_high` + elevation 3、32% scrim、图标 24dp、text 按钮右对齐间距 8dp |
+| 进度 | 轨道 4dp、圆头、active `primary` / track `secondary_container`、百分比文字在条外 |
 | 队列列表行 | two-line 高 80dp、圆角 8dp、悬停 8% `on_surface` 墨层；第一行 28dp 序号 chip + 状态图标 + 文件名 + 右对齐状态文字；第二行 4dp 进度 + 百分比 + 40dp 图标按钮；文件名中间省略、完整路径进 tooltip |
 | 卡片网格 | 主页/工具页按尺寸类别双列或单列；**设置页固定单列**（内容最大宽 1000dp），卡片按顺序排列、等宽对齐，避免双列压缩字段与同排卡片高度错位 |
-| 开关 / 复选框 | 开关轨道 52×32（控件 60×40，四周 4dp 为 40dp 状态层安全区），未选中滑块 16dp / 选中 24dp，含墨层、动画、禁用 12%/38%；复选框 18dp；勾色用 `on_primary` |
+| 开关 / 复选框 | 开关轨道 52×32（控件 60×40，四周 4dp 为 40dp 状态层安全区），未选中滑块 16dp / 选中 24dp，含墨层、动画、禁用 12%/38%；复选框 18dp、40dp 状态层 + 上下 2dp 安全区（控件高 44dp，hover 圆不再被边界裁切），标签整块可点击且禁用时降为 on_surface 38%；勾色用 `on_primary`，对勾路径平移至 indicator 实际坐标 |
+| 下拉框 | 自绘 `Qt.Popup` 弹层：`surface_container`、4dp 圆角、level 2 阴影、44dp 行高；选中行 `secondary_container` + `on_secondary_container` 文字 + `check` 图标；悬停 8% 状态层；关闭时恢复焦点；被 `MaterialTextField` 包裹时弹层对齐外框、隐藏双 chevron |
+| 图标 | 统一 Material Symbols Rounded（24dp 矢量源）；尺寸 20/24/40dp；导航选中态使用 filled 变体；下拉 chevron 使用 `expand_more` 图标而非手绘路径 |
 | 设置行 | 标签/说明列占左侧剩余空间（字段标签至少 180dp）；字段控件列右对齐、统一 420dp 上限（可空整数行的开关+数值框为 168dp 紧凑组、数值框 100dp）；行宽 < 460dp 时字段行改为"标签在上、控件在下"堆叠；开关行控件同样贴右缘 |
+| 配置文件卡 | 单行动作区：状态文本在左，按钮组右对齐，顺序为全选 → 取消全选（同为 text 次级操作）→ 生成（唯一 filled 主操作），间距 8dp；全选完成后禁用"全选"、无选中时禁用"取消全选"与"生成"；运行期整卡复选框与三个按钮全部禁用；选择变化清除旧生成状态；窄窗下状态文本在上、三个按钮右对齐堆叠 |
 | 路径行 | 描边字段 + 40dp tonal 图标按钮（folder_open，tooltip 为"浏览"）；图标替文字按钮节省约 36dp，长路径尽量完整显示 |
 | 窗口 | 最小 440×480；单列设置页最窄卡片约 396dp，加紧凑页边距仍小于最小窗口宽度，因此不出现横向滚动 |
 

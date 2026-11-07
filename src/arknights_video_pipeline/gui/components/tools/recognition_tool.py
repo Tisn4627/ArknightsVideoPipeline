@@ -51,7 +51,6 @@ from arknights_video_pipeline.gui.i18n import tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 from arknights_video_pipeline.service.recognition_worker import RecognitionWorker
 
-
 logger = logging.getLogger(__name__)
 
 

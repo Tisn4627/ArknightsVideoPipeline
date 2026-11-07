@@ -13,11 +13,19 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLineEdit, QFileDialog, QSizePolicy,
+    QFileDialog,
+    QHBoxLayout,
+    QLineEdit,
+    QSizePolicy,
+    QWidget,
 )
 
-from arknights_video_pipeline.gui.components.material_icon_button import MaterialIconButton
-from arknights_video_pipeline.gui.components.material_text_field import MaterialTextField
+from arknights_video_pipeline.gui.components.material_icon_button import (
+    MaterialIconButton,
+)
+from arknights_video_pipeline.gui.components.material_text_field import (
+    MaterialTextField,
+)
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
 from arknights_video_pipeline.gui.theme.spacing import Space
@@ -130,9 +138,13 @@ class FileSelector(QWidget):
         self._field.set_label(text if self._show_label else "")
 
     def set_placeholder(self, text: str) -> None:
-        """设置输入框占位符文本（语言切换时调用）"""
+        """设置输入框占位符文本（语言切换时调用）
+
+        有浮动标签时占位符会由 ``MaterialTextField`` 自动隐藏，避免标签
+        与 placeholder 叠在同一位置（空字段 + 未聚焦时曾出现文字重影）。
+        """
         self._placeholder = text
-        self._edit.setPlaceholderText(text)
+        self._field.set_placeholder(text)
 
     def set_colors(self, colors: MaterialColors) -> None:
         """切换主题色：字段与按钮各自订阅主题，这里仅同步缓存"""

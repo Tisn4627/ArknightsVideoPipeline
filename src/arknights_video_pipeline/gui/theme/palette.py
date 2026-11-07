@@ -11,7 +11,7 @@ QSS 渲染优先级高于 QPalette，因此本模块只做**兜底**：
 | QPalette 角色 | 取色 |
 |---|---|
 | Window / WindowText | surface / on_surface |
-| Base / AlternateBase | surface_container_lowest / surface_container_low |
+| Base / AlternateBase | surface_container_highest / surface_container |
 | Text / PlaceholderText | on_surface / on_surface_variant |
 | Button / ButtonText | primary / on_primary |
 | Highlight / HighlightedText | primary / on_primary |
@@ -39,8 +39,11 @@ def build_palette(colors: MaterialColors) -> QPalette:
     # 表面与文本
     palette.setColor(QPalette.ColorRole.Window, QColor(c.surface))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(c.on_surface))
-    palette.setColor(QPalette.ColorRole.Base, QColor(c.surface_container_lowest))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(c.surface_container_low))
+    # MD3 文本字段（filled）容器 = surface_container_highest；菜单 / 弹层 =
+    # surface_container。QSS 通过 palette(base) / palette(alternate-base)
+    # 引用这两个角色，因此原生输入区、日志区、下拉浮层会自动落在正确层级。
+    palette.setColor(QPalette.ColorRole.Base, QColor(c.surface_container_highest))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(c.surface_container))
     palette.setColor(QPalette.ColorRole.Text, QColor(c.on_surface))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(c.on_surface_variant))
 

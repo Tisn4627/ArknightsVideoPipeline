@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
@@ -36,7 +37,8 @@ from arknights_video_pipeline.gui.components.page_header import PageHeader
 from arknights_video_pipeline.gui.components.tools import TOOL_REGISTRY
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import Grid, MaterialColors, MaterialTypography
-from arknights_video_pipeline.gui.theme.spacing import Margin, Space
+from arknights_video_pipeline.gui.theme.spacing import Layout, Margin, Space
+from arknights_video_pipeline.gui.theme.state import StateLayer, with_alpha
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.window_size import WindowSizeClass
 
@@ -130,6 +132,7 @@ class ToolCard(MaterialCard):
         self.tool_id = tool_id
         self._colors = colors
         self._typo = MaterialTypography()
+        self._hovered = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # 卡片高度由内容决定，避免宽屏两列时被拉成同高
         self.setSizePolicy(self.sizePolicy().horizontalPolicy(),
@@ -152,7 +155,8 @@ class ToolCard(MaterialCard):
         text_col.addWidget(self._title)
 
         self._desc = QLabel(tr(desc_key), self)
-        self._desc.setFont(self._typo.font("body_small"))
+        # MD3 列表项的 supporting text 使用 body_medium（14/400）
+        self._desc.setFont(self._typo.font("body_medium"))
         self._desc.setWordWrap(True)
         text_col.addWidget(self._desc)
         row.addLayout(text_col, 1)
@@ -176,6 +180,7 @@ class ToolCard(MaterialCard):
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
         self._apply_colors()
+        self.update()
 
     def _apply_colors(self) -> None:
         c = self._colors
@@ -189,6 +194,33 @@ class ToolCard(MaterialCard):
         self._desc.setStyleSheet(
             f"color: {c.on_surface_variant}; background: transparent; border: none;"
         )
+
+    # ── 可点击卡片的交互态 ────────────────────────────────
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if not self._hovered:
+            return
+        # MD3 可点击卡片：8% on_surface 状态层叠在卡片容器上
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(with_alpha(self._colors.on_surface, StateLayer.HOVER))
+        painter.drawRoundedRect(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+            12.0, 12.0,
+        )
+        painter.end()
 
 
 class ToolsPage(QWidget):
@@ -230,7 +262,8 @@ class ToolsPage(QWidget):
         self._grid_host.setStyleSheet("background: transparent; border: none;")
         self._grid = QGridLayout(self._grid_host)
         self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setSpacing(Space.XL)
+        # MD3 卡片之间最大 8dp（页面区块之间才用 24dp）
+        self._grid.setSpacing(Layout.CARD_GAP)
         root.addWidget(self._grid_host)
 
         self._cards: list[ToolCard] = []

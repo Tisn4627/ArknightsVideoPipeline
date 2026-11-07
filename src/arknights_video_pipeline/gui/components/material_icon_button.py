@@ -16,7 +16,10 @@ from PyQt6.QtCore import QPropertyAnimation, QRectF, QSize, Qt, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QAbstractButton, QSizePolicy, QWidget
 
-from arknights_video_pipeline.gui.assets.icons.nav_icons import has_icon, make_icon_pixmap
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
 from arknights_video_pipeline.gui.theme.spacing import Layout
@@ -52,9 +55,12 @@ class MaterialIconButton(QAbstractButton):
         self._colors: MaterialColors = theme_controller().colors()
         self._alpha = 0.0
         self._hovered = False
+        self._keyboard_focus = False
         self._tint_role: str | None = None
 
         self.setToolTip(tooltip)
+        # 纯图标按钮必须有可读名称（屏幕阅读器 / 无障碍工具）
+        self.setAccessibleName(tooltip)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFixedSize(size, size)
@@ -134,10 +140,16 @@ class MaterialIconButton(QAbstractButton):
 
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
         self.update()
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
+        self._keyboard_focus = False
         self.update()
 
     # ── 绘制 ─────────────────────────────────────────────
@@ -212,7 +224,7 @@ class MaterialIconButton(QAbstractButton):
                 y = (self.height() - self._icon_size) // 2
                 painter.drawPixmap(x, y, pixmap)
 
-        if self.hasFocus() and self.isEnabled():
+        if self._keyboard_focus and self.isEnabled():
             ring = QPen(QColor(foreground))
             ring.setWidthF(2.0)
             painter.setPen(ring)

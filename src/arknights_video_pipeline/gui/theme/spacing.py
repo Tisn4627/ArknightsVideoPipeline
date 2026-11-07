@@ -49,9 +49,10 @@ class Layout:
     """页面级的组合间距（避免各处重复三元表达式）"""
 
     # 卡片
-    CARD_PADDING = Space.L            # 紧凑 / 中等档
-    CARD_PADDING_EXPANDED = 20        # 宽屏略放松（仍为 4 的倍数）
-    CARD_GAP = Space.XL
+    CARD_PADDING = Space.L            # MD3 卡片左右内边距 16dp（所有尺寸类别）
+    CARD_PADDING_EXPANDED = Space.L
+    # MD3 卡片之间的最大间距为 8dp；页面区块之间才用 24dp
+    CARD_GAP = Space.S
     CARD_HEADER_GAP = Space.M
 
     # 页面结构
@@ -79,7 +80,10 @@ class Layout:
     BUTTON_PADDING_H = Space.XL
     ICON_BUTTON_SIZE = 40
     FAB_SIZE = 56
-    FAB_MARGIN = Space.XL
+    # MD3 extended FAB 左右内边距 20dp
+    FAB_PADDING_H = 20
+    # MD3 FAB 距窗口 / 安全区边缘 16dp
+    FAB_MARGIN = Space.L
 
 
 class Grid:

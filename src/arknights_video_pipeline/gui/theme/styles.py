@@ -290,12 +290,13 @@ class MaterialStyle:
             padding: {pad - 1}px;
         }}
 
-        /* 设置页字段：桌面密度 48dp（MD3 density -1），保证长表单可扫读 */
+        /* 设置页字段：桌面密度 48dp（MD3 density -1），保证长表单可扫读。
+           字号不在这里写：由控件自身 setFont(body_large 16) 提供，
+           QSS 的 font-size 会覆盖 setFont 的结果（导致主页 16 / 设置 14 双轨）。 */
         QLineEdit#settingsField, QSpinBox#settingsField,
         QDoubleSpinBox#settingsField, QComboBox#settingsField {{
             padding: 10px 12px;
             min-height: 26px;
-            font-size: 14px;
         }}
 
         QLineEdit#settingsField:focus, QSpinBox#settingsField:focus,
@@ -325,8 +326,9 @@ class MaterialStyle:
         }}
 
         QComboBox QAbstractItemView::item {{
-            min-height: 36px;
-            padding: 0 {Space.M}px;
+            /* 桌面密度 -2：MD3 菜单项 48dp 在鼠标环境下压缩到 40dp */
+            min-height: 40px;
+            padding: 0 {Space.L}px;
             border-radius: {Shape.EXTRA_SMALL}px;
         }}
 
@@ -344,19 +346,23 @@ class MaterialStyle:
             border: none;
         }}
 
-        /* 多行文本：代码 / 日志容器（filled，12dp 圆角）*/
+        /* 多行文本：MD3 平面容器（4dp 圆角、surface_container 底、无描边），
+           用于日志 / JSON 编辑器等代码型内容。用 alternate-base 而不是
+           base：base 是 filled 输入区最高一档，作为日志大色块过重。 */
         QPlainTextEdit, QTextEdit {{
-            background-color: palette(base);
+            background-color: palette(alternate-base);
             color: palette(text);
-            border: 1px solid palette(midlight);
-            border-radius: {ShapeRole.CARD}px;
-            padding: {Space.M}px;
+            /* 常态描边与底色同色（视觉无边框），聚焦只换描边色：
+               几何不变，文字不会因 0→1px 边框而抖动 */
+            border: 1px solid palette(alternate-base);
+            border-radius: {Shape.EXTRA_SMALL}px;
+            padding: {Space.M - 1}px;
             selection-background-color: palette(highlight);
             selection-color: palette(highlighted-text);
         }}
 
         QPlainTextEdit:focus, QTextEdit:focus {{
-            border: 1px solid palette(highlight);
+            border-color: palette(highlight);
         }}
         """
 
@@ -561,7 +567,7 @@ class MaterialStyle:
         }}
 
         QMenu::item {{
-            padding: {Space.S}px {Space.XL}px;
+            padding: {Space.M}px {Space.XL}px;
             border-radius: {Shape.EXTRA_SMALL}px;
         }}
 

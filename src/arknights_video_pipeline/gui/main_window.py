@@ -11,27 +11,61 @@ gui.main_window - 主窗口
 from __future__ import annotations
 
 from PyQt6.QtCore import (
-    QEvent, QObject, QPointF, QPropertyAnimation, QTimer, Qt,
+    QEvent,
+    QObject,
+    QPointF,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
 )
 from PyQt6.QtGui import QCloseEvent, QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QScrollArea, QComboBox, QGraphicsOpacityEffect,
-    QApplication, QLabel, QFrame, QStackedWidget,
+    QApplication,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QScrollArea,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-
-from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
 
 from arknights_video_pipeline.gui.components import (
-    AboutPage, BatchVideoList, FileSelector, LogViewer, MaterialButton, MaterialCard,
-    MaterialCheckBox, MaterialFab, MaterialTextField, NavigationBar, NavigationRail,
-    PageHeader, ProgressCard, SettingsPage, ToolsPage,
+    AboutPage,
+    BatchVideoList,
+    FileSelector,
+    LogViewer,
+    MaterialButton,
+    MaterialCard,
+    MaterialCheckBox,
+    MaterialComboBox,
+    MaterialFab,
+    MaterialTextField,
+    NavigationBar,
+    NavigationRail,
+    PageHeader,
+    ProgressCard,
+    SettingsPage,
+    ToolsPage,
 )
-from arknights_video_pipeline.gui.i18n import init_i18n, i18n, tr
+from arknights_video_pipeline.gui.i18n import i18n, init_i18n, tr
 from arknights_video_pipeline.gui.theme import (
-    Grid, GuiConfig, Layout, Margin, MaterialColors, MaterialTypography, Space,
-    WindowSizeClass, apply_titlebar_theme, set_text_color, theme_controller,
+    Grid,
+    GuiConfig,
+    Layout,
+    Margin,
+    MaterialColors,
+    MaterialTypography,
+    Space,
+    WindowSizeClass,
+    apply_titlebar_theme,
+    set_text_color,
+    theme_controller,
 )
+from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
 from arknights_video_pipeline.service import ConfigProxy, PipelineService
 
 
@@ -245,7 +279,7 @@ class MainWindow(QMainWindow):
             content_right = viewport_top_left.x() + viewport_rect.width()
         # 视口本身已经位于底部导航条上方，无需再减一次 NAV_BAR 高度
         bottom = viewport_top_left.y() + viewport_rect.height()
-        margin = Space.XL
+        margin = Layout.FAB_MARGIN
         x = content_right - fab.width() - margin
         y = bottom - fab.height() - margin
         fab.move(max(margin, int(x)), max(margin, int(y)))
@@ -420,7 +454,8 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self._bg_selector)
 
-        self._style_combo = QComboBox()
+        # 使用自绘 MD3 下拉框：与设置页一致，弹层为圆角 surface_container
+        self._style_combo = MaterialComboBox()
         self._style_combo.addItems(["style1", "style2"])
         # 与其他字段一致：MD3 描边字段 + 浮动标签（不再用固定宽度左标签）
         self._style_field = MaterialTextField(
@@ -918,6 +953,8 @@ class MainWindow(QMainWindow):
         self._settings_page.set_ffmpeg_enabled(not running)
         # 子配置字段（track/formation/actions/video_compose）运行期间禁止修改
         self._settings_page.set_sub_config_enabled(not running)
+        # 配置文件卡片的勾选/批量操作/生成运行期间禁止修改（会写 config 文件）
+        self._settings_page.set_config_enabled(not running)
         for cb in self._skip_checkboxes.values():
             cb.setEnabled(not running)
         # 运行期间隐藏 FAB（此时主操作已变为"取消"）
@@ -1071,7 +1108,9 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _show_critical(self, title: str, text: str) -> None:
-        from arknights_video_pipeline.gui.components.message_dialog import CriticalDialog
+        from arknights_video_pipeline.gui.components.message_dialog import (
+            CriticalDialog,
+        )
         dlg = CriticalDialog(title, text, colors=self._settings_page.colors, parent=self)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.exec()
@@ -1086,17 +1125,3 @@ class MainWindow(QMainWindow):
         )
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         return dlg.exec() == ConfirmDialog.CONFIRMED
-
-
-class QLabelEx(QLabel):
-    """扩展标签，支持加粗与字号快速设置"""
-
-    def __init__(self, text: str = "", bold: bool = False, size: int = 0,
-                 parent=None) -> None:
-        super().__init__(text, parent)
-        style = "border: none; background: transparent;"
-        if bold:
-            style += " font-weight: 500;"
-        if size:
-            style += f" font-size: {size}px;"
-        self.setStyleSheet(style)

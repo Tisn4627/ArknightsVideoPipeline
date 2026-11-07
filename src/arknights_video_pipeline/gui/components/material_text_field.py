@@ -17,18 +17,40 @@ MD3 outlined text field 的解剖结构：
 from __future__ import annotations
 
 from PyQt6.QtCore import (
-    QEvent, QObject, QPropertyAnimation, QRect, QRectF, Qt, pyqtProperty,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    Qt,
+    pyqtProperty,
 )
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QRegion,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRegion,
 )
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox, QComboBox, QLabel, QLineEdit, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QAbstractSpinBox,
+    QComboBox,
+    QLabel,
+    QLineEdit,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
+from arknights_video_pipeline.gui.theme.palette import set_text_color
 from arknights_video_pipeline.gui.theme.shape import ShapeRole
 from arknights_video_pipeline.gui.theme.spacing import Space
 from arknights_video_pipeline.gui.theme.state import StateLayer, blend
@@ -64,7 +86,9 @@ class _FieldBox(QWidget):
         self._progress = 0.0  # 0=标签居中，1=标签上浮
         self._typography = MaterialTypography()
         self._rest_size = self._typography.role("body_large").size
-        self._float_size = self._typography.role("label_small").size
+        # MD3 outlined field：标签上浮后使用 body_small（12），与 supporting
+        # text 同档；label_small（11）只用于密集标签，不适合输入框标签。
+        self._float_size = self._typography.role("body_small").size
         self._inner: QWidget | None = None
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -114,7 +138,12 @@ class _FieldBox(QWidget):
 
     def set_label(self, text: str) -> None:
         self._label = text
+        if self._inner is not None:
+            self._inner.setAccessibleName(text)
         self.update()
+
+    def label_text(self) -> str:
+        return self._label
 
     def set_error(self, error: bool) -> None:
         if error == self._error:
@@ -145,8 +174,18 @@ class _FieldBox(QWidget):
             " min-height: 0px;"
         )
         widget.setFont(self._typography.font("body_large"))
+        # MaterialComboBox 被包裹时：取消自身最小高度/箭头，弹层对齐到外框
+        if hasattr(widget, "set_embedded"):
+            widget.set_embedded(True)
+        if hasattr(widget, "set_chevron_visible"):
+            widget.set_chevron_visible(False)
+        if hasattr(widget, "set_popup_anchor"):
+            widget.set_popup_anchor(self)
         widget.installEventFilter(self)
         self._inner = widget
+        if self._label:
+            # 浮动标签是自绘文字，不进入无障碍树；给真实输入控件补可读名称
+            widget.setAccessibleName(self._label)
         self._layout_inner()
 
     # ── 几何 ─────────────────────────────────────────────
@@ -170,6 +209,22 @@ class _FieldBox(QWidget):
         ):
             self.update()
         return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event) -> None:
+        """整块字段都可点击：输入区只有 24dp 高，若只让中间那条可点，
+        MD3 字段的上下 padding 会变成死区（下拉框尤其明显）。"""
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._inner is not None
+            and self.isEnabled()
+            and self._inner.isEnabled()
+        ):
+            self._inner.setFocus(Qt.FocusReason.MouseFocusReason)
+            if isinstance(self._inner, QComboBox):
+                self._inner.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def enterEvent(self, event) -> None:
         self._hovered = True
@@ -232,20 +287,15 @@ class _FieldBox(QWidget):
         return c.outline, c.on_surface_variant
 
     def _draw_chevron(self, painter: QPainter, color: QColor) -> None:
-        """下拉框右侧 chevron（24dp，跟随主题换色）"""
-        cx = self.width() - _H_PADDING - 12
-        cy = _OUTLINE_TOP + _OUTLINE_HEIGHT / 2.0
-        path = QPainterPath()
-        path.moveTo(cx - 5, cy - 2.5)
-        path.lineTo(cx, cy + 2.5)
-        path.lineTo(cx + 5, cy - 2.5)
-        pen = QPen(color)
-        pen.setWidthF(1.6)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(path)
+        """下拉框右侧 chevron：Material Symbols Rounded expand_more（24dp）"""
+        if not has_icon("expand_more"):
+            return
+        pixmap = make_icon_pixmap("expand_more", color, size_px=24)
+        if pixmap is None:
+            return
+        x = self.width() - _H_PADDING - 24
+        y = _OUTLINE_TOP + (_OUTLINE_HEIGHT - 24) // 2
+        painter.drawPixmap(x, y, pixmap)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -330,6 +380,9 @@ class MaterialTextField(QWidget):
         self._colors = colors or theme_controller().colors()
         self._inner = inner
         self._support: QLabel | None = None
+        self._placeholder = (
+            inner.placeholderText() if isinstance(inner, QLineEdit) else ""
+        )
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -338,6 +391,7 @@ class MaterialTextField(QWidget):
         self._box = _FieldBox(label, self._colors, self)
         self._box.attach(inner)
         root.addWidget(self._box)
+        self._sync_placeholder()
 
         if supporting:
             self._support = QLabel(supporting, self)
@@ -379,6 +433,18 @@ class MaterialTextField(QWidget):
     def set_label(self, text: str) -> None:
         self._box.set_label(text)
         self._sync_float()
+        self._sync_placeholder()
+
+    def set_placeholder(self, text: str) -> None:
+        """更新占位符；有浮动标签时占位符不显示（避免与标签文字重叠）"""
+        self._placeholder = text
+        self._sync_placeholder()
+
+    def _sync_placeholder(self) -> None:
+        if isinstance(self._inner, QLineEdit):
+            self._inner.setPlaceholderText(
+                "" if self._box.label_text() else self._placeholder
+            )
 
     def set_supporting(self, text: str, *, error: bool = False) -> None:
         """设置辅助文本（错误提示用 ``error=True`` 同时切错误态）"""
@@ -432,9 +498,7 @@ class MaterialTextField(QWidget):
         )
         font = MaterialTypography().font("body_small")
         self._support.setFont(font)
-        self._support.setStyleSheet(
-            f"color: {color}; background: transparent; border: none;"
-        )
+        set_text_color(self._support, color)
 
     def _connect_signals(self, inner: QWidget) -> None:
         if isinstance(inner, QLineEdit):

@@ -52,7 +52,8 @@ from arknights_video_pipeline.gui.components.settings_row_builders import (
 )
 from arknights_video_pipeline.gui.components.tools.base import ToolView
 from arknights_video_pipeline.gui.i18n import tr
-from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme import MaterialColors, MaterialTypography
+from arknights_video_pipeline.gui.theme.palette import set_text_color
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 # 与 video_compose.create_text_clip / map_overlay._PANEL_PADDING 一致的主文本内边距
@@ -399,10 +400,8 @@ class Style1TextRangeTool(ToolView):
 
         self._info_label = QLabel(tr("tools.style1_text_range.range_no_input"))
         self._info_label.setWordWrap(True)
-        self._info_label.setStyleSheet(
-            f"color: {c.on_surface_variant}; background: transparent; border: none;"
-            " font-size: 14px;"
-        )
+        self._info_label.setFont(MaterialTypography().font("body_medium"))
+        set_text_color(self._info_label, c.on_surface_variant)
         preview_layout.addWidget(self._info_label)
 
         root.addWidget(self._preview_card)
@@ -413,10 +412,8 @@ class Style1TextRangeTool(ToolView):
         card_layout.setSpacing(12)
 
         self._json_label = QLabel(tr("tools.style1_text_range.input_json"))
-        self._json_label.setStyleSheet(
-            f"color: {c.on_surface_variant}; background: transparent; border: none;"
-            " font-size: 14px;"
-        )
+        self._json_label.setFont(MaterialTypography().font("body_medium"))
+        set_text_color(self._json_label, c.on_surface_variant)
         self._tr_labels.append((self._json_label.setText, "tools.style1_text_range.input_json"))
         card_layout.addWidget(self._json_label)
 
@@ -425,7 +422,8 @@ class Style1TextRangeTool(ToolView):
             tr("tools.style1_text_range.input_json_placeholder")
         )
         self._json_editor.setFixedHeight(200)
-        self._json_editor.setStyleSheet(self._json_editor_qss(c))
+        # 使用统一等宽字体与全局 MD3 filled 输入区样式（4dp 圆角、token 底）
+        self._json_editor.setFont(MaterialTypography().mono)
         self._json_editor.textChanged.connect(self._refresh_preview)
         card_layout.addWidget(self._json_editor)
 
@@ -474,32 +472,12 @@ class Style1TextRangeTool(ToolView):
 
     # ── 界面构建辅助 ──────────────────────────────────────
 
-    def _json_editor_qss(self, c: MaterialColors) -> str:
-        """输入框内联样式：与 FileSelector 输入框一致（surface_variant
-        底色、outline_variant 边框、12px 圆角），等宽字体便于编辑文本"""
-        return (
-            "QPlainTextEdit {"
-            f"  background-color: {c.surface_variant};"
-            f"  color: {c.on_surface};"
-            f"  border: 1px solid {c.outline_variant};"
-            f"  border-radius: 12px;"
-            f"  padding: 8px 12px;"
-            "  font-family: Consolas, 'Courier New', monospace;"
-            "  font-size: 14px;"
-            "}"
-            "QPlainTextEdit:focus {"
-            f"  border: 2px solid {c.primary};"
-            "}"
-        )
-
     def _build_section_title(self, label_key: str) -> QLabel:
         c = self._colors
         title = QLabel(tr(label_key))
-        title.setStyleSheet(
-            f"color: {c.on_surface_variant}; border: none;"
-            f" background: transparent; font-weight: 500; font-size: 14px;"
-            f" letter-spacing: 0.5px; margin-top: 8px;"
-        )
+        # MD3 小节标题：title_small（14/500），字距来自 typography token
+        title.setFont(MaterialTypography().font("title_small"))
+        set_text_color(title, c.on_surface_variant)
         self._tr_labels.append((title.setText, label_key))
         return title
 
@@ -570,10 +548,8 @@ class Style1TextRangeTool(ToolView):
             ("tools.style1_text_range.preview_legend_bound", "bound"),
         ):
             lbl = QLabel(self._legend_html(tr(key), self._legend_color(role, c)))
-            lbl.setStyleSheet(
-                f"color: {c.on_surface_variant}; background: transparent; border: none;"
-                " font-size: 12px;"
-            )
+            lbl.setFont(MaterialTypography().font("body_small"))
+            set_text_color(lbl, c.on_surface_variant)
             layout.addWidget(lbl)
             self._legend_items.append((lbl, key, role))
         layout.addStretch()
@@ -881,10 +857,7 @@ class Style1TextRangeTool(ToolView):
                     ))
                     color = c.warning
             text = "\n".join(parts)
-        self._info_label.setStyleSheet(
-            f"color: {color}; background: transparent; border: none;"
-            " font-size: 14px;"
-        )
+        set_text_color(self._info_label, color)
         self._info_label.setText(text)
 
     # ── 按钮处理 ──────────────────────────────────────────
@@ -920,8 +893,10 @@ class Style1TextRangeTool(ToolView):
     def set_colors(self, colors: MaterialColors) -> None:
         super().set_colors(colors)
         c = colors
-        # 卡片背景由 CardFrame 自订阅主题，这里只刷新本视图持有的控件
-        self._json_editor.setStyleSheet(self._json_editor_qss(c))
+        # 卡片背景与输入区底色由 CardFrame / QPalette 自订阅主题，
+        # 这里只刷新带语义色的辅助标签
+        set_text_color(self._info_label, c.on_surface_variant)
+        set_text_color(self._json_label, c.on_surface_variant)
         self._bg_selector.set_colors(c)
         self._preview.set_colors(c)
         for row in self._rows.values():

@@ -12,7 +12,7 @@ MD3 的 FAB 是"当前页面主操作"的锚点，通常固定在右下角、ele
 from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QPropertyAnimation, QRectF, QSize, Qt, pyqtProperty
-from PyQt6.QtGui import QColor, QFontMetrics, QPainter
+from PyQt6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QGraphicsDropShadowEffect,
@@ -20,11 +20,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from arknights_video_pipeline.gui.assets.icons.nav_icons import has_icon, make_icon_pixmap
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
 from arknights_video_pipeline.gui.theme.spacing import Layout, Space
-from arknights_video_pipeline.gui.theme.state import Elevation, StateLayer, blend, with_alpha
+from arknights_video_pipeline.gui.theme.state import (
+    Elevation,
+    StateLayer,
+    blend,
+    with_alpha,
+)
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
 
@@ -35,7 +43,7 @@ class MaterialFab(QAbstractButton):
     """MD3 FAB（regular / extended）"""
 
     _ICON_SIZE = 24
-    _H_PADDING = Space.XL  # 20dp 左右内距（extended）
+    _H_PADDING = Layout.FAB_PADDING_H  # 20dp 左右内距（extended）
 
     def __init__(
         self,
@@ -51,6 +59,7 @@ class MaterialFab(QAbstractButton):
         self._colors: MaterialColors = theme_controller().colors()
         self._typography = MaterialTypography()
         self._alpha = 0.0
+        self._keyboard_focus = False
 
         self.setText(text)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -142,8 +151,22 @@ class MaterialFab(QAbstractButton):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        self._animate_to(StateLayer.HOVER)
+        self._animate_to(StateLayer.HOVER if self.underMouse() else 0.0)
         super().mouseReleaseEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self._keyboard_focus = False
+        self.update()
 
     # ── 绘制 ─────────────────────────────────────────────
 
@@ -186,6 +209,15 @@ class MaterialFab(QAbstractButton):
             baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
             painter.drawText(
                 int(left + self._ICON_SIZE + Space.M), int(baseline), self.text()
+            )
+
+        # MD3 焦点环（仅键盘导航可见）
+        if self._keyboard_focus and self.isEnabled():
+            painter.setPen(QPen(QColor(foreground), 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                rect.adjusted(2.5, 2.5, -2.5, -2.5),
+                max(0.0, radius - 2.5), max(0.0, radius - 2.5),
             )
 
         painter.end()

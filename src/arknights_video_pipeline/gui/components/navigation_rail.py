@@ -17,21 +17,26 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import (
-    QRectF,
     QPropertyAnimation,
+    QRectF,
     QSize,
     Qt,
     pyqtProperty,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 from arknights_video_pipeline.gui.assets.app_icon import load_app_icon
-from arknights_video_pipeline.gui.assets.icons.nav_icons import has_icon, make_icon_pixmap
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    filled_name,
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
+from arknights_video_pipeline.gui.theme.palette import set_text_color
 from arknights_video_pipeline.gui.theme.spacing import Layout, Space
 from arknights_video_pipeline.gui.theme.state import StateLayer, with_alpha
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
@@ -72,11 +77,14 @@ class NavigationRailItem(QWidget):
         self._colors = colors or theme_controller().colors()
         self._progress = 1.0 if selected else 0.0
         self._hover_alpha = 0.0
+        self._keyboard_focus = False
         self._typography = MaterialTypography()
         self._icon_cache: tuple[str, str] | None = None
 
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(label)
         self.setFixedWidth(self._WIDTH)
         self.setFixedHeight(self._INDICATOR_H + self._LABEL_GAP + 20)
 
@@ -85,10 +93,7 @@ class NavigationRailItem(QWidget):
         self._label.setFont(self._typography.font("label_medium"))
         self._label.setFixedSize(self._WIDTH, 20)
         self._label.move(0, self._INDICATOR_H + self._LABEL_GAP)
-        self._label.setStyleSheet(
-            f"color: {self._label_color().name()};"
-            " background: transparent; border: none;"
-        )
+        set_text_color(self._label, self._label_color())
 
         self._anim = QPropertyAnimation(self, b"progress", self)
         self._anim.setDuration(Duration.MEDIUM2)
@@ -103,11 +108,8 @@ class NavigationRailItem(QWidget):
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
         self._icon_cache = None
-        # 标签是 QLabel + 一次性样式，必须随主题重设，
-        # 否则深色下残留浅色主题的 on_surface_variant（选中项甚至不可见）
-        self._label.setStyleSheet(
-            f"color: {self._label_color().name()}; background: transparent; border: none;"
-        )
+        # 标签文字色走 QPalette，主题切换只触发重绘，不重建样式表
+        set_text_color(self._label, self._label_color())
         self.update()
 
     def set_selected(self, selected: bool, animate: bool = True) -> None:
@@ -139,6 +141,7 @@ class NavigationRailItem(QWidget):
         """更新标签文本（语言切换时调用）"""
         self._label_text = text
         self._label.setText(text)
+        self.setAccessibleName(text)
 
     # ── 动画属性 ─────────────────────────────────────────
 
@@ -149,10 +152,9 @@ class NavigationRailItem(QWidget):
         if value == self._progress:
             return
         self._progress = value
-        self._icon_cache = None
-        self._label.setStyleSheet(
-            f"color: {self._label_color().name()}; background: transparent; border: none;"
-        )
+        # 图标缓存不随进度失效：两个变体分别用未选中 / 选中色预先栅格化，
+        # 动画期间只改 opacity，避免逐帧重新渲染 SVG（旧实现会掉帧）。
+        set_text_color(self._label, self._label_color())
         self.update()
 
     progress = pyqtProperty(float, fget=_get_progress, fset=_set_progress)
@@ -184,6 +186,27 @@ class NavigationRailItem(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self._keyboard_focus = False
+        self.update()
 
     def enterEvent(self, event) -> None:
         self._hovered = True
@@ -227,22 +250,51 @@ class NavigationRailItem(QWidget):
             painter.setBrush(with_alpha(c.secondary_container, self._progress))
             painter.drawRoundedRect(indicator, radius, radius)
 
-        # 图标（颜色随选中进度插值，缓存避免逐帧栅格化）
-        color = _mix(
-            QColor(c.on_surface_variant),
-            QColor(c.on_secondary_container),
-            self._progress,
+        # 图标：MD3 选中态由 outline 变体切换到 filled 变体。两个变体分别
+        # 用未选中 / 选中色各栅格化一次，动画期间按进度交叉淡入即可同时
+        # 完成"颜色 + 填充"过渡，且不会逐帧重渲染 SVG。
+        key = (
+            self._icon_name,
+            c.on_surface_variant,
+            c.on_secondary_container,
         )
-        key = (color.name(), self._icon_name)
-        if self._icon_cache != key and has_icon(self._icon_name):
+        if self._icon_cache != key:
             self._icon_cache = key
-            pixmap = make_icon_pixmap(self._icon_name, color.name(), size_px=self._ICON)
-            self._pixmap = pixmap
-        pixmap = getattr(self, "_pixmap", None)
-        if pixmap is not None:
-            x = (self._WIDTH - self._ICON) // 2
-            y = (self._INDICATOR_H - self._ICON) // 2
-            painter.drawPixmap(x, y, pixmap)
+            self._pixmap_outline = (
+                make_icon_pixmap(
+                    self._icon_name, c.on_surface_variant, size_px=self._ICON
+                )
+                if has_icon(self._icon_name) else None
+            )
+            fill_icon = filled_name(self._icon_name)
+            self._pixmap_fill = (
+                make_icon_pixmap(
+                    fill_icon, c.on_secondary_container, size_px=self._ICON
+                )
+                if has_icon(fill_icon) else None
+            )
+
+        x = (self._WIDTH - self._ICON) // 2
+        y = (self._INDICATOR_H - self._ICON) // 2
+        outline = getattr(self, "_pixmap_outline", None)
+        filled = getattr(self, "_pixmap_fill", None)
+        if outline is not None and self._progress < 1.0:
+            painter.setOpacity(1.0 - self._progress)
+            painter.drawPixmap(x, y, outline)
+        if filled is not None and self._progress > 0.0:
+            painter.setOpacity(self._progress)
+            painter.drawPixmap(x, y, filled)
+        painter.setOpacity(1.0)
+
+        # 焦点环（仅键盘导航可见），画在指示器内侧避免被 item 宽度裁切
+        if self._keyboard_focus:
+            pen = QPen(QColor(c.primary), 2.0)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                indicator.adjusted(1.0, 1.0, -1.0, -1.0),
+                radius - 1.0, radius - 1.0,
+            )
 
         painter.end()
 

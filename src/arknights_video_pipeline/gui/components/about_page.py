@@ -62,7 +62,8 @@ class AboutPage(QWidget):
         self._card = CardFrame()
         self._card.setMaximumWidth(_CARD_MAX_WIDTH)
         card_layout = QVBoxLayout(self._card)
-        card_layout.setContentsMargins(Space.XXXL, Space.XXXL, Space.XXXL, Space.XXXL)
+        # MD3 卡片内边距 16dp；关于页信息卡作为 hero 卡片取 24dp
+        card_layout.setContentsMargins(Space.XL, Space.XL, Space.XL, Space.XL)
         card_layout.setSpacing(Space.M)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 

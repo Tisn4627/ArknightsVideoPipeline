@@ -78,8 +78,9 @@ class MaterialProgress(QWidget):
         track = QRectF(0, 0, self.width(), self._height)
         radius = self._height / 2.0
 
+        # MD3 linear progress：active = primary，track = secondary_container
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(c.surface_container_highest))
+        painter.setBrush(QColor(c.secondary_container))
         painter.drawRoundedRect(track, radius, radius)
 
         if self._value > 0:

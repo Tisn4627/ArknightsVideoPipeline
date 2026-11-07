@@ -39,7 +39,7 @@
   "settings.config.title": "Configuration files",
   "settings.config.desc": "Select config files to generate (or reset to defaults), then click \"Generate\". Files are written to config/, same as CLI --init-config.",
   "settings.config.select_all": "Select all",
-  "settings.config.clear_all": "Clear selection",
+  "settings.config.clear_all": "Deselect all",
   "settings.config.generate": "Generate defaults",
   "settings.config.status_none_selected": "Please select at least one config file type.",
   "settings.config.status_generated": "Generated {n} config file(s) to config/.",

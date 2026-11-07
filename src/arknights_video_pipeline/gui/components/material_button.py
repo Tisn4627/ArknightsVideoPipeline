@@ -20,13 +20,26 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QPropertyAnimation, QRectF, QSize, Qt, pyqtProperty
 from PyQt6.QtGui import QColor, QFontMetrics, QPainter, QPen
-from PyQt6.QtWidgets import QPushButton, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (
+    QGraphicsDropShadowEffect,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
-from arknights_video_pipeline.gui.assets.icons.nav_icons import has_icon, make_icon_pixmap
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
 from arknights_video_pipeline.gui.theme.spacing import Layout, Space
-from arknights_video_pipeline.gui.theme.state import StateLayer, blend, with_alpha
+from arknights_video_pipeline.gui.theme.state import (
+    Elevation,
+    StateLayer,
+    blend,
+    with_alpha,
+)
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
 
@@ -59,6 +72,8 @@ class MaterialButton(QPushButton):
         self._alpha = 0.0
         self._hovered = False
         self._pressed = False
+        self._keyboard_focus = False
+        self._shadow: QGraphicsDropShadowEffect | None = None
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -74,6 +89,8 @@ class MaterialButton(QPushButton):
         self._anim.setEasingCurve(Easing.standard())
 
         theme_controller().theme_changed.connect(self._on_theme_changed)
+        # 构造时通过参数指定 elevated 不会走 set_variant，需在此补一次阴影
+        self._sync_elevation()
 
     # ── 变体 ─────────────────────────────────────────────
 
@@ -94,11 +111,27 @@ class MaterialButton(QPushButton):
             self.VARIANT_ELEVATED,
         ) else self.VARIANT_FILLED
         self._sync_legacy_properties()
+        self._sync_elevation()
         self.updateGeometry()
         self.update()
 
     def variant(self) -> str:
         return self._variant
+
+    def _sync_elevation(self) -> None:
+        """elevated 变体按 MD3 使用 level 1 阴影（禁用时归零）"""
+        if self._variant != self.VARIANT_ELEVATED or not self.isEnabled():
+            if self._shadow is not None:
+                self.setGraphicsEffect(None)
+                self._shadow = None
+            return
+        if self._shadow is None:
+            self._shadow = QGraphicsDropShadowEffect(self)
+            self.setGraphicsEffect(self._shadow)
+        blur, dy, alpha = Elevation.effect(Elevation.CARD_ELEVATED, self._colors.is_dark)
+        self._shadow.setBlurRadius(max(1, blur))
+        self._shadow.setOffset(0, max(0, dy))
+        self._shadow.setColor(QColor(0, 0, 0, alpha))
 
     def set_icon(self, icon_name: str | None) -> None:
         """设置前导图标（Material Symbols 名称）"""
@@ -108,6 +141,7 @@ class MaterialButton(QPushButton):
 
     def _on_theme_changed(self, colors: MaterialColors) -> None:
         self._colors = colors
+        self._sync_elevation()
         self.update()
 
     # ── 几何 ─────────────────────────────────────────────
@@ -178,15 +212,26 @@ class MaterialButton(QPushButton):
 
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
+        # MD3 焦点环只在键盘导航时出现：鼠标点击 / 窗口激活不应让按钮
+        # 长时间带一圈"描边"，否则 text 按钮会被误读成 outlined 按钮。
+        # 只有 Tab / Backtab / 快捷键进入时才显示焦点环；程序化聚焦与
+        # 窗口激活不应把 text 按钮伪装成 outlined 按钮。
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
         self.update()
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
+        self._keyboard_focus = False
         self.update()
 
     def changeEvent(self, event) -> None:
-        # 启用/禁用切换时刷新绘制
+        # 启用/禁用切换时刷新绘制与 elevated 阴影
         super().changeEvent(event)
+        self._sync_elevation()
         self.update()
 
     # ── 配色 ─────────────────────────────────────────────
@@ -199,7 +244,10 @@ class MaterialButton(QPushButton):
         if self._variant == self.VARIANT_ELEVATED:
             return c.surface_container_low, c.primary, "transparent", 0, c.primary
         if self._variant == self.VARIANT_OUTLINED:
-            return "transparent", c.primary, c.outline, 1, c.primary
+            # MD3 outlined button：1dp outline 描边 + on_surface_variant 文字
+            # （primary 文字是 MD2 的 outlined 形态，会让 outlined 与 text
+            # 按钮看起来是同一个东西）。
+            return "transparent", c.on_surface_variant, c.outline, 1, c.on_surface_variant
         if self._variant == self.VARIANT_TEXT:
             return "transparent", c.primary, "transparent", 0, c.primary
         return c.primary, c.on_primary, "transparent", 0, c.on_primary
@@ -264,8 +312,8 @@ class MaterialButton(QPushButton):
         baseline_y = (self.height() + metrics.ascent() - metrics.descent()) / 2.0
         painter.drawText(int(left), int(baseline_y), self.text())
 
-        # 焦点环：内缩 2dp，不改变几何
-        if self.hasFocus() and self.isEnabled():
+        # 焦点环：仅键盘导航可见，内缩 2dp，不改变几何
+        if self._keyboard_focus and self.isEnabled():
             ring = QPen(color)
             ring.setWidthF(2.0)
             painter.setPen(ring)

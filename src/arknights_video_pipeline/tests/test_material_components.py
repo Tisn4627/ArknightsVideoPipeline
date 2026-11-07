@@ -17,19 +17,29 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QLineEdit, QSpinBox
 
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
+from arknights_video_pipeline.gui.components.material_card import CardFrame
 from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
 from arknights_video_pipeline.gui.components.material_fab import MaterialFab
 from arknights_video_pipeline.gui.components.material_progress import MaterialProgress
 from arknights_video_pipeline.gui.components.material_switch import MaterialSwitch
-from arknights_video_pipeline.gui.components.material_text_field import MaterialTextField
+from arknights_video_pipeline.gui.components.material_text_field import (
+    MaterialTextField,
+)
+from arknights_video_pipeline.gui.components.message_dialog import InfoDialog
 from arknights_video_pipeline.gui.components.navigation_bar import NavigationBar
 from arknights_video_pipeline.gui.i18n import init_i18n
-from arknights_video_pipeline.gui.theme import MaterialColors, MaterialStyle, MaterialTypography
+from arknights_video_pipeline.gui.theme import (
+    MaterialColors,
+    MaterialStyle,
+    MaterialTypography,
+)
 from arknights_video_pipeline.gui.theme.motion import Motion
 from arknights_video_pipeline.gui.theme.spacing import Layout
+from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
 
 @pytest.fixture(scope="module")
@@ -177,6 +187,42 @@ class TestToggleControls:
         box.resize(box.sizeHint())
         assert colors.on_primary != "#FFFFFF"
         assert not box.grab().isNull()
+
+    def test_checkbox_target_height_holds_state_layer(self, qapp) -> None:
+        """控件高度 ≥44dp：40dp hover 墨层 + 2dp 安全区不被边界裁切"""
+        box = MaterialCheckBox("视频识别")
+        assert box.height() >= 44
+        assert box._INDICATOR_LEFT == 13
+        # 标签不能吞掉鼠标（否则只有 18dp indicator 可点）
+        assert box._label.testAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+
+
+class TestMessageDialog:
+    def test_dialog_is_frameless_md3_surface(self, qapp) -> None:
+        """Basic Dialog：无边框 + 透明窗口（28dp 圆角与阴影自绘）"""
+        dialog = InfoDialog("提示", "正文", colors=MaterialColors.light())
+        assert dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
+        assert dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert dialog._card.surface_color().name().upper() == (
+            MaterialColors.light().surface_container_high.upper()
+        )
+
+
+class TestMaterialCardVariants:
+    def test_variants_use_md3_surface_roles(self, qapp) -> None:
+        """outlined=surface / filled=surface_container_highest /
+        elevated=surface_container_low（不再出现 surface_container + 描边）"""
+        colors = theme_controller().apply(dark=False, app=qapp)
+        cases = {
+            "outlined": colors.surface,
+            "filled": colors.surface_container_highest,
+            "elevated": colors.surface_container_low,
+        }
+        for variant, expected in cases.items():
+            card = CardFrame(variant=variant)
+            assert card.surface_color().name().upper() == expected.upper()
 
 
 class TestMaterialProgress:

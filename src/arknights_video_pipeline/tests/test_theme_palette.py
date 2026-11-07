@@ -281,6 +281,18 @@ class TestFontManager:
         # 回退链必须包含中文系统字体兜底
         assert "Microsoft YaHei" in family or "PingFang SC" in family
 
+    def test_cjk_fallback_precedes_system_fonts(self, qapp) -> None:
+        """内置 Noto Sans SC 必须排在 Microsoft YaHei 之前
+
+        否则同一句里 Latin（Roboto）与 CJK（雅黑）会是两套字形，
+        中英混排的基线与笔画粗细都会不一致。
+        """
+        from arknights_video_pipeline.gui.theme.typography import MaterialTypography
+
+        family = MaterialTypography().family
+        if "Noto Sans SC" in family and "Microsoft YaHei UI" in family:
+            assert family.index("Noto Sans SC") < family.index("Microsoft YaHei UI")
+
 
 # ── SVG 图标 ────────────────────────────────────────────────
 
@@ -311,3 +323,23 @@ class TestSvgIcons:
             for y in range(0, 24, 3)
         )
         assert has_ink, "图标渲染后全透明"
+
+    def test_all_icons_are_material_symbols_rounded(self) -> None:
+        """所有 SVG 必须来自同一族系（Material Symbols Rounded）
+
+        Material Symbols 的 24dp 资源使用 ``0 -960 960 960`` viewBox；
+        旧 Material Icons Filled 是 ``0 0 24 24``。混族会让同屏图标
+        在圆角/笔画粗细上不一致。
+        """
+        for name in self._SVG_NAMES:
+            rel = nav_icons._ICON_FILES[name]
+            text = (nav_icons._ICON_ROOT / rel).read_text(encoding="utf-8")
+            assert 'viewBox="0 -960 960 960"' in text, f"非 Rounded 族系: {name}"
+
+    def test_optical_size_variants_exist(self) -> None:
+        """20 / 40dp 光学尺寸变体必须存在（大图标不被 24dp 描边撑粗）"""
+        base = nav_icons._ICON_ROOT / "svg"
+        for stem in ("home", "home_fill", "folder_open", "check_circle"):
+            for optical in ("20", "40"):
+                path = base / f"{stem}_{optical}.svg"
+                assert path.is_file(), f"缺少光学尺寸变体: {path.name}"

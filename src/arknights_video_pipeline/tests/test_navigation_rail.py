@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt6.QtCore import QPoint, QPointF
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
 
 from arknights_video_pipeline.gui.components.navigation_rail import (
@@ -159,12 +159,22 @@ class TestSelectionTransition:
         assert rail._items[0]._anim.state().name != "Running"
 
     def test_foreground_color_interpolates(self, qapp) -> None:
-        """选中项文字色应为 on_secondary_container，未选中为 on_surface_variant"""
+        """选中项文字色应为 on_secondary_container，未选中为 on_surface_variant
+
+        文字色现在走 QPalette（不再写 widget 级样式表）：断言调色板颜色，
+        同时确认没有残留样式表导致主题切换时再次 polish。
+        """
         rail = _make_rail(qapp)
         sel = rail._items[0]
         uns = rail._items[1]
-        assert MaterialColors.light().on_secondary_container.upper() in sel._label.styleSheet().upper()
-        assert MaterialColors.light().on_surface_variant.upper() in uns._label.styleSheet().upper()
+        assert sel._label.palette().color(
+            QPalette.ColorRole.WindowText
+        ).name().upper() == MaterialColors.light().on_secondary_container.upper()
+        assert uns._label.palette().color(
+            QPalette.ColorRole.WindowText
+        ).name().upper() == MaterialColors.light().on_surface_variant.upper()
+        assert sel._label.styleSheet() == ""
+        assert uns._label.styleSheet() == ""
 
     def test_rapid_reselect_does_not_jump(self, qapp) -> None:
         """动画中途再次切换：从当前 progress 重新起步，不跳变到端点"""

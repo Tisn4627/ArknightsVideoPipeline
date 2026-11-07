@@ -8,7 +8,7 @@ gui.components.settings_page - 设置页面
 功能模块：
 1. 外观（Appearance）：浅色 / 深色主题、动态色彩与种子色，即时生效；
 2. 配置文件（Configuration files）：按类型选择并生成默认配置文件，
-   与 CLI ``--init-config`` 行为一致，支持"一键选择全部"与"取消全部选择"。
+   与 CLI ``--init-config`` 行为一致，支持"全选"与"取消全选"。
 3. 全局设置（Global）：Copilot 后端、MAA/Output 路径、识别参数与日志，
    这些控件由 MainWindow 共享读写，Home 页不再持有。
 
@@ -23,19 +23,25 @@ import sys
 from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout, QLabel,
-    QSpinBox, QSizePolicy, QDialog,
+    QBoxLayout,
+    QDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 # 复用 CLI 初始化入口（core.pipeline 的私有函数）：暂无公开等价物，
 # ruff 默认规则不检查私有成员导入，故保留并注明原因
 from arknights_video_pipeline.core.pipeline import _init_config
 from arknights_video_pipeline.gui.components.file_selector import FileSelector
-from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
 from arknights_video_pipeline.gui.components.material_card import MaterialCard
+from arknights_video_pipeline.gui.components.material_checkbox import MaterialCheckBox
 from arknights_video_pipeline.gui.components.material_color_picker import (
     ColorPickerDialog,
     ColorSwatchButton,
@@ -45,14 +51,27 @@ from arknights_video_pipeline.gui.components.material_switch import MaterialSwit
 from arknights_video_pipeline.gui.components.page_header import PageHeader
 from arknights_video_pipeline.gui.components.settings_row_builders import (
     FieldRow,
-    build_switch_row, build_int_row, build_float_row,
-    build_combo_row, build_path_row, build_string_row,
-    build_color_row, build_range_row, build_nullable_int_row, make_row,
+    build_color_row,
+    build_combo_row,
+    build_float_row,
+    build_int_row,
+    build_nullable_int_row,
+    build_path_row,
+    build_range_row,
+    build_string_row,
+    build_switch_row,
+    make_row,
 )
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import (
-    BASELINE_SEED, Margin, MaterialColors, MaterialTypography, Space,
-    WindowSizeClass, normalize_hex, set_text_color,
+    BASELINE_SEED,
+    Margin,
+    MaterialColors,
+    MaterialTypography,
+    Space,
+    WindowSizeClass,
+    normalize_hex,
+    set_text_color,
 )
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 
@@ -138,6 +157,8 @@ class SettingsPage(QWidget):
         self._is_dynamic = True
         self._seed_color = BASELINE_SEED
         self._status_is_error = False
+        # 配置文件卡的批量操作是否可用（运行流水线期间整体禁用）
+        self._config_actions_enabled = True
 
         # 记录所有需要随主题刷新的辅助文本控件，便于统一更新颜色
         self._dim_labels: list[QLabel] = []
@@ -241,9 +262,8 @@ class SettingsPage(QWidget):
         刷新 ``_dim_labels`` 时只重设 color，不会把 500 字重和字距覆盖掉。
         """
         label = QLabel(text)
-        font = self._typo.font("title_small")
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
-        label.setFont(font)
+        # title_small 自带 MD3 字距（0.1px），不再叠加手写的 0.5px
+        label.setFont(self._typo.font("title_small"))
         label.setWordWrap(True)
         self._dim_labels.append(label)
         return label
@@ -272,8 +292,9 @@ class SettingsPage(QWidget):
             self._lang_combo,
             colors=self._colors,
             desc=tr("settings.language.desc"),
-            max_width=280,
             wide=True,
+            # 窄窗下与其它字段行一致：说明在上、下拉框占满宽度
+            field=True,
         )
         self._tr_labels.append((self._lang_row.set_desc, "settings.language.desc"))
         card.add_widget(self._lang_row.container)
@@ -378,54 +399,51 @@ class SettingsPage(QWidget):
             # 文件名放进 tooltip：完整 "标题 · path/to/file.json" 在窄卡片里
             # 会顶到卡片边缘，读起来也更噪声
             cb.setToolTip(filename)
+            cb.toggled.connect(self._on_config_selection_changed)
             self._config_checkboxes[key] = cb
             self._checkbox_specs.append((cb, title_key, filename))
         self._reflow_checkbox_grid(two_col=False)
         layout.addLayout(self._checkbox_grid)
 
-        # 全选 / 清空：tonal + text（不抢走"生成"的 filled 主操作）
-        self._sel_buttons_container = QWidget()
-        self._sel_buttons_container.setObjectName("transparentPane")
-        self._sel_buttons_layout = QHBoxLayout(self._sel_buttons_container)
-        self._sel_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self._sel_buttons_layout.setSpacing(Space.M)
-        self._select_all_btn = MaterialButton(
-            tr("settings.config.select_all"), variant=MaterialButton.VARIANT_TONAL
-        )
-        self._clear_btn = MaterialButton(
-            tr("settings.config.clear_all"), variant=MaterialButton.VARIANT_TEXT
-        )
-        self._tr_labels.append((self._select_all_btn.setText, "settings.config.select_all"))
-        self._tr_labels.append((self._clear_btn.setText, "settings.config.clear_all"))
-        self._select_all_btn.clicked.connect(self._on_select_all)
-        self._clear_btn.clicked.connect(self._on_clear_all)
-        # stretch 在前，将按钮推到右侧
-        self._sel_buttons_layout.addStretch()
-        self._sel_buttons_layout.addWidget(self._select_all_btn)
-        self._sel_buttons_layout.addWidget(self._clear_btn)
-        layout.addWidget(self._sel_buttons_container)
-
-        # 生成按钮 + 状态文本（同样使用包装容器支持窄屏重排）
+        # 动作区：状态文字在左，三个按钮在右并按 MD3 顺序排列：
+        # 全选 → 取消全选（同为 text 次级操作）→ 生成默认配置（唯一 filled 主操作）。
+        # 旧实现把批量操作与生成拆成两行，主操作孤立在下方；合并为一行后
+        # 动作区遵循"次级操作在前、主操作最后"的卡片动作规范。
         self._action_buttons_container = QWidget()
         self._action_buttons_container.setObjectName("transparentPane")
         self._action_buttons_layout = QHBoxLayout(self._action_buttons_container)
         self._action_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self._action_buttons_layout.setSpacing(Space.M)
+        # MD3 按钮间距 8dp
+        self._action_buttons_layout.setSpacing(Space.S)
+
+        self._select_all_btn = MaterialButton(
+            tr("settings.config.select_all"), variant=MaterialButton.VARIANT_TEXT
+        )
+        self._clear_btn = MaterialButton(
+            tr("settings.config.clear_all"), variant=MaterialButton.VARIANT_TEXT
+        )
         self._generate_btn = MaterialButton(
             tr("settings.config.generate"), variant=MaterialButton.VARIANT_FILLED
         )
+        self._tr_labels.append((self._select_all_btn.setText, "settings.config.select_all"))
+        self._tr_labels.append((self._clear_btn.setText, "settings.config.clear_all"))
         self._tr_labels.append((self._generate_btn.setText, "settings.config.generate"))
+        self._select_all_btn.clicked.connect(self._on_select_all)
+        self._clear_btn.clicked.connect(self._on_clear_all)
         self._generate_btn.clicked.connect(self._on_generate)
+
         self._config_status = QLabel("")
         self._config_status.setFont(self._typo.body_small)
         self._config_status.setWordWrap(True)
-        # 状态文字占左侧剩余空间，主操作"生成默认配置"右对齐——
-        # 与上一行"一键选择全部 / 取消全部选择"的右对齐动作区一致
+        # 状态文字占左侧剩余空间，按钮组整体右对齐
         self._action_buttons_layout.addWidget(self._config_status, 1)
+        self._action_buttons_layout.addWidget(self._select_all_btn)
+        self._action_buttons_layout.addWidget(self._clear_btn)
         self._action_buttons_layout.addWidget(self._generate_btn)
         layout.addWidget(self._action_buttons_container)
 
         card.add_layout(layout)
+        self._update_config_actions_state()
         return card
 
     def _build_advanced_toggle_card(self) -> MaterialCard:
@@ -534,7 +552,7 @@ class SettingsPage(QWidget):
         self._log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self._log_level_row = make_row(
             tr("settings.global.log_level"), self._log_level_combo,
-            colors=self._colors, max_width=280, wide=True, field=True,
+            colors=self._colors, wide=True, field=True,
         )
         self._tr_labels.append((self._log_level_row.set_label, "settings.global.log_level"))
         adv_layout.addWidget(self._log_level_row.container)
@@ -605,7 +623,8 @@ class SettingsPage(QWidget):
 
         # recognition 识别参数小节标题
         rec_title = QLabel(tr("settings.global.recognition_title"))
-        rec_title.setFont(self._typo.title_medium)
+        # 卡片内小节标题统一 title_small（14/500）；卡片标题才是 title_medium
+        rec_title.setFont(self._typo.title_small)
         rec_title.setStyleSheet("border: none; background: transparent;")
         adv_layout.addWidget(rec_title)
         self._tr_labels.append((rec_title.setText, "settings.global.recognition_title"))
@@ -1376,42 +1395,36 @@ class SettingsPage(QWidget):
         self._checkbox_grid.setColumnStretch(cols, 1)
 
     def _reflow_button_rows(self, vertical: bool) -> None:
-        """窄屏下将按钮行改为垂直堆叠，避免按钮被压缩到不可点"""
-        for layout, widgets in (
-            (self._sel_buttons_layout,
-             (self._select_all_btn, self._clear_btn)),
-            (self._action_buttons_layout,
-             (self._generate_btn, self._config_status)),
-        ):
-            # 清空布局中所有 item（含 widget 和 spacer/stretch），
-            # 避免多次切换后 stretch 累积导致布局异常
-            while layout.count():
-                item = layout.takeAt(0)
-                w = item.widget()
-                if w is not None:
-                    w.setParent(None)
-            is_sel_row = widgets == (self._select_all_btn, self._clear_btn)
-            if vertical:
-                layout.setDirection(QBoxLayout.Direction.TopToBottom)
-                for w in widgets:
-                    if is_sel_row:
-                        # 全选/清空按钮靠右对齐
-                        layout.addWidget(w, alignment=Qt.AlignmentFlag.AlignRight)
-                    elif w is self._generate_btn:
-                        layout.addWidget(w, alignment=Qt.AlignmentFlag.AlignRight)
-                    else:
-                        layout.addWidget(w)
-            else:
-                layout.setDirection(QBoxLayout.Direction.LeftToRight)
-                if is_sel_row:
-                    # stretch 在前，将全选/清空按钮推到右侧
-                    layout.addStretch()
-                    layout.addWidget(self._select_all_btn)
-                    layout.addWidget(self._clear_btn)
-                else:
-                    # 状态文字占左侧剩余空间，主操作右对齐
-                    layout.addWidget(self._config_status, 1)
-                    layout.addWidget(self._generate_btn)
+        """窄屏下将动作区改为垂直堆叠：状态文本在上、按钮在右
+
+        MD3 卡片动作区保持单行：次级操作在前，filled 主操作最后。
+        """
+        layout = getattr(self, "_action_buttons_layout", None)
+        if layout is None:
+            return
+        widgets = (
+            self._config_status,
+            self._select_all_btn,
+            self._clear_btn,
+            self._generate_btn,
+        )
+        # 清空所有 item（含 widget 与 stretch），避免多次切换后残留
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        if vertical:
+            layout.setDirection(QBoxLayout.Direction.TopToBottom)
+            layout.addWidget(self._config_status)
+            for button in widgets[1:]:
+                layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignRight)
+        else:
+            layout.setDirection(QBoxLayout.Direction.LeftToRight)
+            layout.addWidget(self._config_status, 1)
+            for button in widgets[1:]:
+                layout.addWidget(button)
 
     # ── 事件处理 ──────────────────────────────────────────
 
@@ -1442,6 +1455,13 @@ class SettingsPage(QWidget):
         for cb, title_key, filename in self._checkbox_specs:
             cb.setText(tr(title_key))
             cb.setToolTip(filename)
+        # 文案变长/变短后列宽会失效：按当前页宽重算 1/2 列与列最小宽度
+        two = self.width() >= 640
+        self._checkbox_two_col = two
+        self._reflow_checkbox_grid(two_col=two)
+        # 生成状态是按旧语言写入的动态文本，切换语言后清掉避免中英混排
+        if getattr(self, "_config_status", None) is not None:
+            self._config_status.clear()
 
     def _on_theme_toggled(self, dark: bool) -> None:
         self._is_dark = dark
@@ -1493,15 +1513,54 @@ class SettingsPage(QWidget):
     def _on_ffmpeg_path_changed(self, path: str) -> None:
         self.ffmpeg_path_changed.emit(path)
 
+    def _on_config_selection_changed(self, _checked: bool = False) -> None:
+        """单个复选框变化：清掉过期的生成状态并刷新批量按钮可用态"""
+        if getattr(self, "_config_status", None) is not None:
+            self._config_status.clear()
+        self._update_config_actions_state()
+
+    def _update_config_actions_state(self) -> None:
+        """按选中数量与运行态同步三个按钮
+
+        - 全选：已全选时禁用（避免无意义的可点状态）
+        - 清空：一个都未选时禁用
+        - 生成：未选任何配置时禁用（代替点击后才报错）
+        """
+        if not hasattr(self, "_select_all_btn"):
+            return
+        enabled = getattr(self, "_config_actions_enabled", True)
+        total = len(self._config_checkboxes)
+        checked = sum(1 for cb in self._config_checkboxes.values() if cb.isChecked())
+        self._select_all_btn.setEnabled(enabled and checked < total)
+        self._clear_btn.setEnabled(enabled and checked > 0)
+        self._generate_btn.setEnabled(enabled and checked > 0)
+
+    def set_config_enabled(self, enabled: bool) -> None:
+        """运行流水线期间禁用配置文件卡的整个批量操作区"""
+        self._config_actions_enabled = bool(enabled)
+        for cb in self._config_checkboxes.values():
+            cb.setEnabled(self._config_actions_enabled)
+        self._update_config_actions_state()
+
     def _on_select_all(self) -> None:
+        if not self._config_actions_enabled:
+            return
         for cb in self._config_checkboxes.values():
             cb.setChecked(True)
+        self._config_status.clear()
+        self._update_config_actions_state()
 
     def _on_clear_all(self) -> None:
+        if not self._config_actions_enabled:
+            return
         for cb in self._config_checkboxes.values():
             cb.setChecked(False)
+        self._config_status.clear()
+        self._update_config_actions_state()
 
     def _on_generate(self) -> None:
+        if not self._config_actions_enabled:
+            return
         selected = [k for k, cb in self._config_checkboxes.items() if cb.isChecked()]
         if not selected:
             self._set_status(tr("settings.config.status_none_selected"), error=True)

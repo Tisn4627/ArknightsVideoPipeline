@@ -15,14 +15,25 @@ from __future__ import annotations
 
 import re
 
-from PyQt6.QtCore import Qt, QRegularExpression, pyqtSignal, QPointF, QRectF
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QRegularExpression, Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QLinearGradient, QPainter, QPainterPath, QPen,
+    QColor,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
     QRegularExpressionValidator,
 )
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
@@ -340,25 +351,34 @@ class ColorPickerDialog(QDialog):
         self._color = parsed if parsed.isValid() else QColor("#FFFFFF")
         self.setWindowTitle(tr("dialog.color_picker"))
         self.setModal(True)
-        self.setMinimumWidth(420)
         self.setSizePolicy(QSizePolicy.Policy.Preferred,
                            QSizePolicy.Policy.Preferred)
+        self._scrim: QWidget | None = None
+        self._scrim_parent: QWidget | None = None
+        # MD3 对话框无标题栏：无边框 + 透明窗口，28dp 圆角自绘，
+        # 四周 24dp 透明边距用于 elevation 3 阴影。
+        self.setWindowFlags(
+            Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 24)
         outer.setSpacing(0)
-        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 对话框表面比普通卡片高一档（MD3 surface_container_high + 28dp + elevation 3）
+        # 对话框表面比普通卡片高一档（MD3 surface_container_high + 28dp）
         card = CardFrame(
             surface_role="surface_container_high",
             radius=ShapeRole.DIALOG,
             variant="elevated",
         )
+        card.setMinimumWidth(420)
+        card.setMaximumWidth(560)
         card.set_elevation(Elevation.DIALOG)
         self._card = card
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(28, 24, 28, 24)
+        # MD3 basic dialog 四边内边距 24dp
+        card_layout.setContentsMargins(24, 24, 24, 24)
         card_layout.setSpacing(16)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -370,7 +390,8 @@ class ColorPickerDialog(QDialog):
         header.addWidget(self._preview_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_lbl = QLabel(tr("dialog.color_picker"))
-        title_lbl.setFont(MaterialTypography().font("title_large"))
+        # MD3 对话框标题使用 headline_small（24/400），不是 title_large
+        title_lbl.setFont(MaterialTypography().font("headline_small"))
         title_lbl.setStyleSheet("background: transparent; border: none;")
         header.addWidget(title_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
@@ -386,10 +407,8 @@ class ColorPickerDialog(QDialog):
         hex_row = QHBoxLayout()
         hex_row.setSpacing(8)
         hex_lbl = QLabel("HEX")
-        hex_lbl.setStyleSheet(
-            "background: transparent; border: none;"
-            " font-weight: 500; font-size: 14px;"
-        )
+        hex_lbl.setFont(MaterialTypography().font("label_large"))
+        hex_lbl.setStyleSheet("background: transparent; border: none;")
         hex_row.addWidget(hex_lbl)
         self._hex_edit = QLineEdit()
         self._hex_edit.setObjectName("settingsField")
@@ -455,6 +474,57 @@ class ColorPickerDialog(QDialog):
         self._sync_controls(update_hex=True)
         self._apply_colors()
         self.adjustSize()
+
+    # ── 遮罩（scrim） ────────────────────────────────────
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._install_scrim()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._remove_scrim()
+
+    def _install_scrim(self) -> None:
+        if self._scrim is not None:
+            return
+        parent = self.parentWidget()
+        if parent is None or not parent.isVisible():
+            return
+        scrim = QWidget(parent)
+        scrim.setObjectName("dialogScrim")
+        scrim.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        scrim.setAutoFillBackground(True)
+        color = QColor(self._colors.scrim)
+        color.setAlphaF(0.32)
+        palette = scrim.palette()
+        palette.setColor(QPalette.ColorRole.Window, color)
+        scrim.setPalette(palette)
+        scrim.setGeometry(parent.rect())
+        scrim.show()
+        scrim.raise_()
+        self._scrim = scrim
+        self._scrim_parent = parent
+        parent.installEventFilter(self)
+
+    def _remove_scrim(self) -> None:
+        parent = self._scrim_parent
+        if parent is not None:
+            parent.removeEventFilter(self)
+        if self._scrim is not None:
+            self._scrim.hide()
+            self._scrim.deleteLater()
+            self._scrim = None
+        self._scrim_parent = None
+
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            obj is self._scrim_parent
+            and event.type() == QEvent.Type.Resize
+            and self._scrim is not None
+        ):
+            self._scrim.setGeometry(self._scrim_parent.rect())
+        return super().eventFilter(obj, event)
 
     # ── 公开 API ─────────────────────────────────────────
 

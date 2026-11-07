@@ -11,7 +11,14 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF, QPropertyAnimation, QPointF, Qt, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import (
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
@@ -47,6 +54,7 @@ class MaterialSwitch(QWidget):
         self._progress = 1.0 if checked else 0.0
         self._alpha = 0.0
         self._hovered = False
+        self._keyboard_focus = False
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -165,10 +173,16 @@ class MaterialSwitch(QWidget):
 
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
         self.update()
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
+        self._keyboard_focus = False
         self.update()
 
     # ── 绘制 ─────────────────────────────────────────────
@@ -247,8 +261,8 @@ class MaterialSwitch(QWidget):
         painter.setBrush(thumb_color)
         painter.drawEllipse(thumb)
 
-        # 焦点环：围绕轨道外缘 2dp，落在安全区内
-        if self.hasFocus() and enabled:
+        # 焦点环：仅键盘导航可见，围绕轨道外缘 2dp，落在安全区内
+        if self._keyboard_focus and enabled:
             pen = QPen(QColor(c.primary))
             pen.setWidthF(2.0)
             painter.setPen(pen)

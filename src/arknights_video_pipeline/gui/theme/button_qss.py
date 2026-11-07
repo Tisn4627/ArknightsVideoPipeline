@@ -49,8 +49,9 @@ def variant_state_colors(
         base, foreground = c.surface_container_low, c.primary
         ring = c.primary
     elif variant == "outlined":
-        base, foreground = "transparent", c.primary
-        ring = c.primary
+        # MD3 outlined button：outline 描边 + on_surface_variant 文字
+        base, foreground = "transparent", c.on_surface_variant
+        ring = c.on_surface_variant
     elif variant == "text":
         base, foreground = "transparent", c.primary
         ring = c.primary

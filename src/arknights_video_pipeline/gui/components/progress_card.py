@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from arknights_video_pipeline.gui.components.material_progress import MaterialProgress
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
+from arknights_video_pipeline.gui.theme.palette import set_text_color
 from arknights_video_pipeline.gui.theme.spacing import Space
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
@@ -37,7 +38,7 @@ class ProgressCard(QWidget):
         self._message_key: str | None = "progress.ready"
         self._message_kwargs: dict[str, Any] = {}
 
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setObjectName("transparentPane")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -45,10 +46,8 @@ class ProgressCard(QWidget):
 
         self._message = QLabel(tr("progress.ready"))
         self._message.setWordWrap(True)
-        self._message.setStyleSheet(
-            f"color: {self._colors.on_surface_variant};"
-            " background: transparent; border: none;"
-        )
+        self._message.setFont(self._typography.font("body_medium"))
+        set_text_color(self._message, self._colors.on_surface_variant)
         root.addWidget(self._message)
 
         row = QHBoxLayout()
@@ -62,9 +61,7 @@ class ProgressCard(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         self._percent_label.setFont(self._typography.font("label_large"))
-        self._percent_label.setStyleSheet(
-            f"color: {self._colors.on_surface}; background: transparent; border: none;"
-        )
+        set_text_color(self._percent_label, self._colors.on_surface)
         self._percent_label.setMinimumWidth(44)
         row.addWidget(self._percent_label)
         root.addLayout(row)
@@ -76,12 +73,8 @@ class ProgressCard(QWidget):
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
-        self._message.setStyleSheet(
-            f"color: {colors.on_surface_variant}; background: transparent; border: none;"
-        )
-        self._percent_label.setStyleSheet(
-            f"color: {colors.on_surface}; background: transparent; border: none;"
-        )
+        set_text_color(self._message, colors.on_surface_variant)
+        set_text_color(self._percent_label, colors.on_surface)
         self._progress.set_colors(colors)
 
     # ── 文本 ─────────────────────────────────────────────

@@ -10,14 +10,19 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF, QPropertyAnimation, Qt, pyqtProperty, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QPropertyAnimation, QRectF, Qt, pyqtProperty, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 
-from arknights_video_pipeline.gui.assets.icons.nav_icons import has_icon, make_icon_pixmap
+from arknights_video_pipeline.gui.assets.icons.nav_icons import (
+    filled_name,
+    has_icon,
+    make_icon_pixmap,
+)
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
 from arknights_video_pipeline.gui.theme.motion import Duration, Easing, Motion
+from arknights_video_pipeline.gui.theme.palette import set_text_color
 from arknights_video_pipeline.gui.theme.spacing import Layout, Space
 from arknights_video_pipeline.gui.theme.state import StateLayer, with_alpha
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
@@ -55,10 +60,13 @@ class NavigationBarItem(QWidget):
         self._progress = 1.0 if selected else 0.0
         self._colors = colors or theme_controller().colors()
         self._typography = MaterialTypography()
+        self._keyboard_focus = False
         self._pixmap = None
         self._icon_key: tuple[str, str] | None = None
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(label)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(56)
         self.setMinimumWidth(Layout.NAV_BAR_INDICATOR_WIDTH + Space.L)
@@ -66,7 +74,7 @@ class NavigationBarItem(QWidget):
         self._label = QLabel(label, self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setFont(self._typography.font("label_medium"))
-        self._label.setStyleSheet("background: transparent; border: none;")
+        set_text_color(self._label, self._label_color())
 
         self._anim = QPropertyAnimation(self, b"progress", self)
         self._anim.setDuration(Duration.MEDIUM1)
@@ -80,10 +88,12 @@ class NavigationBarItem(QWidget):
 
     def set_label(self, text: str) -> None:
         self._label.setText(text)
+        self.setAccessibleName(text)
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
         self._icon_key = None
+        set_text_color(self._label, self._label_color())
         self.update()
 
     def set_selected(self, selected: bool, animate: bool = True) -> None:
@@ -109,10 +119,8 @@ class NavigationBarItem(QWidget):
         if value == self._progress:
             return
         self._progress = value
-        self._icon_key = None
-        self._label.setStyleSheet(
-            f"color: {self._label_color().name()}; background: transparent; border: none;"
-        )
+        # 图标缓存不随进度失效（见 NavigationRailItem 的同名说明）
+        set_text_color(self._label, self._label_color())
         self.update()
 
     progress = pyqtProperty(float, fget=_get_progress, fset=_set_progress)
@@ -144,6 +152,27 @@ class NavigationBarItem(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self._keyboard_focus = False
+        self.update()
 
     def enterEvent(self, event) -> None:
         self._hovered = True
@@ -195,19 +224,47 @@ class NavigationBarItem(QWidget):
             painter.setBrush(with_alpha(c.secondary_container, self._progress))
             painter.drawRoundedRect(indicator, radius, radius)
 
-        color = _mix(
-            QColor(c.on_surface_variant),
-            QColor(c.on_secondary_container),
-            self._progress,
+        key = (
+            self._icon_name,
+            c.on_surface_variant,
+            c.on_secondary_container,
         )
-        key = (color.name(), self._icon_name)
-        if self._icon_key != key and has_icon(self._icon_name):
+        if self._icon_key != key:
             self._icon_key = key
-            self._pixmap = make_icon_pixmap(self._icon_name, color.name(), size_px=self._ICON)
-        if self._pixmap is not None:
-            x = int(indicator.center().x() - self._ICON / 2)
-            y = int((self._INDICATOR_H - self._ICON) / 2)
-            painter.drawPixmap(x, y, self._pixmap)
+            self._pixmap_outline = (
+                make_icon_pixmap(
+                    self._icon_name, c.on_surface_variant, size_px=self._ICON
+                )
+                if has_icon(self._icon_name) else None
+            )
+            fill_icon = filled_name(self._icon_name)
+            self._pixmap_fill = (
+                make_icon_pixmap(
+                    fill_icon, c.on_secondary_container, size_px=self._ICON
+                )
+                if has_icon(fill_icon) else None
+            )
+
+        x = int(indicator.center().x() - self._ICON / 2)
+        y = int((self._INDICATOR_H - self._ICON) / 2)
+        outline = getattr(self, "_pixmap_outline", None)
+        filled = getattr(self, "_pixmap_fill", None)
+        if outline is not None and self._progress < 1.0:
+            painter.setOpacity(1.0 - self._progress)
+            painter.drawPixmap(x, y, outline)
+        if filled is not None and self._progress > 0.0:
+            painter.setOpacity(self._progress)
+            painter.drawPixmap(x, y, filled)
+        painter.setOpacity(1.0)
+
+        if self._keyboard_focus:
+            pen = QPen(QColor(c.primary), 2.0)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                indicator.adjusted(1.0, 1.0, -1.0, -1.0),
+                radius - 1.0, radius - 1.0,
+            )
 
         painter.end()
 
@@ -250,11 +307,9 @@ class NavigationBar(QWidget):
     # ── 接口 ─────────────────────────────────────────────
 
     def paintEvent(self, event) -> None:
-        """底部导航条容器：surface_container 底 + 顶部 1dp 分隔线"""
+        """底部导航条容器：MD3 用 surface 色调分层，不画分隔线"""
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(self._colors.surface_container))
-        painter.setPen(QColor(self._colors.outline_variant))
-        painter.drawLine(0, 0, self.width(), 0)
         painter.end()
 
     def _retranslate(self) -> None:

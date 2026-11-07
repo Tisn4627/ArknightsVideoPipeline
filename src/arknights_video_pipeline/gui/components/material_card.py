@@ -2,19 +2,17 @@
 
 MD3 卡片的三种变体：
 
-- ``filled``：``surface_container`` 底、无描边、无阴影（层级靠色调差）；
-- ``outlined``：同上容器 + 1dp ``outline_variant`` 描边（桌面上更容易读出
-  卡片边界，避免"白卡浮在白底上"）；
-- ``elevated``：``surface_container`` + level 1 阴影。
+- ``filled``：``surface_container_highest`` 底、无描边、无阴影（MD3 filled card）；
+- ``outlined``：``surface`` 底 + 1dp ``outline_variant`` 描边（MD3 outlined card）；
+- ``elevated``：``surface_container_low`` + level 1 阴影。
 
 页面上大量卡片默认使用 ``outlined``：MD3 本身允许 outlined card，且它不
 需要为每张卡片挂 ``QGraphicsDropShadowEffect``（一个 widget 只能挂一个
 effect，且阴影在深色主题几乎不可见）。只有对话框 / FAB / 菜单这类真正
 "浮起"的元素使用阴影。
 
-> 说明：MD3 filled card 规范取值是 ``surface_container_highest``；本项目
-> 采用低一档的 ``surface_container``，在浅色下保持轻盈、深色下仍可分辨，
-> 并配合 1dp 描边作为边界。该取舍记录在 docs/gui-md3-theme.md。
+> 说明：三种变体的容器色严格对应 MD3 规范，不再出现"surface_container
+> + 描边"的混合形态（既不是 filled 也不是 outlined）。
 """
 
 from __future__ import annotations
@@ -22,7 +20,12 @@ from __future__ import annotations
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QLabel, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from arknights_video_pipeline.gui.theme.colors import MaterialColors
@@ -39,6 +42,13 @@ _FILLED = "filled"
 _OUTLINED = "outlined"
 _ELEVATED = "elevated"
 
+#: 变体 → 默认表面角色（MD3 card color roles）
+_VARIANT_SURFACE_ROLE: dict[str, str] = {
+    _FILLED: "surface_container_highest",
+    _OUTLINED: "surface",
+    _ELEVATED: "surface_container_low",
+}
+
 
 class CardFrame(QFrame):
     """圆角卡片基础组件（仅绘制圆角背景，不含布局）
@@ -51,7 +61,7 @@ class CardFrame(QFrame):
     def __init__(
         self,
         parent: QWidget | None = None,
-        surface_role: str = "surface_container",
+        surface_role: str | None = None,
         variant: str = _OUTLINED,
         radius: int | None = None,
     ) -> None:
@@ -60,12 +70,18 @@ class CardFrame(QFrame):
         # 说明：不使用 setAutoFillBackground —— 历史实现里它会先用调色板铺
         # 一层矩形，再被 paintEvent 的圆角覆盖，形成双重绘制（主题切换时
         # 闪白、圆角边缘出现直角残影）。背景完全由 paintEvent 自绘。
-        self._surface_role = surface_role
-        self._variant = variant
+        self._variant = variant if variant in _VARIANT_SURFACE_ROLE else _OUTLINED
+        # 显式传入角色时优先（如对话框 surface_container_high）；
+        # 否则严格按 MD3 卡片的容器色角色取色。
+        self._surface_role_explicit = surface_role is not None
+        self._surface_role = (
+            surface_role if surface_role is not None
+            else _VARIANT_SURFACE_ROLE[self._variant]
+        )
         self._radius = radius if radius is not None else ShapeRole.CARD
         # 构造即取当前主题：深色下新建卡片不会残留浅色底
         self._colors = theme_controller().colors()
-        self._surface_color = QColor(getattr(self._colors, surface_role))
+        self._surface_color = QColor(getattr(self._colors, self._surface_role))
         self._elevation = 0
         self._shadow: QGraphicsDropShadowEffect | None = None
         self._update_palette()
@@ -84,7 +100,10 @@ class CardFrame(QFrame):
 
     def set_variant(self, variant: str) -> None:
         """卡片变体：``filled`` / ``outlined``（默认）/ ``elevated``"""
-        self._variant = variant if variant in (_FILLED, _OUTLINED, _ELEVATED) else _OUTLINED
+        self._variant = variant if variant in _VARIANT_SURFACE_ROLE else _OUTLINED
+        if not self._surface_role_explicit:
+            self._surface_role = _VARIANT_SURFACE_ROLE[self._variant]
+            self.set_surface_color(getattr(self._colors, self._surface_role))
         if self._variant == _ELEVATED:
             self.set_elevation(1)
         elif self._elevation == 1:
@@ -100,6 +119,7 @@ class CardFrame(QFrame):
     def set_surface_role(self, role: str) -> None:
         """切换卡片使用的表面角色（如对话框改为 surface_container_high）"""
         self._surface_role = role
+        self._surface_role_explicit = True
         self.set_surface_color(getattr(self._colors, role))
 
     def set_surface_color(self, hex_color: str) -> None:

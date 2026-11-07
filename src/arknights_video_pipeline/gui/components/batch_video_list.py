@@ -24,16 +24,25 @@ import os
 from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMenu, QScrollArea, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from arknights_video_pipeline.core.utils import SUPPORTED_VIDEO_EXTENSIONS
 from arknights_video_pipeline.gui.assets.icons.nav_icons import (
-    has_icon, make_icon_pixmap,
+    has_icon,
+    make_icon_pixmap,
 )
 from arknights_video_pipeline.gui.components.material_button import MaterialButton
-from arknights_video_pipeline.gui.components.material_icon_button import MaterialIconButton
+from arknights_video_pipeline.gui.components.material_icon_button import (
+    MaterialIconButton,
+)
 from arknights_video_pipeline.gui.components.material_progress import MaterialProgress
 from arknights_video_pipeline.gui.i18n import i18n, tr
 from arknights_video_pipeline.gui.theme import MaterialColors
@@ -41,7 +50,6 @@ from arknights_video_pipeline.gui.theme.spacing import Space
 from arknights_video_pipeline.gui.theme.state import StateLayer, with_alpha
 from arknights_video_pipeline.gui.theme.theme_controller import theme_controller
 from arknights_video_pipeline.gui.theme.typography import MaterialTypography
-
 
 # 状态枚举（字符串，便于直接作为样式 key）
 STATUS_PENDING = "pending"
@@ -152,7 +160,8 @@ class BatchVideoRow(QWidget):
         # 文件名（中间省略，完整路径放 tooltip）
         self._name_label = _ElidedLabel(os.path.basename(video_path), self)
         self._name_label.setToolTip(video_path)
-        self._name_label.setFont(self._typo.font("body_medium"))
+        # MD3 列表项主文本使用 body_large（16/400）
+        self._name_label.setFont(self._typo.font("body_large"))
         top.addWidget(self._name_label, 1)
 
         # 状态文本（右对齐，固定列宽保证各行一致）
@@ -444,8 +453,10 @@ class BatchVideoList(QWidget):
         # 空列表占位：图标 + 说明（MD3 空态不用虚线框）
         self._placeholder = QWidget()
         placeholder_layout = QVBoxLayout(self._placeholder)
-        # 底部留出 FAB 的安全区，避免空态文案被右下角悬浮按钮压住
-        placeholder_layout.setContentsMargins(0, Space.XXL, 0, Space.XXXL + Space.XXL)
+        # 底部留出 FAB 的安全区：compact 档 FAB 悬浮在视口右下角，
+        # 空态图标/文案必须上移足够距离才不会被按钮压住（历史实测
+        # 72dp 仍会重叠文字，这里取 160dp）
+        placeholder_layout.setContentsMargins(0, Space.XXL, 0, Space.XXXL * 4)
         placeholder_layout.setSpacing(Space.S)
         placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 

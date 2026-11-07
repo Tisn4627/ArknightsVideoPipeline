@@ -13,7 +13,17 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, QRectF, QPropertyAnimation, QPointF, QSize, Qt, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import (
+    QEvent,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QLabel, QWidget
 
@@ -33,6 +43,14 @@ class MaterialCheckBox(QWidget):
     toggled = pyqtSignal(bool)
 
     INDICATOR_SIZE = 18
+    #: MD3 状态层 40dp
+    _STATE_LAYER = 40
+    #: 状态层外围再留 2dp 安全区：hover 圆正好 40dp，不会被控件
+    #: 边界切掉最外圈反锯齿像素（控件总高 44dp）。
+    _SAFE_PAD = 2
+    #: indicator 在状态层内居中 → 左偏移 2 + (40 - 18) / 2 = 13
+    _INDICATOR_LEFT = _SAFE_PAD + (_STATE_LAYER - INDICATOR_SIZE) // 2
+    _LABEL_GAP = 8
 
     def __init__(self, text: str = "", colors: MaterialColors | None = None,
                  parent: QWidget | None = None) -> None:
@@ -40,8 +58,10 @@ class MaterialCheckBox(QWidget):
         self._checked = False
         self._colors = colors or theme_controller().colors()
         self._hover = False
+        self._pressed = False
         self._alpha = 0.0
         self._check = 0.0  # 勾选进度（0-1）
+        self._keyboard_focus = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -50,8 +70,14 @@ class MaterialCheckBox(QWidget):
         # 主题切换时无需逐个重设（省掉 polish 与布局失效）
         self._label = QLabel(text, self)
         self._label.setFont(MaterialTypography().font("body_medium"))
-        set_text_color(self._label, self._colors.on_surface)
-        self._label.move(self.INDICATOR_SIZE + 8, 0)
+        # 标签不能吞掉鼠标：点击/悬停文字区域也必须作用于整个复选框
+        # （QLabel 默认会接收鼠标事件，导致只有 18dp indicator 可点）。
+        self._label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._apply_label_color()
+        self.setAccessibleName(text)
+        self._label.move(self._label_left(), 0)
         self._label.adjustSize()
         self._relayout()
 
@@ -135,67 +161,128 @@ class MaterialCheckBox(QWidget):
 
     def setText(self, text: str) -> None:  # noqa: N802
         self._label.setText(text)
+        self.setAccessibleName(text)
         self._label.adjustSize()
         self._relayout()
 
     def text(self) -> str:
         return self._label.text()
 
+    def _label_left(self) -> int:
+        return self._INDICATOR_LEFT + self.INDICATOR_SIZE + self._LABEL_GAP
+
     def _relayout(self) -> None:
-        """根据文字与 indicator 调整 self 大小，保持上下居中。"""
+        """根据文字与 indicator 调整 self 大小，保持上下居中。
+
+        高度 44dp = 40dp 状态层 + 上下各 2dp 安全区：MD3 的 hover
+        墨层 / 焦点环必须完整落在控件内，否则会被边界裁成半圆。
+        """
         fm = self._label.fontMetrics()
-        w = self.INDICATOR_SIZE + 8 + fm.horizontalAdvance(self._label.text()) + 4
-        h = max(self.INDICATOR_SIZE, fm.height() + 4)
+        w = self._label_left() + fm.horizontalAdvance(self._label.text()) + 4
+        h = max(self._STATE_LAYER + 2 * self._SAFE_PAD, fm.height() + 4)
         self.setFixedSize(int(w), int(h))
-        self._label.move(self.INDICATOR_SIZE + 8, (h - fm.height()) // 2)
+        self._label.move(self._label_left(), (h - fm.height()) // 2)
+
+    def _apply_label_color(self) -> None:
+        """标签颜色：启用用 on_surface，禁用用 on_surface 38%
+
+        不能只在 ``set_colors`` 里固定写 on_surface：显式写进 QPalette 后，
+        Qt 的 Disabled 颜色组不会再自动生效，禁用行的文字会保持全黑。
+        """
+        color = (
+            self._colors.on_surface
+            if self.isEnabled()
+            else blend(
+                self._colors.surface,
+                self._colors.on_surface,
+                StateLayer.DISABLED_CONTENT,
+            ).name()
+        )
+        set_text_color(self._label, color)
 
     def set_colors(self, colors: MaterialColors) -> None:
         self._colors = colors
-        set_text_color(self._label, colors.on_surface)
+        self._apply_label_color()
         self.update()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange and hasattr(self, "_label"):
+            self._apply_label_color()
+            self.update()
 
     # ── 事件 ──────────────────────────────────────────────
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
-            self.setChecked(not self._checked)
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._pressed = True
+            self._animate_layer(StateLayer.PRESSED)
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            was_pressed = self._pressed
+            self._pressed = False
+            self._animate_layer(StateLayer.HOVER if self._hover else 0.0)
+            # 与标准按钮一致：按下后拖出再释放不应切换
+            if (
+                was_pressed
+                and self.isEnabled()
+                and self.rect().contains(event.position().toPoint())
+            ):
+                self.setChecked(not self._checked)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hover = True
-        self._animate_layer(StateLayer.HOVER)
+        if not self._pressed:
+            self._animate_layer(StateLayer.HOVER)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hover = False
+        self._pressed = False
         self._animate_layer(0.0)
         super().leaveEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.setChecked(not self._checked)
+            # 长按 Space 的自动重复不应反复切换
+            if not event.isAutoRepeat():
+                self.setChecked(not self._checked)
             event.accept()
             return
         super().keyPressEvent(event)
 
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
+        self._keyboard_focus = event.reason() in (
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        )
         self.update()
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
+        self._keyboard_focus = False
         self.update()
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = self._label.fontMetrics()
-        return QSize(self.INDICATOR_SIZE + 8 + fm.horizontalAdvance(self._label.text()) + 4,
-                     max(self.INDICATOR_SIZE, fm.height() + 4))
+        return QSize(
+            self._label_left() + fm.horizontalAdvance(self._label.text()) + 4,
+            max(self._STATE_LAYER + 2 * self._SAFE_PAD, fm.height() + 4),
+        )
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         fm = self._label.fontMetrics()
-        self._label.move(self.INDICATOR_SIZE + 8, (self.height() - fm.height()) // 2)
+        self._label.move(self._label_left(), (self.height() - fm.height()) // 2)
         super().resizeEvent(event)
 
     # ── 绘制 ─────────────────────────────────────────────
@@ -207,7 +294,9 @@ class MaterialCheckBox(QWidget):
         c = self._colors
         enabled = self.isEnabled()
         size = self.INDICATOR_SIZE
-        rect = QRect(0, (self.height() - size) // 2, size, size)
+        rect = QRect(
+            self._INDICATOR_LEFT, (self.height() - size) // 2, size, size
+        )
         center = QPointF(rect.center())
 
         # 墨层：indicator 外围 20dp 圆形
@@ -234,12 +323,15 @@ class MaterialCheckBox(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rect, 2.0, 2.0)
 
-            # 对勾：按进度展开（0 → 完整路径）
+            # 对勾：路径坐标必须平移到 indicator 的实际位置。
+            # （历史 bug：路径按 (0,0) 绘制，indicator 左移 11dp 后对勾被
+            #  画到容器外，视觉上只剩一个紫色方块。）
             s = size / 24.0
+            ox, oy = rect.x(), rect.y()
             full = QPainterPath()
-            full.moveTo(3 * s, 12 * s)
-            full.lineTo(10 * s, 18 * s)
-            full.lineTo(21 * s, 5 * s)
+            full.moveTo(ox + 3 * s, oy + 12 * s)
+            full.lineTo(ox + 10 * s, oy + 18 * s)
+            full.lineTo(ox + 21 * s, oy + 5 * s)
             pen = QPen(QColor(content))
             pen.setWidthF(2.0)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -265,8 +357,8 @@ class MaterialCheckBox(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 2.0, 2.0)
 
-        # 焦点环
-        if self.hasFocus() and enabled:
+        # 焦点环（仅键盘导航可见）
+        if self._keyboard_focus and enabled:
             ring = QPen(QColor(c.primary))
             ring.setWidthF(2.0)
             painter.setPen(ring)
