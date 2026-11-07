@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ArknightsVideoRecognition"
 version = "0.1.0"
 description = "Python rewrite of Maa's video-to-copilot-JSON recognition pipeline"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "opencv-python",
@@ -14,9 +14,6 @@ dependencies = [
     "rapidocr-onnxruntime",
     "pillow",
 ]
-
-[project.scripts]
-arknights-video-recognition = "arknights_video_recognition.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
