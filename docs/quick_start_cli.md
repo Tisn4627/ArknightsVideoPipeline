@@ -58,7 +58,7 @@ pip install -r requirements.txt
 
 ### 1.5 识别资源与代码（recognition 后端必需）
 
-步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 216M 识别资源
+步骤 1 默认使用 **recognition 后端**（纯 Python 视频识别），需要约 229M 识别资源
 （模型/地图/头像）与识别代码 `src/arknights_video_recognition/`（原为 git 子模块，
 现随仓库直接分发）。两者均已入库，克隆后无需额外初始化即可使用：
 识别资源直接位于顶层 `resource/`（avatar/config/data/ocr/onnx/template/tile 等，
@@ -84,8 +84,8 @@ config/
 ├── pipeline.json          # 全局流水线配置
 ├── formation.json         # 编队转文本配置
 ├── actions.json           # 操作转文本配置
-├── track.json             # 开始按钮识别配置
-├── gui.json               # GUI 配置（主题等）
+├── track.json             # 切换时间戳识别配置
+├── gui.json               # GUI 配置（主题、语言、动态色彩等）
 └── video_compose/         # 视频合成风格配置
     ├── style1.json        # style1 风格（默认，底板+视频叠加）
     └── style2.json        # style2 风格（全屏视频+底部字幕）
@@ -173,15 +173,14 @@ python main.py video.mp4 --style style2 --dry-run
 预期输出：
 
 ```
-[INFO] 验证视频文件: video.mp4
-[INFO] 视频信息: 1920x1080, 时长120.50s
-[INFO] 验证背景板图片: bg.png
-[INFO] 背景板图片信息: 1920x1080
-[INFO] Dry-run模式：输入验证通过
-[INFO] 视频: video.mp4
+[INFO] Dry-run模式：开始验证全部输入
 [INFO] 背景板图片: bg.png
-[INFO] 输出目录: output\video
-[INFO] MAA路径: MAA-v5.12.1-win-x64
+[INFO] 识别后端: recognition
+[INFO] MAA路径: 
+[INFO] 跳过步骤: []
+[INFO] [1/1] 验证视频文件: video.mp4
+[INFO]   视频信息: 1920x1080, 时长120.50s
+[INFO] Dry-run完成：全部通过
 ```
 
 ### 4.3 执行完整流水线
@@ -198,10 +197,10 @@ python main.py video.mp4 --style style2
 
 ```
 ============================================================
-  步骤 1/5: 视频转MAA作业JSON
+  步骤 1/5: 视频转作业JSON
 ============================================================
 [INFO] 输入视频: video.mp4
-[INFO] MAA识别尝试 1/2
+[INFO] recognition识别尝试 1/1
 ...
 
 ============================================================
@@ -215,7 +214,7 @@ python main.py video.mp4 --style style2
 ...
 
 ============================================================
-  步骤 4/5: 识别开始按钮时间戳
+  步骤 4/5: 识别切换时间戳（开始按钮/进入战斗）
 ============================================================
 ...
 
@@ -236,7 +235,7 @@ output/video/
 ├── maa_copilot_video.json    # MAA 识别结果 JSON（仅 maa 后端）
 ├── formation_video.txt       # 编队文本
 ├── actions_video.txt         # 操作文本
-├── track_result_video.json   # 开始按钮识别结果
+├── track_result_video.json   # 切换时间戳识别结果
 └── output_video.mp4          # 最终合成视频
 ```
 ### 注意事项
@@ -245,7 +244,7 @@ output/video/
 - 流水线会自动创建输出目录，无需手动创建。
 ## 第五步：常用操作示例
 
-### 仅生成 MAA JSON（跳过后续步骤）
+### 仅生成作业 JSON（跳过后续步骤）
 
 ```bash
 python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --skip-step track --skip-step compose
@@ -275,7 +274,7 @@ python main.py video.mp4 --style style2 --skip-step copilot --skip-step formatio
 
 ### 使用自定义作业 JSON（跳过视频识别）
 
-已有现成的作业 JSON 时，可通过 `--copilot-json` 直接使用，跳过耗时的步骤 1 视频识别，编队文本、操作文本、开始按钮识别与视频合成等后续步骤照常执行：
+已有现成的作业 JSON 时，可通过 `--copilot-json` 直接使用，跳过耗时的步骤 1 视频识别，编队文本、操作文本、切换时间戳识别与视频合成等后续步骤照常执行：
 
 ```bash
 # 单视频 + 单 JSON：直接绑定
@@ -347,9 +346,9 @@ python main.py video.mp4 --style style2
 分发，请检查克隆是否完整（可用 `git lfs`/大文件支持确认），或重新完整克隆；
 也可通过配置 `recognition.resource_dir` 指向其他位置的资源副本。
 
-### Q: 开始按钮识别未检测到
+### Q: 切换时间戳识别未检测到
 
-检查 `resource/StartButton/` 目录下是否有对应的模板图片，并确认 `config/track.json` 中的 `match_threshold` 设置是否过高（默认 0.75）。
+默认 `track_mode` 为 `battlestart`（检测右上角暂停按钮）。若视频前 30 秒内未出现暂停按钮，可调整 `config/track.json` 中的 `battle_start.time_limit` 或改用 `startbutton` 模式；使用 `startbutton` 模式时需检查 `resource/StartButton/` 目录下是否有对应模板图片，并确认 `match_threshold` 是否过高（默认 0.75）。
 
 ## 其他信息
 

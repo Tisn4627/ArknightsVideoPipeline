@@ -1,10 +1,10 @@
 # ArknightsVideoRecognition
 
-把 Maa（明日方舟助手）的"视频转标准作业 JSON"功能用 Python 重写。接受一段明日方舟战斗录像视频作为输入，识别其中的编队、关卡与战斗操作（部署 / 技能 / 撒退等），输出符合 Maa copilot schema 的作业 JSON，可直接导入 Maa 用于自动战斗（copilot 模式）。
+把 Maa（明日方舟助手）的"视频转标准作业 JSON"功能用 Python 重写。接受一段明日方舟战斗录像视频作为输入，识别其中的编队、关卡与战斗操作（部署 / 技能 / 撤退等），输出符合 Maa copilot schema 的作业 JSON，可直接导入 Maa 用于自动战斗（copilot 模式）。
 
 ## 特性
 
-- **视频转作业**：从战斗录像自动识别编队、关卡、部署/技能/撒退动作，输出 Maa copilot JSON
+- **视频转作业**：从战斗录像自动识别编队、关卡、部署/技能/撤退动作，输出 Maa copilot JSON
 - **对齐 Maa 原版**：核心识别逻辑（编队 OCR、战斗切片、动作推断、方向分类）严格对齐 Maa C++ 实现
 - **双 OCR 模型源**：支持 Maa 方舟 finetune PaddleOCR 模型（高精度）与 RapidOCR 默认模型（通用）切换
 - **标准地图数据**：采用社区标准 Arknights-Tile-Pos 形式（`levels.json` + 3D 投影矩阵），支持 940+ 关卡
@@ -16,11 +16,11 @@
 
 ```bash
 git clone <repo-url>
-cd ArknightsVideoRecognition
+cd ArknightsVideoPipeline
 pip install -e .
 ```
 
-依赖：Python >= 3.9、numpy、opencv-python、onnxruntime、rapidocr-onnxruntime、pillow（pip 安装时自动拉取）。
+依赖：Python >= 3.12、numpy、opencv-python、onnxruntime、rapidocr-onnxruntime、pillow（pip 安装时自动拉取）。
 
 ### 使用
 
@@ -31,18 +31,14 @@ python -m arknights_video_recognition battle.mp4 -o out.json
 # 手动指定关卡 + 指定 OCR 模型源
 python -m arknights_video_recognition battle.mp4 --stage 2-10 --ocr maamodel -o out.json
 
-# 指定视频分辨率（默认 1280x720）
-python -m arknights_video_recognition battle.mp4 --resolution 1920x1080 -o out.json
+# 指定视频分辨率（当前仅支持 1280x720，其他值会报错）
+python -m arknights_video_recognition battle.mp4 --resolution 1280x720 -o out.json
 
 # 输出带视频时间戳的扩展字段
 python -m arknights_video_recognition battle.mp4 --with-video-time -o out.json
 ```
 
-安装后也可直接使用入口命令：
-
-```bash
-arknights-video-recognition battle.mp4 --output out.json
-```
+> 整个项目安装后提供主流水线入口 `arkpipeline-cli` / `arkpipeline-gui`；识别 CLI 通过 `python -m arknights_video_recognition` 调用。
 
 ### CLI 参数
 
@@ -50,9 +46,9 @@ arknights-video-recognition battle.mp4 --output out.json
 | --- | --- | --- |
 | `video`（位置参数） | — | 输入的战斗录像视频路径 |
 | `--ocr` | `maamodel` | OCR 模型源：`maamodel`（方舟 finetune，高精度）/ `default`（RapidOCR 自带） |
-| `-o` / `--output` | 自动命名 | 输出 JSON 路径，不指定则存到 `cache/MaaAI_{stage}_{video}_{time}.json` |
+| `-o` / `--output` | 自动命名 | 输出 JSON 路径，不指定则存到当前工作目录下 `cache/MaaAI_{stage}_{video_stem}_{timestamp}.json` |
 | `--stage` | 自动 OCR 识别 | 手动指定关卡，支持 code / name / stageId（如 `2-10`） |
-| `--resolution` | `1280x720` | 视频归一化分辨率，形如 `WxH` |
+| `--resolution` | `1280x720` | 视频归一化分辨率；**当前仅支持 `1280x720`** |
 | `--with-video-time` | 关闭 | 在 actions 中输出 `video_time`（视频内时间戳，秒） |
 
 退出码：`0` 成功 / `1` 资源缺失或异常 / `2` 关卡未识别（打印候选关卡）。
@@ -82,11 +78,11 @@ arknights-video-recognition battle.mp4 --output out.json
 ## 项目结构
 
 ```text
-ArknightsVideoRecognition/
+ArknightsVideoPipeline/
 ├── pyproject.toml                      # 项目元信息与依赖
 ├── .github/workflows/sync-resources.yml # 资源自动同步 workflow
-├── scripts/                            # 资源同步脚本
-├── resource/                           # 内置资源（约 214M，开箱即用）
+├── script/                             # 资源同步脚本
+├── resource/                           # 内置资源（约 229M，开箱即用）
 │   ├── tile/levels.json                # 地图数据（940+ 关卡）
 │   ├── avatar/                         # 干员头像库
 │   ├── onnx/                           # 战斗识别 ONNX 模型
@@ -136,38 +132,35 @@ Maa copilot 作业 JSON
 
 ## 文档
 
-- [快速使用](./doc/快速使用.md) — 安装、CLI 参数、输出格式、FAQ
-- [开发指南](./doc/开发指南.md) — 架构、目录布局、模块职责、扩展点
-- [资源来源](./doc/资源来源.md) — 各资源文件的来源仓库、许可证与更新方式
-- [GitHub Workflow 说明](./doc/workflow说明.md) — 资源自动同步 workflow 的设计与用法
+- [快速使用](../../docs/快速使用.md) — 安装、CLI 参数、输出格式、FAQ
+- [开发指南](../../docs/开发指南.md) — 架构、目录布局、模块职责、扩展点
+- [资源来源](../../docs/资源来源.md) — 各资源文件的来源仓库、许可证与更新方式
+- [GitHub Workflow 说明](../../docs/workflow说明.md) — 资源自动同步 workflow 的设计与用法
 
 ## 资源同步
 
 `resource/` 下所有文件均纳入版本控制，开箱即用。其中 `tile` / `avatar` / `data` / `config` 由 GitHub Actions workflow 每周自动从上游仓库同步；`template` / `onnx` / `ocr` 已在仓库中但不自动同步，由开发者手动更新。
 
-手动更新资源：
+手动更新资源（在仓库根目录执行）：
 
 ```bash
 # 同步全部资源（需本地克隆 Maa 与 ArknightsGameResource 仓库）
-python scripts/update_resources.py
+python script/update_resources.py
 
 # 仅更新地图数据（直接从 GitHub 下载，无需本地仓库）
-python scripts/update_levels.py
+python script/update_levels.py
 
 # 仅更新干员职业表（直接从 GitHub 下载）
-python scripts/update_character_table.py
+python script/update_character_table.py
 ```
 
-详见 [资源来源.md](./doc/资源来源.md) 与 [GitHub Workflow 说明](./doc/workflow说明.md)。
+详见 [资源来源.md](../../docs/资源来源.md) 与 [GitHub Workflow 说明](../../docs/workflow说明.md)。
 
 ## 测试
 
 ```bash
-# 运行单元测试（默认跳过慢测试）
-pytest
-
-# 运行全部测试（含真实视频流水线测试）
-pytest -m slow
+# 在仓库根目录运行识别模块单元测试
+pytest src/arknights_video_recognition/tests
 ```
 
 ## 致谢

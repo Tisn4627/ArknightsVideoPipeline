@@ -71,6 +71,8 @@ pictex>=2.0,<3
 Pillow>=10.0.0,<12
 tqdm>=4.65.0,<5
 PyQt6>=6.6.0,<7
+onnxruntime>=1.16
+rapidocr-onnxruntime>=1.3
 
 # 打包工具依赖（需额外安装）
 pyinstaller>=6.0
@@ -78,8 +80,8 @@ pyinstaller>=6.0
 
 ### 外部工具
 
-- **ffmpeg / ffprobe**：需在系统 PATH 中可用（用于视频验证和处理）
-- **MAA**：运行时需要，但打包时不包含（需用户自行下载放置）
+- **ffmpeg / ffprobe**：需在系统 PATH 中可用，或随 `resource/ffmpeg/bin` 分发（用于视频验证和处理）
+- **MAA**：仅当识别后端选择 `maa` 时需要，打包不包含（用户自行下载放置）；默认 `recognition` 后端无需 MAA
 
 ***
 
@@ -493,24 +495,29 @@ dist/
 │   ├── pipeline.json                    # 全局流水线配置
 │   ├── formation.json                   # 编队转文本配置
 │   ├── actions.json                     # 操作转文本配置
-│   ├── track.json                       # 开始按钮识别配置
-│   ├── gui.json                         # GUI 偏好配置（主题、折叠状态）
+│   ├── track.json                       # 切换时间戳识别配置
+│   ├── gui.json                         # GUI 偏好配置（主题、语言、动态色彩、高级设置展开状态）
 │   └── video_compose/                   # 视频合成风格配置
 │       ├── style1.json
 │       └── style2.json
-├── resource/                            # 资源文件
-│   ├── StartButton/                     # 开始按钮模板图片
-│   └── font/                            # 字体文件
-├── MAA/                                 # MAA 作业识别工具
+├── resource/                            # 资源文件（完整复制项目 resource/ 目录）
+│   ├── avatar/                          # 干员头像库
+│   ├── tile/levels.json                 # 地图数据
+│   ├── onnx/  ocr/  data/  config/      # 模型、OCR 配置、ROI 等
+│   ├── template/  StartButton/          # 模板图片
+│   ├── font/                             # 字体文件
+│   └── ffmpeg/bin/                      # 内置 ffmpeg（可选，需 ffmpeg.exe/ffprobe.exe）
+├── MAA/                                 # MAA 工具目录（仅 maa 后端需要，可选）
 │   └── ...
 ├── ffmpeg.exe                           # ffmpeg（可选，如未在 PATH 中）
 ├── ffprobe.exe                          # ffprobe（可选，如未在 PATH 中）
 └── output/                              # 输出目录（程序自动创建）
     └── <video_name>/                    # 按视频名分目录
-        ├── copilot_*.json               # MAA 识别结果
+        ├── recognition_copilot_*.json   # recognition 后端识别结果（默认）
+        ├── maa_copilot_*.json           # MAA 后端识别结果（仅 maa 后端）
         ├── formation_*.txt              # 编队文本
         ├── actions_*.txt                # 操作文本
-        ├── track_result_*.json          # 跟踪结果
+        ├── track_result_*.json          # 切换时间戳识别结果
         ├── output_*.mp4                 # 最终输出视频
         └── report_*.json                # 处理报告
 ```

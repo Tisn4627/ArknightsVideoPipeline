@@ -146,10 +146,10 @@ python main.py video.mp4 -b bg.png --stage 2-10
 | 必填 | 否 |
 | 默认值 | 使用 `pipeline.json` 中 `recognition.resolution`（默认 `1280x720`） |
 
-Recognition 后端的视频处理分辨率。仅 `--backend recognition` 时生效。
+Recognition 后端的视频处理分辨率。仅 `--backend recognition` 时生效。**当前实现的所有 ROI 与模板均按 1280x720 标定，因此只支持 `1280x720`，传入其他值会直接报错。**
 
 ```bash
-python main.py video.mp4 -b bg.png --resolution 1920x1080
+python main.py video.mp4 -b bg.png --resolution 1280x720
 ```
 
 ### `--maa-path`
@@ -236,14 +236,14 @@ python main.py video.mp4 -b bg.png --no-log-file
 | `copilot` | 视频转作业 JSON（recognition / maa 后端） |
 | `formation` | 编队配置转文本 |
 | `actions` | 操作指令转文本 |
-| `track` | 开始按钮识别 |
+| `track` | 切换时间戳识别（开始按钮/进入战斗） |
 | `compose` | 视频合成 |
 
 ```bash
-# 跳过开始按钮识别和视频合成
+# 跳过切换时间戳识别和视频合成
 python main.py video.mp4 -b bg.png --skip-step track --skip-step compose
 
-# 仅执行 MAA 识别
+# 仅执行步骤 1 的视频识别（默认 recognition 后端，也可加 --backend maa）
 python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --skip-step track --skip-step compose
 ```
 
@@ -255,7 +255,7 @@ python main.py video.mp4 -b bg.png --skip-step formation --skip-step actions --s
 | 必填 | 否 |
 | 默认值 | 无（全部视频执行步骤1识别） |
 
-提供现成的作业 JSON 文件，绑定后对应视频**跳过步骤 1（视频识别）**，编队文本、操作文本、开始按钮识别与视频合成等后续步骤照常执行。适用于已有作业 JSON、无需重新识别的场景。
+提供现成的作业 JSON 文件，绑定后对应视频**跳过步骤 1（视频识别）**，编队文本、操作文本、切换时间戳识别与视频合成等后续步骤照常执行。适用于已有作业 JSON、无需重新识别的场景。
 
 文件需为 `.json` 且必须存在，否则程序直接报错退出。
 
@@ -451,7 +451,7 @@ python main.py --init-config formation
 python main.py video.mp4 -b bg.png --dry-run
 ```
 
-### 仅运行 MAA 识别
+### 仅运行视频识别（步骤 1）
 
 ```bash
 python main.py video.mp4 -b bg.png \

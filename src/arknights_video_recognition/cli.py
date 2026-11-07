@@ -3,7 +3,6 @@
 用法示例::
 
     python -m arknights_video_recognition battle.mp4 --stage 2-10 --ocr default -o out.json
-    arknights-video-recognition battle.mp4 --output out.json
 """
 
 from __future__ import annotations
@@ -67,7 +66,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--resolution",
         default="1280x720",
-        help="视频归一化分辨率，形如 WxH，默认 1280x720",
+        help="视频归一化分辨率，默认 1280x720（当前仅支持 1280x720）",
     )
     parser.add_argument(
         "--with-video-time",

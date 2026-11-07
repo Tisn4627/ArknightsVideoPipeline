@@ -12,24 +12,24 @@ ArknightsVideoPipeline 是一个自动化视频处理工具，专为明日方舟
 
 > **说明**：Maa 已停止对视频自动识别的维护与支持。本项目的步骤 1 默认使用
 > [ArknightsVideoRecognition](src/arknights_video_recognition)
-> 子模块（纯 Python 重写的视频转作业 JSON 实现）作为识别后端，不再依赖 MAA 的
+> 内置模块（纯 Python 重写的视频转作业 JSON 实现）作为识别后端，不再依赖 MAA 的
 > 视频识别；MAA 调用保留为可选后端（`--backend maa`），可无缝回退。
 
 ## 核心功能
 
 |  步骤 | 功能              | 说明                                  |
 | :-: | --------------- | ----------------------------------- |
-|  1  | 视频转作业 JSON | 默认调用 recognition 后端（ArknightsVideoRecognition 子模块），也可切换 MAA 后端，将游戏录像转换为结构化的作业 JSON |
+|  1  | 视频转作业 JSON | 默认调用 recognition 后端（ArknightsVideoRecognition 内置模块），也可切换 MAA 后端，将游戏录像转换为结构化的作业 JSON |
 |  2  | 编队配置转文本         | 解析 JSON，提取编队信息（干员、技能、模组等）           |
 |  3  | 操作指令转文本         | 解析 JSON，提取操作指令（部署、技能、方向、延迟等）        |
-|  4  | 开始按钮识别          | 使用 OpenCV 模板匹配，精确定位"开始"按钮出现的时间戳     |
+|  4  | 切换时间戳识别 | 默认使用战斗开始检测（暂停按钮 ROI 亮像素阈值，思路与 MAA `BattleHasStarted` 一致），可配置回退到 OpenCV 开始按钮模板匹配 |
 |  5  | 视频合成            | 将视频叠加到底板图片上，并叠加编队/操作文本，输出最终视频       |
 
 ## 双识别后端
 
 | 后端 | 说明 | 依赖 |
 | --- | --- | --- |
-| `recognition`（默认） | 纯 Python 视频识别（[ArknightsVideoRecognition](src/arknights_video_recognition) 子模块），自带 214M 模型/地图/头像资源，开箱即用 | 仅 pip 依赖 |
+| `recognition`（默认） | 纯 Python 视频识别（[ArknightsVideoRecognition](src/arknights_video_recognition) 内置模块），自带约 229M 模型/地图/头像资源，开箱即用 | 仅 pip 依赖 |
 | `maa`（可选回退） | 调用 MAA 项目的 `VideoRecognition` 任务 | 需本地安装 MAA（`--maa-path`） |
 
 切换方式：
@@ -53,7 +53,7 @@ python main.py video.mp4 -b bg.png --copilot-json copilot.json
 
 ## 克隆与资源
 
-recognition 识别资源（约 216M）与识别代码（`src/arknights_video_recognition`，
+recognition 识别资源（约 229M）与识别代码（`src/arknights_video_recognition`，
 原为 git 子模块，现随仓库直接分发）均已入库，克隆后无需额外初始化：
 
 ```bash
@@ -71,7 +71,7 @@ pip install -e .
 
 ## 视频要求
 
-与 MAA 对视频的要求一致：视频需无模拟器边框和 Windows 标题栏，分辨率为 1080P，宽高比为 16:9。请勿使用助战干员，MAA 目前的视频转作业 JSON 功能不支持识别助战干员。
+与 MAA 对视频的要求一致：视频需无模拟器边框和 Windows 标题栏，分辨率为 1080P，宽高比为 16:9。MAA 后端不支持识别助战干员；recognition 后端已扩展助战槽位识别，但仍建议使用无助战的录像以获得稳定结果。
 
 ## 文档
 

@@ -27,7 +27,7 @@
 `template` / `onnx` / `ocr` 三类资源虽在仓库中，但不通过 workflow 自动同步，原因：
 - 体积大（合计约 53M），频繁自动同步会产生大量二进制 diff
 - 更新频率低（Maa 模型/模板不常变动）
-- 由开发者在本地运行 `scripts/update_resources.py` 更新后手动提交
+- 由开发者在本地运行 `script/update_resources.py` 更新后手动提交
 
 ### 触发方式
 
@@ -82,7 +82,7 @@ workflow 需要 `contents: write` 权限以推送提交到仓库。在仓库 Set
 git clone --depth=1 https://github.com/MaaAssistantArknights/MaaAssistantArknights.git /tmp/Maa
 
 # 2. 运行同步脚本
-python scripts/update_resources.py \
+python script/update_resources.py \
   --maa-dir /tmp/Maa \
   --resource-dir ./resource
 

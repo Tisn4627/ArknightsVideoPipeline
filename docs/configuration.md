@@ -25,9 +25,11 @@ python main.py --init-config formation
 python main.py --init-config actions
 python main.py --init-config track
 python main.py --init-config compose
+python main.py --init-config compose_style2
+python main.py --init-config gui
 ```
 
-可用模块名：`pipeline`、`formation`、`actions`、`track`、`compose`、`all`
+可用模块名：`pipeline`、`formation`、`actions`、`track`、`compose`、`compose_style2`、`gui`、`all`
 
 ---
 
@@ -39,21 +41,23 @@ python main.py --init-config compose
 |--------|------|--------|------|
 | `copilot_backend` | string | `"recognition"` | 视频转作业 JSON 的识别后端：`"recognition"`（默认，纯 Python 实现，ArknightsVideoRecognition 代码随仓库分发）或 `"maa"`（调用 MAA 项目，需配置 `maa_path`）。CLI 可用 `--backend` 覆盖 |
 | `recognition.ocr_source` | string | `"maamodel"` | Recognition 后端的 OCR 模型来源：`"maamodel"`（Maa finetune 模型，默认）或 `"default"`（rapidocr 默认模型）。CLI 可用 `--ocr` 覆盖 |
-| `recognition.resolution` | string | `"1280x720"` | Recognition 后端的视频处理分辨率，格式 `"WxH"`。CLI 可用 `--resolution` 覆盖 |
+| `recognition.resolution` | string | `"1280x720"` | Recognition 后端的视频处理分辨率，格式 `"WxH"`。CLI 可用 `--resolution` 覆盖；当前 ROI/模板按 1280x720 标定，仅支持 `1280x720` |
 | `recognition.stage_override` | string | `""` | 关卡指定（code/name/stageId，如 `2-10` 或 `main_02-10`）。空=自动识别；指定后跳过关卡 OCR。CLI 可用 `--stage` 覆盖 |
 | `recognition.with_video_time` | boolean | `false` | 是否在 actions 中输出非标准的 `video_time` 扩展字段（视频时间点，秒） |
-| `recognition.resource_dir` | string | `""` | Recognition 资源目录覆盖。空=使用顶层 `resource/`（识别资源 avatar/config/data/ocr/onnx/template/tile 已随仓库分发，直接位于顶层）；非空时使用该路径（运行时优先级最高，优先于环境变量 `AVR_RESOURCE_DIR`） |
+| `recognition.resource_dir` | string | `"resource"` | Recognition 资源目录，默认 `resource`（相对项目根目录，即顶层 `resource/`；识别资源 avatar/config/data/ocr/onnx/template/tile 已随仓库分发）；非空时使用该路径（运行时优先级最高，优先于环境变量 `AVR_RESOURCE_DIR`），为空时回退到 `<项目根>/resource/` |
 | `maa_path` | string | `""` | MAA 项目路径，**仅 `copilot_backend="maa"` 时生效**。支持相对路径（基于项目根目录）或绝对路径，必须指向有效的文件夹 |
 | `output_dir` | string | `"output"` | 输出根目录，支持相对路径或绝对路径 |
 | `log_level` | string | `"INFO"` | 日志级别，可选值：`DEBUG`、`INFO`、`WARNING`、`ERROR` |
 | `log_to_file` | boolean | `true` | 是否将日志输出到文件 |
 | `log_max_bytes` | integer | `10485760` | 单个日志文件最大字节数（10MB），超过后触发轮转 |
 | `log_backup_count` | integer | `3` | 保留的历史日志文件数量 |
-| `copilot_timeout_seconds` | integer | `600` | 识别统一超时时间（秒），recognition/maa 两后端共用（已合并原 `maa_timeout_seconds`） |
-| `copilot_max_retries` | integer | `2` | 识别统一最大重试次数，recognition/maa 两后端共用（已合并原 `maa_max_retries`） |
+| `copilot_timeout_seconds` | integer | `2400` | 识别统一超时时间（秒），recognition/maa 两后端共用（已合并原 `maa_timeout_seconds`） |
+| `copilot_max_retries` | integer | `1` | 识别统一最大重试次数，recognition/maa 两后端共用（已合并原 `maa_max_retries`） |
+| `skip_steps` | array | `[]` | GUI 中勾选的跳过步骤列表，可选值 `copilot`、`formation`、`actions`、`track`、`compose`。仅 GUI 批量处理时生效；CLI 用 `--skip-step` 单独指定 |
+| `background_image` | string | `""` | style1 合成背景板图片路径，GUI 主页选择后持久化。仅 GUI 批量处理时生效；CLI 用 `-b/--background-image` 单独指定 |
 | `formation` | string | `"config/formation.json"` | 编队转文本配置文件路径 |
 | `actions` | string | `"config/actions.json"` | 操作转文本配置文件路径 |
-| `track` | string | `"config/track.json"` | 开始按钮识别配置文件路径 |
+| `track` | string | `"config/track.json"` | 切换时间戳（开始按钮/进入战斗）识别配置文件路径 |
 | `video_compose_style` | string | `"style1"` | 视频合成风格名称，对应 `config/video_compose/` 目录下的同名 JSON 文件 |
 | `video_compose_config` | string | `"config/video_compose/style1.json"` | 视频合成配置文件路径 |
 | `multithreading` | boolean | `false` | 多线程批量处理开关。`false`（默认）时批量任务严格串行执行，一次仅运行一个合成任务，避免 MAA 资源争用；`true` 时按 `max_concurrent` 上限并发派发多个 PipelineWorker。仅在 GUI 批量处理时生效，CLI 不受此字段影响 |
@@ -71,11 +75,13 @@ python main.py --init-config compose
         "resolution": "1280x720",
         "stage_override": "",
         "with_video_time": false,
-        "resource_dir": ""
+        "resource_dir": "resource"
     },
     "maa_path": "",
-    "copilot_timeout_seconds": 600,
-    "copilot_max_retries": 2,
+    "copilot_timeout_seconds": 2400,
+    "copilot_max_retries": 1,
+    "skip_steps": [],
+    "background_image": "",
     "output_dir": "output",
     "log_level": "INFO",
     "log_to_file": true,
@@ -96,7 +102,7 @@ python main.py --init-config compose
 > **识别资源说明（recognition 后端）**：`recognition.resource_dir` 为空时，运行时读取
 > `<项目根>/resource/`（识别资源 avatar/config/data/ocr/onnx/template/tile 已随仓库分发，
 > 直接位于顶层，与 font/locales 同层）。资源缺失时步骤 1 会报错并提示检查资源目录。
-> 详见 [合并方案](docs/merge_plan.md)。
+> 详见 [合并方案](merge_plan.md)。
 
 > **视频列表说明**：GUI **Video files** 卡片中的视频列表**仅保存在当前会话内存中，不持久化**——每次启动 GUI 时列表为空，关闭窗口也不会将队列写入 `pipeline.json`。CLI 通过 `video` 位置参数接收视频列表（`python main.py v1.mp4 v2.mp4 ...`）。旧版配置文件中残留的 `video_paths` / `video_path` 字段会在加载时自动清除，不再生成。
 
@@ -160,13 +166,13 @@ python main.py --init-config compose
 
 ---
 
-## 4. track.json — 开始按钮识别配置
+## 4. track.json — 切换时间戳识别配置
 
 文件路径：`config/track.json`
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `track_mode` | string | `"startbutton"` | 识别模式：`startbutton`（开始按钮模板匹配，原行为）/ `battlestart`（战斗开始检测，暂停按钮 ROI 亮像素阈值法，思路与 MAA BattleHasStarted 一致） |
+| `track_mode` | string | `"battlestart"` | 识别模式：`battlestart`（战斗开始检测，暂停按钮 ROI 亮像素阈值法，思路与 MAA BattleHasStarted 一致，默认）/ `startbutton`（开始按钮模板匹配，原行为，需 StartButton 模板资源） |
 | `resource_dir` | string | `"resource/StartButton"` | 模板图片目录路径 |
 | `match_threshold` | float | `0.75` | 模板匹配阈值，越高越严格（0.0~1.0） |
 | `scale_range` | array | `[0.5, 1.5]` | 模板缩放范围 [最小, 最大] |
@@ -427,22 +433,30 @@ python main.py --init-config compose
 
 文件路径：`config/gui.json`
 
-> **与 pipeline 配置完全解耦**：`gui.json` 独立管理 GUI 运行时偏好，与流水线业务配置无任何依赖关系。GUI 中对主题的修改持久化到此文件，**不影响** `pipeline.json`；CLI 运行完全不受此文件影响。
+> **与 pipeline 配置完全解耦**：`gui.json` 独立管理 GUI 运行时偏好，由 `GuiConfig`（`gui/theme/gui_config.py`）负责读写，不依赖 `ConfigManager` / `ConfigProxy`，与流水线业务配置无任何依赖关系。GUI 中的修改即时持久化到此文件，**不影响** `pipeline.json`；CLI 运行完全不受此文件影响。
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `theme` | string | `"light"` | GUI 主题，可选值：`light`（浅色）、`dark`（深色）。由 `ConfigProxy`（`service/config_proxy.py`）管理，切换后即时生效，关闭窗口时持久化到此文件；下次启动自动恢复 |
+| `theme` | string | `"light"` | GUI 主题，可选值：`light`（浅色）、`dark`（深色）。切换后即时生效并写盘，下次启动自动恢复 |
+| `advanced_expanded` | boolean | `false` | 设置页“高级设置”分区是否展开；修改后即时保存 |
+| `language` | string | `"zh-CN"` | 界面语言，可选值：`zh-CN`、`en-US`；切换后即时生效并保存 |
+| `dynamic_color` | boolean | `true` | 是否启用 Material You 动态色彩；关闭时使用品牌基线紫（`#6750A4`） |
+| `seed_color` | string | `"#6750A4"` | 动态色彩种子色（`#RRGGBB`），非法值回退到 `#6750A4` |
 
 ### 配置示例
 
 ```json
 {
-    "theme": "light"
+    "theme": "light",
+    "advanced_expanded": false,
+    "language": "zh-CN",
+    "dynamic_color": true,
+    "seed_color": "#6750A4"
 }
 ```
 
 ### 管理方式说明
 
-- 该文件**不**由 `--init-config` 生成，也**不在** `PIPELINE_DEFAULTS` 中定义；
-- 首次 GUI 启动时，`ConfigProxy` 自动创建此文件并写入默认值；
-- 旧版本项目（无此文件）启动时，`ConfigProxy` 自动回退 `"light"`，无需手动迁移。
+- 该文件**不在** `PIPELINE_DEFAULTS` 中定义，但支持通过 `python main.py --init-config gui`（或 `--init-config all`）生成默认内容；
+- GUI 启动时若文件不存在，`GuiConfig` 直接使用内置默认值，不会立即创建文件；首次修改任一偏好或关闭窗口时才会写盘；
+- 旧版本项目（无此文件）启动时，`GuiConfig` 自动回退默认值（浅色主题），无需手动迁移。

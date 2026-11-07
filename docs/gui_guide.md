@@ -22,7 +22,7 @@
 - **操作系统**：Windows 10 / 11（本开发环境）
 - **Python**：3.12 或更高版本
 - **ffmpeg / ffprobe**：需要在系统 PATH 中可用
-- **MAA（MaaAssistantArknights）**：项目目录内需包含可识别的 MAA 目录（如 `MAA-v5.12.1-win-x64`）
+- **MAA（MaaAssistantArknights，可选）**：仅当识别后端选择 `maa` 时才需要；在此模式下需指向包含 `MaaCore.dll` 的 MAA 目录（如 `MAA-v5.12.1-win-x64`）。默认识别后端 `recognition` 已内置，无需 MAA 目录
 
 ### 1.2 安装依赖
 
@@ -30,7 +30,7 @@
 
 ```powershell
 # 进入项目目录
-cd ArknightsVideoPipeline-dev
+cd <项目目录>
 
 # 创建虚拟环境（如尚未创建）
 python -m venv venv
@@ -61,13 +61,13 @@ python gui.py
 
 | 区域 | 位置 | 内容 |
 |------|------|------|
-| Navigation Rail（导航栏） | 窗口最左侧 | Home / Settings / Info 入口，图标+标签；窗口较窄时自动折叠为仅图标 |
+| Navigation Rail（导航栏） | 窗口最左侧 | Home / Settings / Tools / About 入口，图标+标签；窗口较窄时自动折叠为仅图标 |
 | Hero 区域 | Home 页内容区顶部 | 应用大标题 "Arknights Video Pipeline" |
 | 配置卡片 | Home 页卡片网格左侧 | 背景板图片、合成风格、跳过步骤、操作按钮（Start / Cancel） |
 | 视频文件卡片 | Home 页卡片网格右侧 | 批量视频文件列表（添加 / 排序 / 删除 / 单文件状态与进度） |
 | 进度卡片 | Home 页卡片网格下方 | 整批处理总进度与状态文字（如 "Processing 2/5"） |
 | 日志卡片 | 进度卡片下方 | 运行日志，支持自动滚动、复制、清空 |
-| 设置页面 | 点击导航栏 Settings 后显示 | 外观主题切换（实时预览）+ 配置文件按类型生成 + 高级配置（MAA 路径、输出目录、日志级别） |
+| 设置页面 | 点击导航栏 Settings 后显示 | 语言、外观主题切换（实时预览）、全局设置（后端/超时重试/识别参数/MAA 路径/输出目录/日志）、FFmpeg、配置文件按类型生成、Video Compose、高级选项 |
 
 窗口默认大小为 1000×700，最小大小为 440×480（440dp 是设置页最窄字段
 卡片不产生横向滚动条的下限）。界面按 Material Design 3 的窗口尺寸类别
@@ -112,17 +112,17 @@ python gui.py
 
 > **注意**：只有选择 **style1** 合成风格时才必须提供背景板图片。切换到 **style2** 后，背景板图片输入框会自动禁用并清空。
 
-### 3.3 设置 MAA 路径
+### 3.3 设置 MAA 路径（可选）
 
 1. 点击导航栏的 **Settings** 进入设置页面；
-2. 在 **高级** 卡片下找到 **MAA path**；
+2. 在 **Global settings** 卡片中把 **Copilot backend** 切换为 `maa`，此时 **MAA path** 字段才会显示；
 3. 点击字段右侧的文件夹图标选择 MAA 项目目录（包含 `MaaCore.dll` 的文件夹）。
 
-> 如果留空，程序将使用 `config/pipeline.json` 中配置的 `maa_path`。若路径无效，运行时会提示错误。
+> 该字段直接写回 `config/pipeline.json` 的 `maa_path`；使用 `maa` 后端时必须填写有效路径，否则运行时提示错误。默认识别后端 `recognition` 不需要设置此项。
 
 ### 3.4 设置输出目录
 
-1. 在设置页面的 **高级** 卡片下找到 **Output**；
+1. 在设置页面的 **Global settings** 卡片下找到 **Output**；
 2. 点击字段右侧的文件夹图标选择用于存放处理结果的文件夹。
 
 > 若留空，默认输出到 `output/<视频名>/` 目录下。
@@ -138,7 +138,7 @@ python gui.py
 
 ### 3.6 设置日志级别
 
-1. 在设置页面的 **高级** 卡片下找到 **Log level** 下拉框；
+1. 在设置页面的 **Global settings** 卡片下找到 **Log level** 下拉框；
 2. 选择日志级别：
 
 - **DEBUG**：最详细，包含每帧匹配结果
@@ -154,10 +154,10 @@ python gui.py
 
 | 复选框 | 对应步骤 |
 |--------|----------|
-| MAA | 视频转 MAA 作业 JSON |
+| Video recognition | 视频转作业 JSON（recognition 或 MAA 后端） |
 | Formation | 编队配置转文本 |
 | Actions | 操作指令转文本 |
-| Track | 识别开始按钮时间戳 |
+| Battle start | 识别切换时间戳（开始按钮/进入战斗） |
 | Compose | 视频合成 |
 
 > 窗口宽度较小时，该网格会自动适应，避免复选框被截断。
@@ -185,7 +185,7 @@ python gui.py
 
 ### 3.10 取消处理
 
-处理过程中，点击 **Cancel** 按钮即可请求停止。由于底层 MAA 识别、OpenCV 匹配等操作无法安全强制中断，取消请求会在**当前视频文件**处理结束后生效，列表中后续未处理的文件将不再执行。
+处理过程中，点击 **Cancel** 按钮即可请求停止。由于底层 recognition/MAA 识别、OpenCV 匹配等操作无法安全强制中断，取消请求会在**当前视频文件**处理结束后生效，列表中后续未处理的文件将不再执行。
 
 ### 3.11 使用左侧导航栏
 
@@ -194,8 +194,9 @@ python gui.py
 | 图标 | 标签 | 功能 |
 |------|------|------|
 | Home | Home | 返回主页面（默认选中） |
-| Settings | Settings | 切换到设置页面（主题 + 配置文件生成 + 高级配置） |
-| Info | Info | 点击显示关于对话框（不离开当前页面） |
+| Settings | Settings | 切换到设置页面（主题 + 配置文件生成 + 全局/高级配置） |
+| Tools | Tools | 切换到工具页面（识别、文本范围等独立工具） |
+| About | About | 切换到关于页面（版本与项目信息） |
 
 窗口宽度小于 840px 时，导航栏折叠为仅图标模式；小于 600px 时导航移到窗口
 底部显示为导航条（图标 + 标签）。重新拉大窗口即可恢复图标+标签的完整侧边栏。
@@ -214,37 +215,44 @@ Video Compose、高级选项等卡片：
   开启时整套配色（主色、容器、表面、文字）由种子色按 MD3 色调系统实时推导，
   点击种子色色块可在调色板中换色；关闭动态色彩后回到品牌基线紫 `#6750A4`。
   浅色与深色的每个角色一一对应，切换主题不会破坏动态配色；
-- **主题与动态色彩都会持久化保存**：切换后关闭窗口，主题、动态色彩开关与
-  种子色写入独立的 `config/gui.json`（与 `pipeline.json` 完全解耦）；下次启动
+- **主题与动态色彩都会立即持久化保存**：切换后主题、动态色彩开关与
+  种子色即时写入独立的 `config/gui.json`（与 `pipeline.json` 完全解耦）；下次启动
   GUI 时自动恢复，无需重新设置；
 - 再次进入设置页时，各开关与种子色会自动反映当前状态。
 
 #### 3.12.2 配置文件（Configuration files）—— 按类型生成
 
-- 卡片列出 6 种配置文件类型，每个复选框标注名称与目标文件：
+- 卡片列出 7 种配置文件类型，每个复选框标注名称与目标文件：
 
   | 选项 | 目标文件 | 说明 |
   |------|----------|------|
   | Pipeline | `pipeline.json` | 主流水线配置 |
   | Formation | `formation.json` | 编队配置 |
   | Actions | `actions.json` | 操作指令配置 |
-  | Track | `track.json` | 开始按钮识别配置 |
+  | Track | `track.json` | 切换时间戳识别配置 |
   | Compose · style1 | `video_compose/style1.json` | style1 视频合成配置 |
   | Compose · style2 | `video_compose/style2.json` | style2 视频合成配置 |
+  | GUI | `gui.json` | GUI 偏好（主题、语言、动态色彩、高级设置展开状态） |
 
 - 勾选需要的类型（可点击 **全选** 全选、**取消全选** 清空）；
-- 点击 **生成默认配置**，程序会按所选类型在 `config/` 目录下生成（或重置为）默认配置文件，与 CLI 中执行 `python main.py --init-config <module>` 行为一致；
+- 点击 **生成默认配置**，程序会按所选类型在 `config/` 目录下生成默认配置文件（已存在的文件会跳过，不会覆盖或重置），与 CLI 中执行 `python main.py --init-config <module>` 行为一致；
 - 生成结果显示在动作区的状态文本中（宽屏在按钮左侧、窄屏在按钮上方）：成功显示生成数量，失败会用红色标出失败项；未选择任何类型时"生成默认配置"按钮不可用。
 
 > 提示：首次使用前建议在设置页生成全部默认配置，确保 `config/` 目录下配置文件完整。
 
-#### 3.12.3 高级（Advanced）—— 运行时配置
+#### 3.12.3 全局设置（Global settings）—— 运行时配置
 
-- **MAA path**：选择 MAA 项目目录（包含 `MaaCore.dll` 的文件夹）；
-- **Output**：选择输出目录，默认为 `output/`；
-- **Log level**：选择日志级别（DEBUG / INFO / WARNING / ERROR）。
+- **Copilot backend**：选择识别后端，`recognition`（默认，内置）或 `maa`；
+- **Copilot timeout / Copilot max attempts**：识别统一超时（默认 2400 秒）与最大尝试次数（默认 1，含首次），recognition/maa 两后端共用；
+- **识别参数**：OCR 模型源、识别分辨率（当前仅支持 1280x720）、关卡覆盖、是否输出 video_time、Recognition resource directory；
+- **MAA path**：仅在选择 `maa` 后端时显示，需指向包含 `MaaCore.dll` 的目录；
+- **Output**：输出目录，默认 `output/`；
+- **日志**：日志级别（DEBUG / INFO / WARNING / ERROR）、是否写日志文件、单文件最大字节数与备份数量；
+- **子配置路径**：formation / actions / track 配置文件路径。
 
-> 这三个控件在主页和设置页共享同一实例，避免双源状态不同步。修改后立即生效，无需重新启动。
+> 这些控件直接写回 `config/pipeline.json`，修改后立即生效；流水线运行期间编辑被禁用。
+
+设置页底部的 **Advanced** 开关可展开日志级别、识别参数、子配置路径、Track/Formation/Actions、性能与 VideoCompose 的高级字段；展开状态保存到 `config/gui.json`。
 
 点击设置页底部的 **Back to home**（或导航栏的 **Home**）即可返回主页。
 
@@ -272,7 +280,7 @@ Video Compose、高级选项等卡片：
 
 #### 自定义作业 JSON
 
-每个视频条目在排序按钮前提供 **自定义作业 JSON** 图标按钮（未绑定为「+ 添加」样式，已绑定为主题色「文档」样式），用于为该视频绑定现成的作业 JSON 文件。绑定后该视频**跳过步骤 1（视频识别）**，编队文本、操作文本、开始按钮识别与视频合成等后续步骤照常执行。
+每个视频条目在排序按钮前提供 **自定义作业 JSON** 图标按钮（未绑定为「+ 添加」样式，已绑定为主题色「文档」样式），用于为该视频绑定现成的作业 JSON 文件。绑定后该视频**跳过步骤 1（视频识别）**，编队文本、操作文本、切换时间戳识别与视频合成等后续步骤照常执行。
 
 - **添加 / 更换**：未绑定时点击按钮弹出文件对话框（过滤器 `*.json`）选择文件；已绑定时点击弹出菜单，可选择「更换JSON」或「移除JSON」；
 - **状态显示**：未绑定按钮为灰色「添加」图标；绑定后按钮变为主题色「文档」图标，鼠标悬停可查看绑定的 JSON 完整路径；
@@ -365,10 +373,10 @@ Video Compose、高级选项等卡片：
 3. 此时 **Background** 会自动禁用；
 4. 点击 **Start**。
 
-### 示例 3：仅运行 MAA 识别
+### 示例 3：仅运行视频识别（recognition 后端）
 
 1. 在 **Video files** 卡片中添加视频文件；
-2. 勾选 **Skip steps** 中的 "Formation"、"Actions"、"Track"、"Compose"；
+2. 勾选 **Skip steps** 中的 "Formation"、"Actions"、"Battle start"、"Compose"；
 3. 点击 **Start**；
 4. 只生成 Copilot JSON 文件后结束。
 
@@ -406,15 +414,16 @@ pip install -r requirements.txt
 
 ---
 
-### Q4：MAA 识别步骤失败
+### Q4：视频识别步骤失败
 
 **可能原因**：
-- MAA 路径未配置或配置错误；
-- 输入视频分辨率、帧率不符合 MAA 要求；
-- MAA 依赖的运行库缺失。
+- `maa` 后端下 MAA 路径未配置或配置错误；
+- `recognition` 后端下识别资源缺失或损坏（`resource/` 不完整）；
+- 输入视频损坏或无法解码；`maa` 后端还要求视频为 1080P、16:9 且无模拟器边框/标题栏；
+- MAA 依赖的运行库缺失（仅 `maa` 后端）。
 
 **解决**：
-1. 确认 MAA 路径指向包含 `MaaCore.dll` 的目录；
+1. 确认设置页 **Copilot backend** 与对应后端配置正确：`maa` 后端指向包含 `MaaCore.dll` 的目录，`recognition` 后端确认 `resource/` 完整；
 2. 查看 **运行日志** 中的具体错误信息；
 3. 尝试使用 CLI 运行相同命令，对比错误输出：`python main.py video.mp4 -b bg.png`。
 
@@ -430,7 +439,7 @@ pip install -r requirements.txt
 
 ### Q6：取消按钮没有立即生效
 
-**原因**：当前正在执行的 MAA 识别、OpenCV 模板匹配或视频合成等操作无法被安全强制中断。
+**原因**：当前正在执行的 recognition/MAA 识别、OpenCV 模板匹配或视频合成等操作无法被安全强制中断。
 
 **解决**：取消请求会在当前步骤边界生效。如果任务长时间无响应，可以关闭窗口强制退出，但这可能导致临时文件残留。
 
@@ -448,9 +457,9 @@ pip install -r requirements.txt
 
 ### Q8：配置没有保存
 
-**原因**：程序仅在正常关闭窗口时保存当前配置；强制结束进程可能导致配置丢失。
+**原因**：流水线配置（`config/pipeline.json` 及各子配置）在正常关闭窗口或开始处理时保存；强制结束进程可能导致这部分配置丢失。GUI 主题、语言、动态色彩等偏好（`config/gui.json`）则在修改时即时保存。
 
-**解决**：点击窗口右上角关闭按钮正常退出。流水线配置保存到 `config/pipeline.json`，GUI 主题偏好独立保存到 `config/gui.json`，下次启动自动恢复。
+**解决**：点击窗口右上角关闭按钮正常退出。流水线配置保存到 `config/pipeline.json`，GUI 偏好独立保存到 `config/gui.json`，下次启动自动恢复。
 
 ### Q9：深色主题下窗口标题栏仍是白色
 
@@ -472,8 +481,9 @@ pip install -r requirements.txt
 | 操作 | 说明 |
 |------|------|
 | 导航栏 → Home | 返回主页面 |
-| 导航栏 → Settings | 进入设置页面（主题切换 / 配置文件生成 / 高级配置） |
-| 导航栏 → Info | 查看关于对话框 |
+| 导航栏 → Settings | 进入设置页面（语言 / 主题 / 全局设置 / 配置文件生成 / 高级选项） |
+| 导航栏 → Tools | 进入工具页面（识别、文本范围等独立工具） |
+| 导航栏 → About | 查看关于页面 |
 | 右键日志区域 | 复制 / 清空日志 |
 
 **使用建议**：
